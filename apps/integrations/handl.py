@@ -343,15 +343,27 @@ class SQLHandlClient(HandlClient):
             return {}
         id_placeholders = ", ".join(f"%(rid{i})s" for i in range(len(report_ids)))
         params = {f"rid{i}": rid for i, rid in enumerate(report_ids)}
-        # Make/Model/YearOfManufacture confirmed live against Policy_Details
-        # in earlier testing (Area 1). service_type's real column isn't
-        # confirmed yet — needs checking against real Policy_KeyClaims
-        # data before this is trusted; returns "" until then rather than
-        # guessing a wrong column name silently.
+        # Confirmed live: Make/Model/yearOfManufacture/VehicleVIN live on
+        # Policy_KeyClaims (not Policy_Details, which has no vehicle
+        # fields at all), and KeyTypeID/Lookup_KeyType ("Car", "Van",
+        # "Motorbike", ...) is the closest real proxy for "service type"
+        # — Handl has no lockout-vs-cutting-vs-programming breakdown. A
+        # ReportID can have more than one Policy_KeyClaims row (multiple
+        # keys claimed per report), so this takes the earliest one by ID.
         query = f"""
-            SELECT ReportID, Make, Model, YearOfManufacture
-            FROM Policy_Details
-            WHERE ReportID IN ({id_placeholders})
+            SELECT ReportID, Make, Model, yearOfManufacture, KeyType FROM (
+                SELECT
+                    pkc.ReportID,
+                    pkc.Make,
+                    pkc.Model,
+                    pkc.yearOfManufacture,
+                    lkt.KeyType,
+                    ROW_NUMBER() OVER (PARTITION BY pkc.ReportID ORDER BY pkc.ID) AS rn
+                FROM Policy_KeyClaims pkc
+                LEFT JOIN Lookup_KeyType lkt ON pkc.KeyTypeID = lkt.KeyTypeID
+                WHERE pkc.ReportID IN ({id_placeholders})
+            ) ranked
+            WHERE rn = 1
         """
         with self._connection() as conn:
             cursor = conn.cursor()
@@ -362,8 +374,8 @@ class SQLHandlClient(HandlClient):
                 report_id=str(row["ReportID"]),
                 make=row["Make"] or "",
                 model=row["Model"] or "",
-                year=str(row["YearOfManufacture"] or ""),
-                service_type="",
+                year=str(row["yearOfManufacture"] or ""),
+                service_type=row["KeyType"] or "",
             )
             for row in rows
         }
