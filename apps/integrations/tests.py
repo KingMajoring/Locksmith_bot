@@ -1,8 +1,10 @@
 from datetime import date, timedelta
 from unittest.mock import MagicMock, patch
 
+from django.core.mail import EmailMessage
 from django.test import TestCase, override_settings
 
+from .graph_email_backend import MicrosoftGraphEmailBackend
 from .handl import MockHandlClient, SQLHandlClient, get_handl_client
 
 
@@ -216,3 +218,124 @@ class GetHandlClientTests(TestCase):
     @override_settings(HANDL_SQL_SERVER="soterlive1.database.windows.net")
     def test_returns_sql_client_when_configured(self):
         self.assertIsInstance(get_handl_client(), SQLHandlClient)
+
+
+def _fake_token_response():
+    resp = MagicMock()
+    resp.json.return_value = {"access_token": "fake-token"}
+    resp.raise_for_status.return_value = None
+    return resp
+
+
+def _fake_send_response():
+    resp = MagicMock()
+    resp.raise_for_status.return_value = None
+    return resp
+
+
+@override_settings(
+    MS_GRAPH_MAIL_CLIENT_ID="client-id",
+    MS_GRAPH_MAIL_CLIENT_SECRET="client-secret",
+    MS_GRAPH_MAIL_TENANT_ID="tenant-id",
+    MS_GRAPH_MAIL_SENDER="admin@wgtk.co.uk",
+    MS_GRAPH_MAIL_FROM="parts@wgtk.co.uk",
+)
+class MicrosoftGraphEmailBackendTests(TestCase):
+    def _message(self, **kwargs):
+        defaults = dict(
+            subject="Weekly stock check",
+            body="Please count the parts.",
+            to=["bob@example.com"],
+        )
+        defaults.update(kwargs)
+        return EmailMessage(**defaults)
+
+    @patch("apps.integrations.graph_email_backend.requests.post")
+    def test_acquires_token_then_sends_and_returns_count(self, mock_post):
+        mock_post.side_effect = [_fake_token_response(), _fake_send_response()]
+        backend = MicrosoftGraphEmailBackend()
+
+        sent = backend.send_messages([self._message()])
+
+        self.assertEqual(sent, 1)
+        self.assertEqual(mock_post.call_count, 2)
+
+        token_call, send_call = mock_post.call_args_list
+        self.assertIn("tenant-id", token_call.args[0])
+        self.assertEqual(token_call.kwargs["data"]["client_id"], "client-id")
+        self.assertEqual(token_call.kwargs["data"]["client_secret"], "client-secret")
+
+        self.assertIn("admin@wgtk.co.uk", send_call.args[0])
+        self.assertEqual(send_call.kwargs["headers"]["Authorization"], "Bearer fake-token")
+
+    @patch("apps.integrations.graph_email_backend.requests.post")
+    def test_send_payload_sets_from_subject_body_and_recipients(self, mock_post):
+        mock_post.side_effect = [_fake_token_response(), _fake_send_response()]
+        backend = MicrosoftGraphEmailBackend()
+
+        backend.send_messages([self._message(subject="Hi", body="Body text", to=["a@x.com", "b@x.com"])])
+
+        _, send_call = mock_post.call_args_list
+        payload = send_call.kwargs["json"]["message"]
+        self.assertEqual(payload["subject"], "Hi")
+        self.assertEqual(payload["body"], {"contentType": "Text", "content": "Body text"})
+        self.assertEqual(
+            payload["toRecipients"],
+            [{"emailAddress": {"address": "a@x.com"}}, {"emailAddress": {"address": "b@x.com"}}],
+        )
+        self.assertEqual(payload["from"], {"emailAddress": {"address": "parts@wgtk.co.uk"}})
+
+    @patch("apps.integrations.graph_email_backend.requests.post")
+    def test_send_payload_base64_encodes_attachments(self, mock_post):
+        mock_post.side_effect = [_fake_token_response(), _fake_send_response()]
+        backend = MicrosoftGraphEmailBackend()
+
+        message = self._message()
+        message.attach("sheet.xlsx", b"binary-content", "application/vnd.ms-excel")
+        backend.send_messages([message])
+
+        _, send_call = mock_post.call_args_list
+        attachments = send_call.kwargs["json"]["message"]["attachments"]
+        self.assertEqual(len(attachments), 1)
+        self.assertEqual(attachments[0]["name"], "sheet.xlsx")
+        self.assertEqual(attachments[0]["@odata.type"], "#microsoft.graph.fileAttachment")
+        import base64
+
+        self.assertEqual(base64.b64decode(attachments[0]["contentBytes"]), b"binary-content")
+
+    @override_settings(MS_GRAPH_MAIL_FROM="")
+    @patch("apps.integrations.graph_email_backend.requests.post")
+    def test_omits_from_override_when_not_configured(self, mock_post):
+        mock_post.side_effect = [_fake_token_response(), _fake_send_response()]
+        backend = MicrosoftGraphEmailBackend()
+
+        backend.send_messages([self._message()])
+
+        _, send_call = mock_post.call_args_list
+        self.assertNotIn("from", send_call.kwargs["json"]["message"])
+
+    @patch("apps.integrations.graph_email_backend.requests.post")
+    def test_returns_zero_for_empty_message_list(self, mock_post):
+        backend = MicrosoftGraphEmailBackend()
+        self.assertEqual(backend.send_messages([]), 0)
+        mock_post.assert_not_called()
+
+    @patch("apps.integrations.graph_email_backend.requests.post")
+    def test_raises_on_send_failure_by_default(self, mock_post):
+        failing_response = MagicMock()
+        failing_response.raise_for_status.side_effect = Exception("boom")
+        mock_post.side_effect = [_fake_token_response(), failing_response]
+        backend = MicrosoftGraphEmailBackend()
+
+        with self.assertRaises(Exception):
+            backend.send_messages([self._message()])
+
+    @patch("apps.integrations.graph_email_backend.requests.post")
+    def test_fail_silently_suppresses_send_errors(self, mock_post):
+        failing_response = MagicMock()
+        failing_response.raise_for_status.side_effect = Exception("boom")
+        mock_post.side_effect = [_fake_token_response(), failing_response]
+        backend = MicrosoftGraphEmailBackend(fail_silently=True)
+
+        sent = backend.send_messages([self._message()])
+        self.assertEqual(sent, 0)

@@ -141,7 +141,12 @@ SOCIALACCOUNT_PROVIDERS = {
 }
 
 # --- Email (weekly stock check to locksmiths, Area 1) ----------------------
-# Sent via the company's Microsoft 365 mailbox/SMTP relay.
+# Default: console backend (prints instead of sending). Two real options:
+# - SMTP: EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend +
+#   EMAIL_HOST_USER/PASSWORD (needs SMTP AUTH enabled on the mailbox).
+# - Microsoft Graph (preferred — avoids SMTP AUTH entirely):
+#   EMAIL_BACKEND=apps.integrations.graph_email_backend.MicrosoftGraphEmailBackend
+#   + the MS_GRAPH_MAIL_* settings below.
 EMAIL_BACKEND = env("EMAIL_BACKEND", default="django.core.mail.backends.console.EmailBackend")
 EMAIL_HOST = env("EMAIL_HOST", default="smtp.office365.com")
 EMAIL_PORT = env.int("EMAIL_PORT", default=587)
@@ -149,6 +154,18 @@ EMAIL_USE_TLS = env.bool("EMAIL_USE_TLS", default=True)
 EMAIL_HOST_USER = env("EMAIL_HOST_USER", default="")
 EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD", default="")
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="stock-checks@wgtk.co.uk")
+
+# Microsoft Graph sendMail (see apps/integrations/graph_email_backend.py).
+# MS_GRAPH_MAIL_SENDER is whose mailbox the app-only Graph call acts as
+# (e.g. admin@wgtk.co.uk); MS_GRAPH_MAIL_FROM is the message's From
+# address (e.g. parts@wgtk.co.uk, a shared mailbox the sender has Send
+# As rights on) — leave MS_GRAPH_MAIL_FROM blank to just send as the
+# sender mailbox directly.
+MS_GRAPH_MAIL_CLIENT_ID = env("MS_GRAPH_MAIL_CLIENT_ID", default="")
+MS_GRAPH_MAIL_CLIENT_SECRET = env("MS_GRAPH_MAIL_CLIENT_SECRET", default="")
+MS_GRAPH_MAIL_TENANT_ID = env("MS_GRAPH_MAIL_TENANT_ID", default="")
+MS_GRAPH_MAIL_SENDER = env("MS_GRAPH_MAIL_SENDER", default="")
+MS_GRAPH_MAIL_FROM = env("MS_GRAPH_MAIL_FROM", default="")
 
 # --- Stock Accuracy (Area 1) config defaults --------------------------------
 STOCK_CHECK_LINES_PER_WEEK = env.int("STOCK_CHECK_LINES_PER_WEEK", default=10)
