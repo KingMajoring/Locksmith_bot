@@ -46,7 +46,7 @@ class CompletedJobAdmin(admin.ModelAdmin):
         "model",
         "year",
         "service_type",
-        "failure_note",
+        "completion_note",
         "categorized_by",
         "categorized_at",
         "pulled_at",

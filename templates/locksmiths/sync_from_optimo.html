@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Sync locksmiths from Optimo{% endblock %}
+{% block content %}
+<h1>Sync locksmiths from Optimo</h1>
+
+<div class="card">
+  <p>{{ matches|length }} driver(s) matched to a locksmith, ready to link.
+     {{ unmatched|length }} driver(s) couldn't be matched automatically.</p>
+</div>
+
+<div class="card">
+  <h2>Matched</h2>
+  {% if matches %}
+  <table>
+    <tr><th>Optimo driver</th><th>Matched by</th><th>Locksmith</th></tr>
+    {% for m in matches %}
+    <tr>
+      <td>{{ m.driver.driver_name|default:m.driver.driver_serial }} ({{ m.driver.driver_serial }})</td>
+      <td>{{ m.reason }}</td>
+      <td>{{ m.locksmith.name }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  <form method="post">
+    {% csrf_token %}
+    <button class="btn" type="submit">Commit {{ matches|length }} mapping(s)</button>
+  </form>
+  {% else %}
+  <p>Nothing new to match — every recent driver either already has a mapping or couldn't be matched.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Unmatched — needs manual mapping</h2>
+  {% if unmatched %}
+  <p>Add these manually via each locksmith's "Optimo driver ID" inline in the admin.</p>
+  <table>
+    <tr><th>Driver name</th><th>Driver serial</th><th>Email</th></tr>
+    {% for u in unmatched %}
+    <tr>
+      <td>{{ u.driver.driver_name }}</td>
+      <td>{{ u.driver.driver_serial }}</td>
+      <td>{{ u.driver.driver_external_id }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p>None.</p>
+  {% endif %}
+</div>
+{% endblock %}

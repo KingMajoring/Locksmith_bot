@@ -82,8 +82,10 @@ class CompletedJob(models.Model):
         FailureCategory, null=True, blank=True, on_delete=models.SET_NULL,
         related_name="jobs",
     )
-    failure_note = models.TextField(
-        blank=True, help_text="Driver's free-text note from Optimo, if any."
+    completion_note = models.TextField(
+        blank=True,
+        help_text="Driver's free-text completion note from Optimo — written "
+        "for any job, not just failures (e.g. a summary of work done).",
     )
     categorized_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL

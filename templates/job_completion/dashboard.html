@@ -14,7 +14,7 @@
       <td>{{ job.job_date }}</td>
       <td>{% if job.locksmith %}{{ job.locksmith.name }}{% else %}Unmatched ({{ job.driver_serial }}){% endif %}</td>
       <td>{{ job.service_type }}</td>
-      <td>{{ job.failure_note }}</td>
+      <td>{{ job.completion_note }}</td>
       <td><a href="{% url 'admin:job_completion_completedjob_change' job.pk %}">Categorize</a></td>
     </tr>
     {% endfor %}

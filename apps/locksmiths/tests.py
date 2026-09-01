@@ -7,9 +7,16 @@ from django.core.management import call_command
 from django.test import TestCase
 from django.urls import reverse
 
+from apps.integrations.optimo import OptimoDriverInfo
+
 from .management.commands.import_soter_locksmiths import parse_rows
-from .models import Locksmith
-from .services import group_locksmiths, normalize_base_name
+from .models import Locksmith, OptimoDriverId
+from .services import (
+    commit_optimo_driver_matches,
+    group_locksmiths,
+    match_optimo_drivers,
+    normalize_base_name,
+)
 
 
 class NormalizeBaseNameTests(TestCase):
@@ -249,4 +256,113 @@ class AssignScheduleActionTests(TestCase):
 
         self.assertNotEqual(
             self.StockCheckSchedule.objects.get(locksmith=newcomer).weekday, 0
+        )
+
+
+class MatchOptimoDriversTests(TestCase):
+    def test_matches_by_email_first(self):
+        locksmith = Locksmith.objects.create(name="WGTK - Chris Webster", email="chris.webster@wgtk.co.uk")
+        driver = OptimoDriverInfo(
+            driver_serial="ChrisWebster",
+            driver_name="Some Other Name",  # deliberately wrong, to prove email wins
+            driver_external_id="chris.webster@wgtk.co.uk",
+        )
+        matches, unmatched = match_optimo_drivers([driver])
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0]["locksmith"], locksmith)
+        self.assertEqual(matches[0]["reason"], "email")
+        self.assertEqual(unmatched, [])
+
+    def test_falls_back_to_name_match(self):
+        locksmith = Locksmith.objects.create(name="WGTK - John Mason")
+        driver = OptimoDriverInfo(
+            driver_serial="JohnMason", driver_name="John Mason", driver_external_id=""
+        )
+        matches, unmatched = match_optimo_drivers([driver])
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0]["locksmith"], locksmith)
+        self.assertEqual(matches[0]["reason"], "name")
+
+    def test_name_match_falls_back_to_driver_serial_when_name_blank(self):
+        locksmith = Locksmith.objects.create(name="WGTK - John Mason")
+        driver = OptimoDriverInfo(driver_serial="JohnMason", driver_name="", driver_external_id="")
+        matches, unmatched = match_optimo_drivers([driver])
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0]["locksmith"], locksmith)
+
+    def test_no_match_goes_to_unmatched(self):
+        driver = OptimoDriverInfo(
+            driver_serial="Nobody", driver_name="Nobody Real", driver_external_id="nobody@example.com"
+        )
+        matches, unmatched = match_optimo_drivers([driver])
+        self.assertEqual(matches, [])
+        self.assertEqual(len(unmatched), 1)
+        self.assertEqual(unmatched[0]["driver"], driver)
+
+    def test_already_mapped_driver_is_skipped_entirely(self):
+        locksmith = Locksmith.objects.create(name="WGTK - John Mason", email="john@wgtk.co.uk")
+        OptimoDriverId.objects.create(locksmith=locksmith, optimo_driver_serial="JohnMason")
+        driver = OptimoDriverInfo(
+            driver_serial="JohnMason", driver_name="John Mason", driver_external_id="john@wgtk.co.uk"
+        )
+        matches, unmatched = match_optimo_drivers([driver])
+        self.assertEqual(matches, [])
+        self.assertEqual(unmatched, [])
+
+
+class CommitOptimoDriverMatchesTests(TestCase):
+    def test_creates_optimo_driver_id_rows(self):
+        locksmith = Locksmith.objects.create(name="WGTK - John Mason")
+        driver = OptimoDriverInfo(driver_serial="JohnMason", driver_name="John Mason", driver_external_id="")
+        created = commit_optimo_driver_matches(
+            [{"driver": driver, "locksmith": locksmith, "reason": "name"}]
+        )
+        self.assertEqual(created, 1)
+        self.assertEqual(
+            OptimoDriverId.objects.get(locksmith=locksmith).optimo_driver_serial, "JohnMason"
+        )
+
+    def test_idempotent_on_rerun(self):
+        locksmith = Locksmith.objects.create(name="WGTK - John Mason")
+        driver = OptimoDriverInfo(driver_serial="JohnMason", driver_name="John Mason", driver_external_id="")
+        match = [{"driver": driver, "locksmith": locksmith, "reason": "name"}]
+        commit_optimo_driver_matches(match)
+        created_again = commit_optimo_driver_matches(match)
+        self.assertEqual(created_again, 0)
+        self.assertEqual(OptimoDriverId.objects.count(), 1)
+
+
+class SyncFromOptimoViewTests(TestCase):
+    """Uses MockOptimoClient's fixed list_recent_drivers() fixture (no
+    OptimoSettings key set in tests) to exercise the live-sync page."""
+
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username="office_admin",
+            email="admin@wgtk.co.uk",
+            password="x",
+            is_staff=True,
+            is_superuser=True,
+        )
+        self.client.force_login(self.user)
+
+    def test_login_required(self):
+        self.client.logout()
+        response = self.client.get(reverse("locksmiths:sync_from_optimo"))
+        self.assertEqual(response.status_code, 302)
+
+    def test_get_shows_preview_without_writing(self):
+        response = self.client.get(reverse("locksmiths:sync_from_optimo"))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(OptimoDriverId.objects.count(), 0)
+
+    def test_post_commits_matches_and_redirects(self):
+        # MockOptimoClient's fixed drivers use emails like
+        # "driver011@example.com" — match a locksmith to one of those
+        # to prove the commit path writes an OptimoDriverId row.
+        locksmith = Locksmith.objects.create(name="WGTK - Test Driver", email="driver011@example.com")
+        response = self.client.post(reverse("locksmiths:sync_from_optimo"))
+        self.assertRedirects(response, reverse("admin:locksmiths_locksmith_changelist"))
+        self.assertEqual(
+            OptimoDriverId.objects.get(locksmith=locksmith).optimo_driver_serial, "011"
         )

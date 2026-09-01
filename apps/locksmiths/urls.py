@@ -6,4 +6,5 @@ app_name = "locksmiths"
 
 urlpatterns = [
     path("sync-from-soter/", views.sync_from_soter, name="sync_from_soter"),
+    path("sync-from-optimo/", views.sync_from_optimo, name="sync_from_optimo"),
 ]

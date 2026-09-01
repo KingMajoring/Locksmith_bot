@@ -3,9 +3,15 @@ from django.contrib.auth.decorators import login_required
 from django.shortcuts import redirect, render
 
 from apps.integrations.handl import get_handl_client
+from apps.integrations.optimo import get_optimo_client
 
 from .models import Locksmith
-from .services import commit_groups, group_locksmiths
+from .services import (
+    commit_groups,
+    commit_optimo_driver_matches,
+    group_locksmiths,
+    match_optimo_drivers,
+)
 
 
 def _preview_rows(groups):
@@ -64,4 +70,22 @@ def sync_from_soter(request):
             "stats": stats,
             "extra_excludes": ", ".join(extra_excludes),
         },
+    )
+
+
+@login_required
+def sync_from_optimo(request):
+    optimo = get_optimo_client()
+    driver_infos = optimo.list_recent_drivers()
+    matches, unmatched = match_optimo_drivers(driver_infos)
+
+    if request.method == "POST":
+        created = commit_optimo_driver_matches(matches)
+        messages.success(request, f"Synced from Optimo: {created} new driver mapping(s).")
+        return redirect("admin:locksmiths_locksmith_changelist")
+
+    return render(
+        request,
+        "locksmiths/sync_from_optimo.html",
+        {"matches": matches, "unmatched": unmatched},
     )

@@ -80,7 +80,7 @@ def pull_completed_jobs_for_date(for_date: date) -> PullSummary:
             "model": details.model if details else "",
             "year": details.year if details else "",
             "service_type": details.service_type if details else "",
-            "failure_note": completion.note,
+            "completion_note": completion.note,
         }
         _obj, was_created = CompletedJob.objects.update_or_create(
             order_no=summary.order_no, defaults=defaults

@@ -41,6 +41,13 @@ class OptimoCompletion:
     note: str
 
 
+@dataclass(frozen=True)
+class OptimoDriverInfo:
+    driver_serial: str
+    driver_name: str
+    driver_external_id: str
+
+
 class OptimoClient(ABC):
     @abstractmethod
     def list_orders_for_date(self, for_date: date) -> list[OptimoOrderSummary]:
@@ -53,6 +60,14 @@ class OptimoClient(ABC):
         given orderNo values, keyed by order_no — via get_completion_details.
         Orders not yet completed come back with status "scheduled" (or
         similar) and no start/end times."""
+
+    @abstractmethod
+    def list_recent_drivers(self, days: int = 30) -> list[OptimoDriverInfo]:
+        """Every distinct driver seen on a scheduled stop in the last
+        `days` days — Optimo has no dedicated "list drivers" endpoint,
+        so this is derived from search_orders' scheduleInformation
+        across a date range. driver_external_id is typically the
+        driver's email, useful for matching to Locksmith.email."""
 
 
 class MockOptimoClient(OptimoClient):
@@ -108,6 +123,16 @@ class MockOptimoClient(OptimoClient):
                 note=note,
             )
         return result
+
+    def list_recent_drivers(self, days: int = 30) -> list[OptimoDriverInfo]:
+        return [
+            OptimoDriverInfo(
+                driver_serial=serial,
+                driver_name=f"Driver {serial}",
+                driver_external_id=f"driver{serial}@example.com",
+            )
+            for serial in self._DRIVER_SERIALS
+        ]
 
 
 class RealOptimoClient(OptimoClient):
@@ -192,6 +217,35 @@ class RealOptimoClient(OptimoClient):
                 note=(details.get("form") or {}).get("note", ""),
             )
         return result
+
+    def list_recent_drivers(self, days: int = 30) -> list[OptimoDriverInfo]:
+        from datetime import timedelta
+
+        today = date.today()
+        data = self._post(
+            "search_orders",
+            {
+                "dateRange": {
+                    "from": (today - timedelta(days=days)).isoformat(),
+                    "to": today.isoformat(),
+                },
+                "includeScheduleInformation": True,
+            },
+        )
+        drivers: dict[str, OptimoDriverInfo] = {}
+        for order in data.get("orders", []):
+            schedule = order.get("scheduleInformation")
+            if not schedule:
+                continue
+            serial = schedule.get("driverSerial", "")
+            if not serial or serial in drivers:
+                continue
+            drivers[serial] = OptimoDriverInfo(
+                driver_serial=serial,
+                driver_name=schedule.get("driverName", ""),
+                driver_external_id=schedule.get("driverExternalId", ""),
+            )
+        return list(drivers.values())
 
 
 def _parse_optimo_time(time_obj: dict | None) -> datetime | None:

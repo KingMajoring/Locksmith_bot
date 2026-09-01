@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import re
 
-from .models import Locksmith, SoterLocksmithId
+from .models import Locksmith, OptimoDriverId, SoterLocksmithId
 
 DEFAULT_EXCLUDE_SUBSTRINGS = [
     "BCA",
@@ -114,3 +114,79 @@ def commit_groups(groups: dict[str, dict]) -> tuple[int, int, int]:
             )
             created_ids += int(id_created)
     return created_locksmiths, created_ids, emails_updated
+
+
+def _normalize_person_name(name: str) -> str:
+    """"WGTK - John Mason" / "John Mason" / "JohnMason" all normalize to
+    "JOHN MASON" (roughly) so Optimo driver names/serials can be matched
+    against Locksmith.name despite the different formatting each system
+    uses."""
+    name = name.strip()
+    # Split "JohnMason"-style camel case (Optimo's driverSerial, used as
+    # a name fallback) into separate words — must happen before
+    # uppercasing, since that's what the lower-to-upper boundary this
+    # regex looks for depends on.
+    name = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", name)
+    name = name.upper()
+    name = re.sub(r"^WGTK\s*-\s*", "", name)
+    return _WHITESPACE_RE.sub(" ", name).strip()
+
+
+def match_optimo_drivers(driver_infos: list) -> tuple[list[dict], list[dict]]:
+    """Matches Optimo drivers (OptimoDriverInfo, from
+    OptimoClient.list_recent_drivers()) to existing Locksmith records —
+    by email first (driver_external_id vs Locksmith.email, the more
+    reliable signal since it's an exact match), falling back to a
+    normalized name comparison.
+
+    Drivers that already have an OptimoDriverId row are skipped
+    entirely (nothing to do). Returns (matches, unmatched):
+    - matches: [{"driver": OptimoDriverInfo, "locksmith": Locksmith, "reason": "email"|"name"}]
+    - unmatched: [{"driver": OptimoDriverInfo}]
+    """
+    already_mapped = set(
+        OptimoDriverId.objects.values_list("optimo_driver_serial", flat=True)
+    )
+    email_map = {
+        locksmith.email.strip().lower(): locksmith
+        for locksmith in Locksmith.objects.exclude(email="")
+    }
+    name_map = {_normalize_person_name(locksmith.name): locksmith for locksmith in Locksmith.objects.all()}
+
+    matches = []
+    unmatched = []
+    for driver in driver_infos:
+        if driver.driver_serial in already_mapped:
+            continue
+
+        locksmith = None
+        reason = None
+        if driver.driver_external_id:
+            locksmith = email_map.get(driver.driver_external_id.strip().lower())
+            if locksmith:
+                reason = "email"
+        if not locksmith:
+            key = _normalize_person_name(driver.driver_name or driver.driver_serial)
+            locksmith = name_map.get(key)
+            if locksmith:
+                reason = "name"
+
+        if locksmith:
+            matches.append({"driver": driver, "locksmith": locksmith, "reason": reason})
+        else:
+            unmatched.append({"driver": driver})
+
+    return matches, unmatched
+
+
+def commit_optimo_driver_matches(matches: list[dict]) -> int:
+    """Creates OptimoDriverId rows from match_optimo_drivers()'s output.
+    Returns the number created."""
+    created = 0
+    for match in matches:
+        _, was_created = OptimoDriverId.objects.get_or_create(
+            locksmith=match["locksmith"],
+            optimo_driver_serial=match["driver"].driver_serial,
+        )
+        created += int(was_created)
+    return created
