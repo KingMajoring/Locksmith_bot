@@ -221,31 +221,46 @@ class SQLHandlClient(HandlClient):
             return {}
         id_placeholders = ", ".join(f"%(lid{i})s" for i in range(len(soter_locksmith_ids)))
         code_placeholders = ", ".join(f"%(code{i})s" for i in range(len(part_codes)))
-        query = f"""
-            SELECT
-                ipa.SKU AS part_code,
-                SUM(ils.Quantity) AS expected_qty,
-                AVG(ist.PartValue) AS unit_cost
+        params = {f"lid{i}": int(lid) for i, lid in enumerate(soter_locksmith_ids)}
+        params.update({f"code{i}": code for i, code in enumerate(part_codes)})
+
+        # Two separate queries, not one joined together: Inventory_Stock
+        # is a company-wide batch table with no locksmith scoping, so
+        # joining it onto Inventory_Locksmith_Stock via PartId alone
+        # fans out — each ils row gets multiplied by every batch that
+        # part has ever had, inflating SUM(ils.Quantity) wildly.
+        qty_query = f"""
+            SELECT ipa.SKU AS part_code, SUM(ils.Quantity) AS expected_qty
             FROM Inventory_Locksmith_Stock ils
             JOIN Inventory_Parts ipa ON ils.PartId = ipa.Id
-            LEFT JOIN Inventory_Stock ist ON ist.PartId = ipa.Id
             WHERE ils.LookupLocksmithId IN ({id_placeholders})
               AND ipa.SKU IN ({code_placeholders})
             GROUP BY ipa.SKU
         """
-        params = {f"lid{i}": int(lid) for i, lid in enumerate(soter_locksmith_ids)}
-        params.update({f"code{i}": code for i, code in enumerate(part_codes)})
+        cost_query = f"""
+            SELECT ipa.SKU AS part_code, AVG(ist.PartValue) AS unit_cost
+            FROM Inventory_Stock ist
+            JOIN Inventory_Parts ipa ON ist.PartId = ipa.Id
+            WHERE ipa.SKU IN ({code_placeholders})
+            GROUP BY ipa.SKU
+        """
+        cost_params = {f"code{i}": code for i, code in enumerate(part_codes)}
+
         with self._connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(query, params)
-            rows = cursor.fetchall()
+            cursor.execute(qty_query, params)
+            qty_rows = cursor.fetchall()
+            cursor.execute(cost_query, cost_params)
+            cost_rows = cursor.fetchall()
+
+        unit_costs = {row["part_code"]: float(row["unit_cost"] or 0) for row in cost_rows}
         return {
             row["part_code"]: ExpectedStock(
                 part_code=row["part_code"],
                 expected_qty=row["expected_qty"],
-                unit_cost=float(row["unit_cost"] or 0),
+                unit_cost=unit_costs.get(row["part_code"], 0),
             )
-            for row in rows
+            for row in qty_rows
         }
 
     def list_locksmiths(self) -> list[tuple[str, str, str]]:
