@@ -156,6 +156,12 @@ STOCK_CHECK_POOL_SIZE = env.int("STOCK_CHECK_POOL_SIZE", default=30)
 STOCK_CHECK_USAGE_WINDOW_DAYS = env.int("STOCK_CHECK_USAGE_WINDOW_DAYS", default=90)
 STOCK_CHECK_NO_REPEAT_WEEKS = env.int("STOCK_CHECK_NO_REPEAT_WEEKS", default=4)
 
+# Pre-go-live safety net: while set, every stock-check email is
+# redirected here instead of the real locksmith (subject line still
+# says who it would really have gone to). Leave unset once confident
+# in real SMTP delivery and ready for locksmiths to receive them.
+STOCK_CHECK_TEST_REDIRECT_EMAIL = env("STOCK_CHECK_TEST_REDIRECT_EMAIL", default="")
+
 # --- Optimo API (Area 2+, wired up in a later phase) ------------------------
 OPTIMO_API_BASE_URL = env("OPTIMO_API_BASE_URL", default="")
 OPTIMO_API_KEY = env("OPTIMO_API_KEY", default="")

@@ -85,6 +85,20 @@ class EmailingTests(TestCase):
         with self.assertRaises(ValueError):
             send_weekly_check(self.weekly_check)
 
+    @override_settings(STOCK_CHECK_TEST_REDIRECT_EMAIL="richard.king@wgtk.co.uk")
+    def test_redirects_to_test_address_and_labels_real_recipient(self):
+        send_weekly_check(self.weekly_check)
+
+        self.assertEqual(mail.outbox[0].to, ["richard.king@wgtk.co.uk"])
+        self.assertIn("bob@example.com", mail.outbox[0].subject)
+        self.assertIn("TEST", mail.outbox[0].subject)
+
+    def test_no_redirect_by_default(self):
+        send_weekly_check(self.weekly_check)
+
+        self.assertEqual(mail.outbox[0].to, ["bob@example.com"])
+        self.assertNotIn("TEST", mail.outbox[0].subject)
+
 
 class VarianceFlaggingTests(TestCase):
     def setUp(self):
