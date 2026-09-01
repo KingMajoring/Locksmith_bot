@@ -6,9 +6,10 @@
 # a Postgres Flexible Server + database, a Linux App Service running this
 # app, and an Azure AD app registration for the Microsoft 365 login.
 #
-# Edit the variables below first. Re-running is mostly safe (az create
-# commands are idempotent for unchanged resources) but review before
-# re-running against a live environment.
+# Edit the variables below first. Safe to re-run: every step checks
+# whether its resource already exists before creating it, and reuses it
+# rather than recreating (so re-running after a mid-script failure won't
+# recreate the Postgres server or lose its password).
 set -euo pipefail
 
 # --- Edit these -------------------------------------------------------
@@ -22,46 +23,63 @@ WGTK_EMAIL_DOMAIN="wgtk.co.uk"          # real WGTK Microsoft 365 domain
 # ------------------------------------------------------------------------
 
 APP_URL="https://${APP_NAME}.azurewebsites.net"
-DB_ADMIN_PASSWORD=$(openssl rand -base64 24)
 DJANGO_SECRET_KEY=$(python3 -c "import secrets; print(secrets.token_urlsafe(50))")
 
 echo "==> Resource group"
 az group create --name "$RESOURCE_GROUP" --location "$LOCATION"
 
 echo "==> Postgres Flexible Server (this takes a few minutes)"
-az postgres flexible-server create \
-  --resource-group "$RESOURCE_GROUP" \
-  --name "$DB_SERVER_NAME" \
-  --location "$LOCATION" \
-  --admin-user "$DB_ADMIN_USER" \
-  --admin-password "$DB_ADMIN_PASSWORD" \
-  --sku-name Standard_B1ms \
-  --tier Burstable \
-  --storage-size 32 \
-  --version 16 \
-  --public-access 0.0.0.0 \
-  --yes
+if az postgres flexible-server show --resource-group "$RESOURCE_GROUP" --name "$DB_SERVER_NAME" &>/dev/null; then
+  echo "    already exists, skipping create."
+  echo "    (if you don't have its admin password saved from the first run,"
+  echo "     reset it: az postgres flexible-server update -n $DB_SERVER_NAME -g $RESOURCE_GROUP -p '<new-password>')"
+  if [ -z "${DB_ADMIN_PASSWORD:-}" ]; then
+    echo "    ERROR: server exists but DB_ADMIN_PASSWORD isn't set in this shell." >&2
+    echo "    Export it first: export DB_ADMIN_PASSWORD='<the password from the first run>'" >&2
+    exit 1
+  fi
+else
+  DB_ADMIN_PASSWORD=$(openssl rand -base64 24)
+  az postgres flexible-server create \
+    --resource-group "$RESOURCE_GROUP" \
+    --name "$DB_SERVER_NAME" \
+    --location "$LOCATION" \
+    --admin-user "$DB_ADMIN_USER" \
+    --admin-password "$DB_ADMIN_PASSWORD" \
+    --sku-name Standard_B1ms \
+    --tier Burstable \
+    --storage-size 32 \
+    --version 16 \
+    --public-access 0.0.0.0 \
+    --yes
+fi
 
-az postgres flexible-server db create \
-  --resource-group "$RESOURCE_GROUP" \
-  --server-name "$DB_SERVER_NAME" \
-  --database-name "$DB_NAME"
+if ! az postgres flexible-server db show --resource-group "$RESOURCE_GROUP" --server-name "$DB_SERVER_NAME" --name "$DB_NAME" &>/dev/null; then
+  az postgres flexible-server db create \
+    --resource-group "$RESOURCE_GROUP" \
+    --server-name "$DB_SERVER_NAME" \
+    --name "$DB_NAME"
+fi
 
 DATABASE_URL="postgres://${DB_ADMIN_USER}:${DB_ADMIN_PASSWORD}@${DB_SERVER_NAME}.postgres.database.azure.com:5432/${DB_NAME}?sslmode=require"
 
 echo "==> App Service plan + web app (Python 3.12, Linux)"
-az appservice plan create \
-  --resource-group "$RESOURCE_GROUP" \
-  --name "${APP_NAME}-plan" \
-  --location "$LOCATION" \
-  --is-linux \
-  --sku B1
+if ! az appservice plan show --resource-group "$RESOURCE_GROUP" --name "${APP_NAME}-plan" &>/dev/null; then
+  az appservice plan create \
+    --resource-group "$RESOURCE_GROUP" \
+    --name "${APP_NAME}-plan" \
+    --location "$LOCATION" \
+    --is-linux \
+    --sku B1
+fi
 
-az webapp create \
-  --resource-group "$RESOURCE_GROUP" \
-  --plan "${APP_NAME}-plan" \
-  --name "$APP_NAME" \
-  --runtime "PYTHON:3.12"
+if ! az webapp show --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" &>/dev/null; then
+  az webapp create \
+    --resource-group "$RESOURCE_GROUP" \
+    --plan "${APP_NAME}-plan" \
+    --name "$APP_NAME" \
+    --runtime "PYTHON:3.12"
+fi
 
 az webapp config set \
   --resource-group "$RESOURCE_GROUP" \
@@ -69,19 +87,24 @@ az webapp config set \
   --startup-file "bash startup.sh"
 
 echo "==> Azure AD app registration (Microsoft 365 login)"
-AD_APP_ID=$(az ad app create \
-  --display-name "WGTK Ops Tool" \
-  --sign-in-audience AzureADMyOrg \
-  --web-redirect-uris "${APP_URL}/accounts/microsoft/login/callback/" \
-  --query appId -o tsv)
+AD_APP_ID=$(az ad app list --display-name "WGTK Ops Tool" --query "[0].appId" -o tsv)
+if [ -z "$AD_APP_ID" ]; then
+  AD_APP_ID=$(az ad app create \
+    --display-name "WGTK Ops Tool" \
+    --sign-in-audience AzureADMyOrg \
+    --web-redirect-uris "${APP_URL}/accounts/microsoft/login/callback/" \
+    --query appId -o tsv)
+  # Microsoft Graph User.Read (delegated) — lets the app read the signed-in
+  # user's basic profile/email, which is all this login needs.
+  az ad app permission add --id "$AD_APP_ID" \
+    --api 00000003-0000-0000-c000-000000000000 \
+    --api-permissions e1fe6dd8-ba31-4d61-89e7-88639da4683d=Scope
+  az ad app permission grant --id "$AD_APP_ID" --api 00000003-0000-0000-c000-000000000000
+else
+  echo "    already exists (appId $AD_APP_ID), reusing."
+fi
 AD_APP_SECRET=$(az ad app credential reset --id "$AD_APP_ID" --query password -o tsv)
 AD_TENANT_ID=$(az account show --query tenantId -o tsv)
-# Microsoft Graph User.Read (delegated) — lets the app read the signed-in
-# user's basic profile/email, which is all this login needs.
-az ad app permission add --id "$AD_APP_ID" \
-  --api 00000003-0000-0000-c000-000000000000 \
-  --api-permissions e1fe6dd8-ba31-4d61-89e7-88639da4683d=Scope
-az ad app permission grant --id "$AD_APP_ID" --api 00000003-0000-0000-c000-000000000000
 
 echo "==> App settings"
 az webapp config appsettings set \
