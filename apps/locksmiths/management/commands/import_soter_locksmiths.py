@@ -1,4 +1,4 @@
-"""Import active WGTK locksmiths from a Soter Lookup_Locksmiths export.
+"""Import active WGTK locksmiths from a Soter Lookup_Locksmiths export file.
 
 Usage:
     python manage.py import_soter_locksmiths locksmiths.tsv
@@ -15,52 +15,23 @@ results:
 Tab- or comma-separated, two columns (ID, LocksmithName), header row
 optional — auto-detected.
 
-Only rows whose name starts with "WGTK" (case-insensitive) and NOT
-"XWGTK" (which marks ex-staff) are considered current active staff;
-everything else in Lookup_Locksmiths is a panel/subcontractor firm.
-A locksmith usually has two rows in Soter — a "(V)" and "(A)" suffix
-for the same person — which get grouped into one Locksmith with two
-SoterLocksmithId rows under it.
+Prefer the "Sync from Soter" page in /admin/ (Locksmiths) if the app
+already has a working Soter connection — it does the same thing live,
+no file export needed. This command is for offline review/import, or
+if the app can't reach Soter for some reason.
 
-A curated list of non-person "WGTK -" accounts (logistics, spare vans,
-test data etc.) is excluded by default — extend it with --exclude if
-Soter's roster has grown new ones since. Always review the dry-run
-output before passing --commit; group names flagged "⚠" are the ones
-worth double-checking.
+See apps/locksmiths/services.py for the filtering/grouping rules
+(active-staff detection, non-person account exclusions, (V)/(A) row
+grouping).
 """
 from __future__ import annotations
 
 import csv
-import re
 import sys
 
 from django.core.management.base import BaseCommand, CommandError
 
-from apps.locksmiths.models import Locksmith, SoterLocksmithId
-
-DEFAULT_EXCLUDE_SUBSTRINGS = [
-    "BCA",
-    "EBAY/PARTS",
-    "LOGISTICS TEAM",
-    "MANHEIM",
-    "OFFICE",
-    "CANCELLATION",
-    "TRAINING SCHOOL",
-    "SPARE VAN",
-    "PRE CODED/CLOSED FILES",
-    "TRADE TEAM",
-    "TESTING VLKS",
-    "CLIENT",
-]
-
-_SUFFIX_RE = re.compile(r"\s*\(\s*[AV]\s*\)\s*$", re.IGNORECASE)
-_WHITESPACE_RE = re.compile(r"\s+")
-
-
-def normalize_base_name(name: str) -> str:
-    name = name.strip()
-    name = _SUFFIX_RE.sub("", name)
-    return _WHITESPACE_RE.sub(" ", name).strip()
+from apps.locksmiths.services import commit_groups, group_locksmiths
 
 
 def parse_rows(lines: list[str]) -> list[tuple[str, str]]:
@@ -79,7 +50,7 @@ def parse_rows(lines: list[str]) -> list[tuple[str, str]]:
 
 
 class Command(BaseCommand):
-    help = "Import active WGTK locksmiths (from a Soter Lookup_Locksmiths export) as Locksmith + SoterLocksmithId records."
+    help = "Import active WGTK locksmiths (from a Soter Lookup_Locksmiths export file) as Locksmith + SoterLocksmithId records."
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -103,34 +74,14 @@ class Command(BaseCommand):
         if not rows:
             raise CommandError("No (ID, LocksmithName) rows found in the input.")
 
-        exclude_substrings = [s.strip().upper() for s in options["exclude"].split(",") if s.strip()]
-        exclude_substrings += DEFAULT_EXCLUDE_SUBSTRINGS
-
-        groups: dict[str, dict] = {}  # normalized upper name -> {"display": str, "ids": [str]}
-        excluded_count = 0
-        xwgtk_count = 0
-
-        for soter_id, name in rows:
-            upper = name.strip().upper()
-            if upper.startswith("XWGTK"):
-                xwgtk_count += 1
-                continue
-            if not upper.startswith("WGTK"):
-                continue  # panel/subcontractor firm, not ours
-
-            base = normalize_base_name(name)
-            base_upper = base.upper()
-            if any(term in base_upper for term in exclude_substrings):
-                excluded_count += 1
-                self.stdout.write(f"  excluded (non-person): {soter_id}\t{name}")
-                continue
-
-            group = groups.setdefault(base_upper, {"display": base, "ids": []})
-            group["ids"].append(soter_id)
+        extra_excludes = [s for s in options["exclude"].split(",") if s.strip()]
+        groups, stats = group_locksmiths(rows, extra_excludes)
 
         self.stdout.write("")
-        self.stdout.write(f"{len(groups)} locksmith(s) found, {excluded_count} non-person rows excluded, "
-                           f"{xwgtk_count} XWGTK (ex-staff) rows skipped.")
+        self.stdout.write(
+            f"{len(groups)} locksmith(s) found, {stats['excluded']} non-person rows excluded, "
+            f"{stats['xwgtk']} XWGTK (ex-staff) rows skipped."
+        )
         self.stdout.write("")
 
         for base_upper, group in sorted(groups.items()):
@@ -144,19 +95,7 @@ class Command(BaseCommand):
             ))
             return
 
-        created_locksmiths = 0
-        created_ids = 0
-        for group in groups.values():
-            locksmith, was_created = Locksmith.objects.get_or_create(
-                name=group["display"], defaults={"active": True}
-            )
-            created_locksmiths += int(was_created)
-            for soter_id in group["ids"]:
-                _, id_created = SoterLocksmithId.objects.get_or_create(
-                    locksmith=locksmith, soter_locksmith_id=soter_id
-                )
-                created_ids += int(id_created)
-
+        created_locksmiths, created_ids = commit_groups(groups)
         self.stdout.write("")
         self.stdout.write(self.style.SUCCESS(
             f"Done. {created_locksmiths} new Locksmith record(s), {created_ids} new SoterLocksmithId row(s). "

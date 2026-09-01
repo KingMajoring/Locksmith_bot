@@ -12,4 +12,5 @@ urlpatterns = [
         name="home",
     ),
     path("stock-accuracy/", include("apps.stock_accuracy.urls")),
+    path("locksmiths/", include("apps.locksmiths.urls")),
 ]

@@ -54,6 +54,11 @@ class HandlClient(ABC):
     ) -> dict[str, ExpectedStock]:
         """Current expected van-stock quantity and unit cost for the given part codes."""
 
+    @abstractmethod
+    def list_locksmiths(self) -> list[tuple[str, str]]:
+        """Every (Lookup_Locksmiths.ID, LocksmithName) row — WGTK's own
+        staff and panel/subcontractor firms alike."""
+
 
 class MockHandlClient(HandlClient):
     """Deterministic fake data for local dev/tests, standing in until the
@@ -131,6 +136,16 @@ class MockHandlClient(HandlClient):
                 unit_cost=round(rng.uniform(3, 85), 2),
             )
         return result
+
+    def list_locksmiths(self) -> list[tuple[str, str]]:
+        return [
+            ("1204", "WGTK - Andrew S"),
+            ("887", "WGTK - Dean S (A)"),
+            ("885", "WGTK - Dean S (V)"),
+            ("999", "WGTK - BCA"),
+            ("197", "Acorn Security Locksmiths Ltd T/A Keyhole Kates"),
+            ("1200", "XWGTK - Andrew S (A)"),
+        ]
 
 
 class SQLHandlClient(HandlClient):
@@ -230,6 +245,14 @@ class SQLHandlClient(HandlClient):
             )
             for row in rows
         }
+
+    def list_locksmiths(self) -> list[tuple[str, str]]:
+        query = "SELECT ID, LocksmithName FROM Lookup_Locksmiths ORDER BY LocksmithName"
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query)
+            rows = cursor.fetchall()
+        return [(str(row["ID"]), row["LocksmithName"] or "") for row in rows]
 
 
 def get_handl_client() -> HandlClient:

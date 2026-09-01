@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Sync locksmiths from Soter{% endblock %}
+{% block content %}
+<h1>Sync locksmiths from Soter</h1>
+
+<div class="card">
+  <p>{{ preview_rows|length }} active WGTK locksmith(s) found.
+     {{ stats.excluded }} non-person row(s) excluded, {{ stats.xwgtk }} ex-staff (XWGTK) row(s) skipped.</p>
+
+  <form method="get">
+    <label>Extra exclude terms (comma-separated, optional):
+      <input type="text" name="extra_excludes" value="{{ extra_excludes }}" style="width: 24rem;">
+    </label>
+    <button class="btn" type="submit">Refresh preview</button>
+  </form>
+</div>
+
+<div class="card">
+  <table>
+    <tr><th>Locksmith</th><th>Soter ID(s)</th><th>Status</th></tr>
+    {% for row in preview_rows %}
+    <tr>
+      <td>{{ row.display }}{% if row.unusual_count %} <span class="flag">⚠</span>{% endif %}</td>
+      <td>{{ row.ids|join:", " }}</td>
+      <td>{{ row.status }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+
+<div class="card">
+  <p>Review the list above — rows marked ⚠ have an unusual number of Soter IDs (not 1 or 2), worth
+     double-checking they're grouped correctly before committing.</p>
+  <form method="post">
+    {% csrf_token %}
+    <input type="hidden" name="extra_excludes" value="{{ extra_excludes }}">
+    <button class="btn" type="submit">Commit import</button>
+  </form>
+</div>
+{% endblock %}

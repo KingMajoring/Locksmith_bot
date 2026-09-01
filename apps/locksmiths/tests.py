@@ -2,11 +2,14 @@ import tempfile
 from io import StringIO
 from pathlib import Path
 
+from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.test import TestCase
+from django.urls import reverse
 
-from .management.commands.import_soter_locksmiths import normalize_base_name, parse_rows
+from .management.commands.import_soter_locksmiths import parse_rows
 from .models import Locksmith
+from .services import group_locksmiths, normalize_base_name
 
 
 class NormalizeBaseNameTests(TestCase):
@@ -19,6 +22,29 @@ class NormalizeBaseNameTests(TestCase):
 
     def test_leaves_plain_names_untouched(self):
         self.assertEqual(normalize_base_name("WGTK - Andrew S"), "WGTK - Andrew S")
+
+
+class GroupLocksmithsTests(TestCase):
+    ROWS = [
+        ("111", ""),
+        ("1204", "WGTK - Andrew S"),
+        ("1200", "XWGTK - Andrew S (A)"),
+        ("887", "WGTK - Dean S (A)"),
+        ("885", "WGTK - Dean S (V)"),
+        ("999", "WGTK - BCA"),
+        ("197", "Acorn Security Locksmiths Ltd T/A Keyhole Kates"),
+    ]
+
+    def test_groups_and_counts_correctly(self):
+        groups, stats = group_locksmiths(self.ROWS)
+        self.assertEqual(stats, {"excluded": 1, "xwgtk": 1})
+        self.assertEqual(set(groups.keys()), {"WGTK - ANDREW S", "WGTK - DEAN S"})
+        self.assertEqual(sorted(groups["WGTK - DEAN S"]["ids"]), ["885", "887"])
+
+    def test_extra_excludes_are_case_insensitive(self):
+        groups, stats = group_locksmiths(self.ROWS, extra_excludes=["andrew"])
+        self.assertNotIn("WGTK - ANDREW S", groups)
+        self.assertEqual(stats["excluded"], 2)
 
 
 class ParseRowsTests(TestCase):
@@ -80,3 +106,47 @@ class ImportCommandTests(TestCase):
         self.assertEqual(Locksmith.objects.count(), 2)
         dean = Locksmith.objects.get(name="WGTK - Dean S")
         self.assertEqual(dean.soter_ids.count(), 2)
+
+
+class SyncFromSoterViewTests(TestCase):
+    """Uses MockHandlClient's fixed list_locksmiths() fixture (no
+    HANDL_SQL_SERVER set in tests) to exercise the live-sync page."""
+
+    def setUp(self):
+        # Mirrors the real access model: every WGTK SSO login is a full
+        # superuser (apps/accounts/adapter.py), not just is_staff.
+        self.user = get_user_model().objects.create_user(
+            username="office_admin",
+            email="admin@wgtk.co.uk",
+            password="x",
+            is_staff=True,
+            is_superuser=True,
+        )
+        self.client.force_login(self.user)
+
+    def test_login_required(self):
+        self.client.logout()
+        response = self.client.get(reverse("locksmiths:sync_from_soter"))
+        self.assertEqual(response.status_code, 302)
+
+    def test_get_shows_preview_without_writing(self):
+        response = self.client.get(reverse("locksmiths:sync_from_soter"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "WGTK - Andrew S")
+        self.assertContains(response, "WGTK - Dean S")
+        self.assertNotContains(response, "WGTK - BCA")
+        self.assertEqual(Locksmith.objects.count(), 0)
+
+    def test_post_commits_and_redirects(self):
+        response = self.client.post(reverse("locksmiths:sync_from_soter"))
+        self.assertRedirects(response, reverse("admin:locksmiths_locksmith_changelist"))
+        self.assertEqual(Locksmith.objects.count(), 2)
+        dean = Locksmith.objects.get(name="WGTK - Dean S")
+        self.assertEqual(sorted(dean.soter_id_list), ["885", "887"])
+
+    def test_extra_excludes_querystring_filters_preview(self):
+        response = self.client.get(
+            reverse("locksmiths:sync_from_soter"), {"extra_excludes": "andrew"}
+        )
+        self.assertNotContains(response, "WGTK - Andrew S")
+        self.assertContains(response, "WGTK - Dean S")

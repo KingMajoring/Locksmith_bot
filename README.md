@@ -78,15 +78,18 @@ group `wgtk-ops-tool-rg`):
 - ⏳ **Microsoft 365 SMTP**: `EMAIL_HOST_USER` / `EMAIL_HOST_PASSWORD` (or
   swap to Graph API sending if app-password SMTP is locked down), and
   `EMAIL_BACKEND` set to the SMTP backend.
-- ⏳ **Locksmith → Soter ID mapping**: populate `Locksmith` records
-  (name, email) via `/admin/`, each with one or two `SoterLocksmithId`
-  rows (Soter's `Lookup_Locksmiths.ID` — a locksmith usually has both a
-  "(V)" and "(A)" row, whose stock/usage this tool sums together).
-  Only names starting `WGTK -` (not `XWGTK -`, which marks ex-staff,
-  and excluding non-person accounts like `WGTK - LOGISTICS TEAM`) are
-  current active staff — everything else in `Lookup_Locksmiths` is a
+- ✅ **Locksmith → Soter ID mapping**: use the **Sync from Soter** button
+  on the Locksmith admin page (`/admin/locksmiths/locksmith/`) —
+  queries `Lookup_Locksmiths` live, previews the grouping (a locksmith
+  usually has both a "(V)" and "(A)" row in Soter, summed into one
+  `Locksmith` with two `SoterLocksmithId` rows), and commits on
+  confirmation. Only names starting `WGTK -` (not `XWGTK -`, ex-staff,
+  and excluding non-person accounts like `WGTK - LOGISTICS TEAM`) count
+  as current active staff — everything else in `Lookup_Locksmiths` is a
   panel/subcontractor firm, which is also how Panelled Jobs (Area 4)
-  will identify a job that went to panel.
+  will identify a job that went to panel. (A file-based equivalent,
+  `python manage.py import_soter_locksmiths`, also exists for
+  offline review or if the app can't reach Soter.)
 - ⏳ **Stock check schedule**: one `StockCheckSchedule` row per locksmith
   in `/admin/`, picking which weekday they're sent their check.
 - ⏳ **Scheduled job**: nothing yet triggers
