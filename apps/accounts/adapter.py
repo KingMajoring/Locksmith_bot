@@ -40,8 +40,13 @@ class WGTKSocialAccountAdapter(DefaultSocialAccountAdapter):
             raise ImmediateHttpResponse(redirect("account_login"))
 
     def populate_user(self, request, sociallogin, data):
+        # Single-tier access model (see README): anyone signing in with an
+        # allowed WGTK domain account is trusted office/admin staff, so
+        # they get full admin access rather than a permission-less
+        # is_staff account that can log into /admin/ but do nothing there.
         user = super().populate_user(request, sociallogin, data)
         user.is_staff = True
+        user.is_superuser = True
         return user
 
 
