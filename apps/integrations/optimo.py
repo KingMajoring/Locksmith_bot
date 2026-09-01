@@ -8,9 +8,10 @@ Two calls combine to give one day's completed jobs:
   status ("success"/"failed"/"scheduled"/...), real on-site start/end
   times, and the driver's free-text note on failure.
 
-Until OPTIMO_API_KEY is set, get_optimo_client() returns
-MockOptimoClient so the rest of the app can be built and tested against
-realistic-shaped data.
+Until an API key is set (via the admin's Optimo API settings — see
+OptimoSettings in models.py — or the OPTIMO_API_KEY app setting as a
+fallback), get_optimo_client() returns MockOptimoClient so the rest of
+the app can be built and tested against realistic-shaped data.
 """
 from __future__ import annotations
 
@@ -114,10 +115,13 @@ class RealOptimoClient(OptimoClient):
 
     _BASE_URL = "https://api.optimoroute.com/v1"
 
+    def __init__(self, api_key: str):
+        self._api_key = api_key
+
     def _get(self, path: str, params: dict) -> dict:
         import requests
 
-        params = {**params, "key": settings.OPTIMO_API_KEY}
+        params = {**params, "key": self._api_key}
         response = requests.get(f"{self._BASE_URL}/{path}", params=params, timeout=30)
         response.raise_for_status()
         return response.json()
@@ -127,7 +131,7 @@ class RealOptimoClient(OptimoClient):
 
         response = requests.post(
             f"{self._BASE_URL}/{path}",
-            params={"key": settings.OPTIMO_API_KEY},
+            params={"key": self._api_key},
             json=body,
             timeout=30,
         )
@@ -191,6 +195,12 @@ def _parse_optimo_time(time_obj: dict | None) -> datetime | None:
 
 
 def get_optimo_client() -> OptimoClient:
-    if settings.OPTIMO_API_KEY:
-        return RealOptimoClient()
+    # The API key is normally set via the admin (OptimoSettings) so it
+    # can be rotated without a redeploy; OPTIMO_API_KEY (an app setting)
+    # is only a fallback for initial bootstrapping.
+    from .models import OptimoSettings
+
+    api_key = OptimoSettings.current_key() or settings.OPTIMO_API_KEY
+    if api_key:
+        return RealOptimoClient(api_key)
     return MockOptimoClient()

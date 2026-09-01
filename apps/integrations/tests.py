@@ -6,6 +6,8 @@ from django.test import TestCase, override_settings
 
 from .graph_email_backend import MicrosoftGraphEmailBackend
 from .handl import MockHandlClient, SQLHandlClient, get_handl_client
+from .models import OptimoSettings
+from .optimo import MockOptimoClient, RealOptimoClient, get_optimo_client
 
 
 class MockHandlClientTests(TestCase):
@@ -218,6 +220,30 @@ class GetHandlClientTests(TestCase):
     @override_settings(HANDL_SQL_SERVER="soterlive1.database.windows.net")
     def test_returns_sql_client_when_configured(self):
         self.assertIsInstance(get_handl_client(), SQLHandlClient)
+
+
+@override_settings(OPTIMO_API_KEY="")
+class GetOptimoClientTests(TestCase):
+    def test_returns_mock_client_when_unconfigured(self):
+        self.assertIsInstance(get_optimo_client(), MockOptimoClient)
+
+    def test_returns_real_client_using_admin_stored_key(self):
+        OptimoSettings.objects.create(api_key="admin-set-key")
+        client = get_optimo_client()
+        self.assertIsInstance(client, RealOptimoClient)
+        self.assertEqual(client._api_key, "admin-set-key")
+
+    @override_settings(OPTIMO_API_KEY="app-setting-key")
+    def test_falls_back_to_app_setting_when_no_admin_key(self):
+        client = get_optimo_client()
+        self.assertIsInstance(client, RealOptimoClient)
+        self.assertEqual(client._api_key, "app-setting-key")
+
+    @override_settings(OPTIMO_API_KEY="app-setting-key")
+    def test_admin_stored_key_takes_priority_over_app_setting(self):
+        OptimoSettings.objects.create(api_key="admin-set-key")
+        client = get_optimo_client()
+        self.assertEqual(client._api_key, "admin-set-key")
 
 
 def _fake_token_response():
