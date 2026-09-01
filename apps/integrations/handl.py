@@ -237,12 +237,16 @@ class SQLHandlClient(HandlClient):
               AND ipa.SKU IN ({code_placeholders})
             GROUP BY ipa.SKU
         """
-        # Most recent batch's PartValue, not an average across all
-        # history — matches how Soter's own UI shows "last purchased
-        # cost per unit" per supplier, and avoids an old/anomalous
-        # batch skewing a years-long average (confirmed against real
-        # data: CR2032's average came out at £13.13 vs £0.25-£2.45
-        # actually seen across its real suppliers).
+        # Most recently *priced* batch's PartValue — not an average
+        # across all history (confirmed on real data: CR2032 averaged
+        # £13.13 vs £0.25-£2.45 actually seen across its real
+        # suppliers), and not just the most recent row by date either
+        # (also confirmed on real data: that returned PartValue=0/NULL
+        # for several parts — Inventory_Stock holds non-purchase
+        # movements too, e.g. recounts/adjustments, with no real price).
+        # Excluding those before ranking gets the true last-purchased
+        # price, matching how Soter's own UI shows "last purchased cost
+        # per unit" per supplier.
         cost_query = f"""
             SELECT part_code, unit_cost FROM (
                 SELECT
@@ -254,6 +258,7 @@ class SQLHandlClient(HandlClient):
                 FROM Inventory_Stock ist
                 JOIN Inventory_Parts ipa ON ist.PartId = ipa.Id
                 WHERE ipa.SKU IN ({code_placeholders})
+                  AND ist.PartValue > 0
             ) ranked
             WHERE rn = 1
         """

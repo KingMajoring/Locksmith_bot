@@ -177,6 +177,21 @@ class SQLHandlClientTests(TestCase):
         self.assertIn("ORDER BY ist.DateCreated DESC", cost_query)
         self.assertIn("Inventory_Stock", cost_query)
 
+    def test_get_expected_stock_cost_query_excludes_zero_value_batches(self):
+        """Regression test: also confirmed on real data — the single
+        most-recent Inventory_Stock row for several parts had
+        PartValue 0/NULL (a stock adjustment/recount, not a purchase),
+        so ranking by date alone returned unit_cost=0.0 for everything.
+        Non-priced rows must be excluded before ranking.
+        """
+        fake_conn = _fake_connection_multi([], [])
+        client = SQLHandlClient()
+        with patch.object(client, "_connection", return_value=fake_conn):
+            client.get_expected_stock(["42"], ["TK-100"])
+        cursor = fake_conn.cursor.return_value
+        cost_query = cursor.execute.call_args_list[1][0][0]
+        self.assertIn("ist.PartValue > 0", cost_query)
+
 
 class GetHandlClientTests(TestCase):
     @override_settings(HANDL_SQL_SERVER="")
