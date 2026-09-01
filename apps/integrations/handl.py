@@ -133,12 +133,14 @@ class MockHandlClient(HandlClient):
 class SQLHandlClient(HandlClient):
     """Real Soter (Handl) DB-backed implementation, over pymssql.
 
-    TODO once Soter's schema is confirmed, fill in the two queries below.
-    Needed:
-    - the stock/parts-disposed table + how it links to an engineer,
-    - the van-stock/expected-quantity table + unit cost field,
-    - confirmation the engineer identifier used here matches
-      Locksmith.handl_engineer_id.
+    Locksmith.handl_engineer_id is Soter's Lookup_Locksmiths.ID (an int,
+    stored as a string on our side). Usage comes from Inventory_Disposals
+    (has LookupLocksmithId directly); expected stock from
+    Inventory_Locksmith_Stock, the same table the business's own "current
+    van stock" Excel report is built from. Unit cost is Inventory_Stock's
+    PartValue (cost basis) rather than Inventory_Parts.RecommendedRetailPrice
+    (sell price) — averaged across that part's stock batches, since
+    PartValue is recorded per batch rather than per part.
     """
 
     @contextmanager
@@ -159,18 +161,68 @@ class SQLHandlClient(HandlClient):
             conn.close()
 
     def get_stock_usage(self, handl_engineer_id: str, since: date) -> list[StockUsage]:
-        raise NotImplementedError(
-            "SQLHandlClient.get_stock_usage: Soter schema not yet confirmed. "
-            "The pymssql connection itself is wired up in _connection() above — "
-            "write the SELECT here once the stock/parts table is known."
-        )
+        query = """
+            SELECT
+                ip.SKU AS part_code,
+                ip.Name AS part_name,
+                SUM(idp.Quantity) AS qty_used
+            FROM Inventory_Disposals idp
+            JOIN Inventory_Stock ist ON idp.StockId = ist.Id
+            JOIN Inventory_Parts ip ON ist.PartId = ip.Id
+            WHERE idp.LookupLocksmithId = %(locksmith_id)s
+              AND idp.DateCreated >= %(since)s
+            GROUP BY ip.SKU, ip.Name
+            HAVING SUM(idp.Quantity) > 0
+            ORDER BY qty_used DESC
+        """
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                query,
+                {"locksmith_id": int(handl_engineer_id), "since": since},
+            )
+            rows = cursor.fetchall()
+        return [
+            StockUsage(
+                part_code=row["part_code"],
+                part_name=row["part_name"],
+                qty_used=row["qty_used"],
+            )
+            for row in rows
+        ]
 
     def get_expected_stock(
         self, handl_engineer_id: str, part_codes: list[str]
     ) -> dict[str, ExpectedStock]:
-        raise NotImplementedError(
-            "SQLHandlClient.get_expected_stock: Soter schema not yet confirmed."
-        )
+        if not part_codes:
+            return {}
+        placeholders = ", ".join(f"%(code{i})s" for i in range(len(part_codes)))
+        query = f"""
+            SELECT
+                ipa.SKU AS part_code,
+                ils.Quantity AS expected_qty,
+                AVG(ist.PartValue) AS unit_cost
+            FROM Inventory_Locksmith_Stock ils
+            JOIN Inventory_Parts ipa ON ils.PartId = ipa.Id
+            LEFT JOIN Inventory_Stock ist ON ist.PartId = ipa.Id
+            WHERE ils.LookupLocksmithId = %(locksmith_id)s
+              AND ipa.SKU IN ({placeholders})
+            GROUP BY ipa.SKU, ils.Quantity
+        """
+        params = {"locksmith_id": int(handl_engineer_id)}
+        params.update({f"code{i}": code for i, code in enumerate(part_codes)})
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+        return {
+            row["part_code"]: ExpectedStock(
+                part_code=row["part_code"],
+                expected_qty=row["expected_qty"],
+                unit_cost=float(row["unit_cost"] or 0),
+            )
+            for row in rows
+        }
 
 
 def get_handl_client() -> HandlClient:
