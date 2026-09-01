@@ -191,6 +191,21 @@ class SQLHandlClientTests(TestCase):
         cursor = fake_conn.cursor.return_value
         cost_query = cursor.execute.call_args_list[1][0][0]
         self.assertIn("ist.PartValue > 0", cost_query)
+        self.assertIn("ist.Quantity > 0", cost_query)
+
+    def test_get_expected_stock_cost_query_divides_batch_value_by_quantity(self):
+        """Regression test: PartValue is the batch *total*, not a
+        per-unit price — confirmed on real data, a batch with
+        Quantity=37, PartValue=90.65 gives the real per-unit price
+        (90.65/37 = £2.45) only once divided by Quantity.
+        """
+        fake_conn = _fake_connection_multi([], [])
+        client = SQLHandlClient()
+        with patch.object(client, "_connection", return_value=fake_conn):
+            client.get_expected_stock(["42"], ["TK-100"])
+        cursor = fake_conn.cursor.return_value
+        cost_query = cursor.execute.call_args_list[1][0][0]
+        self.assertIn("ist.PartValue / ist.Quantity", cost_query)
 
 
 class GetHandlClientTests(TestCase):

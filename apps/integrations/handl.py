@@ -158,10 +158,11 @@ class SQLHandlClient(HandlClient):
     table the business's own "current van stock" Excel report is built
     from. Both are summed across a locksmith's Soter ID(s) — Soter
     tracks "(V)" and "(A)" as separate stock locations for one physical
-    person. Unit cost is Inventory_Stock's PartValue (cost basis) rather
-    than Inventory_Parts.RecommendedRetailPrice (sell price), taken from
-    that part's most recently received batch rather than averaged
-    across all of them.
+    person. Unit cost is Inventory_Stock's PartValue/Quantity (cost
+    basis — PartValue is a batch *total*, not a per-unit price) for the
+    most recently *priced* batch, rather than Inventory_Parts's
+    RecommendedRetailPrice (sell price) or an average across all
+    history.
     """
 
     @contextmanager
@@ -237,21 +238,21 @@ class SQLHandlClient(HandlClient):
               AND ipa.SKU IN ({code_placeholders})
             GROUP BY ipa.SKU
         """
-        # Most recently *priced* batch's PartValue — not an average
-        # across all history (confirmed on real data: CR2032 averaged
-        # £13.13 vs £0.25-£2.45 actually seen across its real
-        # suppliers), and not just the most recent row by date either
-        # (also confirmed on real data: that returned PartValue=0/NULL
-        # for several parts — Inventory_Stock holds non-purchase
-        # movements too, e.g. recounts/adjustments, with no real price).
-        # Excluding those before ranking gets the true last-purchased
-        # price, matching how Soter's own UI shows "last purchased cost
-        # per unit" per supplier.
+        # Inventory_Stock.PartValue is the *batch total*, not a
+        # per-unit price — confirmed on real data: a CR2032 batch with
+        # Quantity=37, PartValue=90.65 gives 90.65/37 = £2.45, exactly
+        # matching that part's real "last purchased cost per unit" on
+        # Soter's own Suppliers page. So unit cost is PartValue/Quantity
+        # for the most recently *priced* batch (not an average across
+        # all history — that skewed badly, e.g. CR2032 averaged £13.13
+        # — and not just the most recent row by date either, since many
+        # rows are periodic recount/adjustment noise with
+        # Quantity=0, PartValue=0 and no real price).
         cost_query = f"""
             SELECT part_code, unit_cost FROM (
                 SELECT
                     ipa.SKU AS part_code,
-                    ist.PartValue AS unit_cost,
+                    ist.PartValue / ist.Quantity AS unit_cost,
                     ROW_NUMBER() OVER (
                         PARTITION BY ipa.SKU ORDER BY ist.DateCreated DESC
                     ) AS rn
@@ -259,6 +260,7 @@ class SQLHandlClient(HandlClient):
                 JOIN Inventory_Parts ipa ON ist.PartId = ipa.Id
                 WHERE ipa.SKU IN ({code_placeholders})
                   AND ist.PartValue > 0
+                  AND ist.Quantity > 0
             ) ranked
             WHERE rn = 1
         """
