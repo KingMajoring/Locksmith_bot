@@ -47,6 +47,14 @@ With `.env` left mostly blank, the app runs against:
 - the console email backend — sent emails print to the terminal instead
   of actually sending.
 
+## Deploying to Azure
+
+See `deploy/README.md` and `deploy/azure_setup.sh` — a script that
+provisions the resource group, Postgres, App Service, and Azure AD app
+registration, then deploys the current checkout. Run it on your own
+machine with the Azure CLI (this can't reach Azure from a sandboxed
+session).
+
 ## What's still needed to go live
 
 These are flagged inline in the code (search `TODO`) but summarised here:
