@@ -47,6 +47,7 @@ class JobDetails:
     make: str
     model: str
     year: str
+    vin: str
     service_type: str
 
 
@@ -178,6 +179,7 @@ class MockHandlClient(HandlClient):
                 make=rng.choice(self._MAKES),
                 model=rng.choice(self._MODELS),
                 year=str(rng.randint(2008, 2025)),
+                vin=f"MOCK{rng.randint(10**12, 10**13 - 1)}",
                 service_type=rng.choice(self._SERVICE_TYPES),
             )
         return result
@@ -351,12 +353,13 @@ class SQLHandlClient(HandlClient):
         # ReportID can have more than one Policy_KeyClaims row (multiple
         # keys claimed per report), so this takes the earliest one by ID.
         query = f"""
-            SELECT ReportID, Make, Model, yearOfManufacture, KeyType FROM (
+            SELECT ReportID, Make, Model, yearOfManufacture, VehicleVIN, KeyType FROM (
                 SELECT
                     pkc.ReportID,
                     pkc.Make,
                     pkc.Model,
                     pkc.yearOfManufacture,
+                    pkc.VehicleVIN,
                     lkt.KeyType,
                     ROW_NUMBER() OVER (PARTITION BY pkc.ReportID ORDER BY pkc.ID) AS rn
                 FROM Policy_KeyClaims pkc
@@ -375,6 +378,7 @@ class SQLHandlClient(HandlClient):
                 make=row["Make"] or "",
                 model=row["Model"] or "",
                 year=str(row["yearOfManufacture"] or ""),
+                vin=row["VehicleVIN"] or "",
                 service_type=row["KeyType"] or "",
             )
             for row in rows

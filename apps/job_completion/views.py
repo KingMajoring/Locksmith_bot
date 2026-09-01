@@ -3,6 +3,7 @@ from django.shortcuts import get_object_or_404, render
 
 from apps.locksmiths.models import Locksmith
 
+from .models import CompletedJob
 from .services.benchmarking import duration_benchmark
 from .services.reporting import (
     all_locksmith_summaries,
@@ -33,8 +34,13 @@ def locksmith_report(request, pk):
     locksmith = get_object_or_404(Locksmith, pk=pk)
     service_types = service_types_for_locksmith(locksmith)
     benchmarks = [duration_benchmark(locksmith, service_type) for service_type in service_types]
+    jobs = (
+        CompletedJob.objects.filter(locksmith=locksmith)
+        .select_related("failure_category")
+        .order_by("-job_date")[:50]
+    )
     return render(
         request,
         "job_completion/locksmith_report.html",
-        {"locksmith": locksmith, "benchmarks": benchmarks},
+        {"locksmith": locksmith, "benchmarks": benchmarks, "jobs": jobs},
     )

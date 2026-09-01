@@ -97,10 +97,12 @@ class PullingTests(TestCase):
         }
         self.job_details = {
             "1001": JobDetails(
-                report_id="1001", make="Ford", model="Focus", year="2020", service_type="Lockout"
+                report_id="1001", make="Ford", model="Focus", year="2020",
+                vin="VIN1001", service_type="Lockout",
             ),
             "1002": JobDetails(
-                report_id="1002", make="BMW", model="3 Series", year="2019", service_type="Lockout"
+                report_id="1002", make="BMW", model="3 Series", year="2019",
+                vin="VIN1002", service_type="Lockout",
             ),
         }
 

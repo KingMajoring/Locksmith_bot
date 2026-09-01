@@ -76,6 +76,7 @@ class CompletedJob(models.Model):
     make = models.CharField(max_length=100, blank=True)
     model = models.CharField(max_length=100, blank=True)
     year = models.CharField(max_length=10, blank=True)
+    vin = models.CharField(max_length=32, blank=True, verbose_name="VIN")
     service_type = models.CharField(max_length=100, blank=True)
 
     failure_category = models.ForeignKey(

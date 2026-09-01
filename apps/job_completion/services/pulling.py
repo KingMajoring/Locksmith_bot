@@ -79,6 +79,7 @@ def pull_completed_jobs_for_date(for_date: date) -> PullSummary:
             "make": details.make if details else "",
             "model": details.model if details else "",
             "year": details.year if details else "",
+            "vin": details.vin if details else "",
             "service_type": details.service_type if details else "",
             "completion_note": completion.note,
         }

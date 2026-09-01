@@ -45,6 +45,7 @@ class CompletedJobAdmin(admin.ModelAdmin):
         "make",
         "model",
         "year",
+        "vin",
         "service_type",
         "completion_note",
         "categorized_by",

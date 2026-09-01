@@ -65,6 +65,12 @@ def service_types_for_locksmith(locksmith: Locksmith, window_days: int = DEFAULT
     return sorted(
         CompletedJob.objects.filter(locksmith=locksmith, job_date__gte=since)
         .exclude(service_type="")
+        # CompletedJob's default ordering (job_date, order_no) gets
+        # pulled into the query even with values_list()+distinct(),
+        # which makes DISTINCT operate on (service_type, job_date,
+        # order_no) instead of service_type alone — order_by() with no
+        # args clears it so this actually dedupes on service_type.
+        .order_by()
         .values_list("service_type", flat=True)
         .distinct()
     )

@@ -43,6 +43,22 @@ class MockHandlClientTests(TestCase):
         b = self.client.get_stock_usage(["ENG-002", "ENG-001"], self.since)
         self.assertEqual([u.part_code for u in a], [u.part_code for u in b])
 
+    def test_get_job_details_returns_all_requested_report_ids(self):
+        report_ids = ["1001", "1002"]
+        details = self.client.get_job_details(report_ids)
+        self.assertEqual(set(details.keys()), set(report_ids))
+        for job in details.values():
+            self.assertTrue(job.make)
+            self.assertTrue(job.model)
+            self.assertTrue(job.year)
+            self.assertTrue(job.vin)
+            self.assertTrue(job.service_type)
+
+    def test_get_job_details_is_deterministic_per_report_id(self):
+        first = self.client.get_job_details(["1001"])["1001"]
+        second = self.client.get_job_details(["1001"])["1001"]
+        self.assertEqual(first, second)
+
 
 def _fake_connection(rows):
     """A MagicMock usable as `with client._connection() as conn:`, with
@@ -210,6 +226,40 @@ class SQLHandlClientTests(TestCase):
         cursor = fake_conn.cursor.return_value
         cost_query = cursor.execute.call_args_list[1][0][0]
         self.assertIn("ist.PartValue / ist.Quantity", cost_query)
+
+    def test_get_job_details_maps_rows_and_queries_policy_key_claims(self):
+        """Regression test: the real table is Policy_KeyClaims, not
+        Policy_Details (which has no vehicle fields at all and threw
+        "Invalid column name 'Make'" against real Handl data)."""
+        rows = [
+            {
+                "ReportID": "496390",
+                "Make": "NISSAN",
+                "Model": "X-TRAIL ACENTA DCI 4X4 CVT",
+                "yearOfManufacture": 2017,
+                "VehicleVIN": "SJNFAAJ11U1234567",
+                "KeyType": "Car",
+            }
+        ]
+        fake_conn = _fake_connection(rows)
+        client = SQLHandlClient()
+        with patch.object(client, "_connection", return_value=fake_conn):
+            details = client.get_job_details(["496390"])
+
+        cursor = fake_conn.cursor.return_value
+        query = cursor.execute.call_args_list[0][0][0]
+        self.assertIn("Policy_KeyClaims", query)
+        self.assertIn("Lookup_KeyType", query)
+
+        job = details["496390"]
+        self.assertEqual(job.make, "NISSAN")
+        self.assertEqual(job.year, "2017")
+        self.assertEqual(job.vin, "SJNFAAJ11U1234567")
+        self.assertEqual(job.service_type, "Car")
+
+    def test_get_job_details_empty_input_returns_empty_without_querying(self):
+        client = SQLHandlClient()
+        self.assertEqual(client.get_job_details([]), {})
 
 
 class GetHandlClientTests(TestCase):

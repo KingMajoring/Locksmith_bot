@@ -30,4 +30,42 @@
   <p>No completed jobs in the last 90 days.</p>
   {% endif %}
 </div>
+
+<div class="card">
+  <h2>Recent jobs</h2>
+  {% if jobs %}
+  <table>
+    <tr>
+      <th>Date</th>
+      <th>Order</th>
+      <th>Status</th>
+      <th>Make</th>
+      <th>Model</th>
+      <th>Year</th>
+      <th>VIN</th>
+      <th>Service</th>
+      <th>Duration</th>
+      <th>Failure category</th>
+    </tr>
+    {% for job in jobs %}
+    <tr>
+      <td>{{ job.job_date }}</td>
+      <td>{{ job.order_no }}</td>
+      <td>{{ job.get_status_display }}</td>
+      <td>{{ job.make }}</td>
+      <td>{{ job.model }}</td>
+      <td>{{ job.year }}</td>
+      <td>{{ job.vin }}</td>
+      <td>{{ job.service_type }}</td>
+      <td>{% if job.duration_minutes %}{{ job.duration_minutes }} min{% else %}—{% endif %}</td>
+      <td class="{% if job.needs_categorization %}flag{% endif %}">
+        {{ job.failure_category|default:"" }}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p>No completed jobs on file.</p>
+  {% endif %}
+</div>
 {% endblock %}
