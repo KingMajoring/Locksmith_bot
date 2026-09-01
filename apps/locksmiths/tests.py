@@ -180,3 +180,73 @@ class SyncFromSoterViewTests(TestCase):
         )
         self.assertNotContains(response, "WGTK - Andrew S")
         self.assertContains(response, "WGTK - Dean S")
+
+
+class AssignScheduleActionTests(TestCase):
+    def setUp(self):
+        from apps.stock_accuracy.models import StockCheckSchedule
+
+        self.StockCheckSchedule = StockCheckSchedule
+        self.user = get_user_model().objects.create_user(
+            username="office_admin",
+            email="admin@wgtk.co.uk",
+            password="x",
+            is_staff=True,
+            is_superuser=True,
+        )
+        self.client.force_login(self.user)
+
+    def _run_action(self, locksmiths):
+        return self.client.post(
+            reverse("admin:locksmiths_locksmith_changelist"),
+            {
+                "action": "assign_stock_check_schedule",
+                "_selected_action": [str(l.pk) for l in locksmiths],
+            },
+            follow=True,
+        )
+
+    def test_creates_schedules_for_locksmiths_without_one(self):
+        a = Locksmith.objects.create(name="WGTK - A")
+        b = Locksmith.objects.create(name="WGTK - B")
+
+        self._run_action([a, b])
+
+        self.assertTrue(self.StockCheckSchedule.objects.filter(locksmith=a).exists())
+        self.assertTrue(self.StockCheckSchedule.objects.filter(locksmith=b).exists())
+
+    def test_skips_locksmiths_that_already_have_a_schedule(self):
+        c = Locksmith.objects.create(name="WGTK - C")
+        self.StockCheckSchedule.objects.create(locksmith=c, weekday=2, enabled=True)
+
+        self._run_action([c])
+
+        # Still exactly one schedule, untouched (still Wednesday).
+        self.assertEqual(self.StockCheckSchedule.objects.filter(locksmith=c).count(), 1)
+        self.assertEqual(self.StockCheckSchedule.objects.get(locksmith=c).weekday, 2)
+
+    def test_spreads_new_schedules_across_all_five_weekdays(self):
+        locksmiths = [Locksmith.objects.create(name=f"WGTK - Person {i}") for i in range(5)]
+
+        self._run_action(locksmiths)
+
+        weekdays = set(
+            self.StockCheckSchedule.objects.filter(locksmith__in=locksmiths).values_list(
+                "weekday", flat=True
+            )
+        )
+        self.assertEqual(weekdays, {0, 1, 2, 3, 4})
+
+    def test_balances_against_existing_schedules_not_just_selection(self):
+        # Four locksmiths already on Monday; a fifth (new) selection
+        # should go anywhere but Monday, since Monday's already busiest.
+        for i in range(4):
+            existing = Locksmith.objects.create(name=f"WGTK - Existing {i}")
+            self.StockCheckSchedule.objects.create(locksmith=existing, weekday=0, enabled=True)
+        newcomer = Locksmith.objects.create(name="WGTK - Newcomer")
+
+        self._run_action([newcomer])
+
+        self.assertNotEqual(
+            self.StockCheckSchedule.objects.get(locksmith=newcomer).weekday, 0
+        )
