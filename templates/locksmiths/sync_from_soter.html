@@ -17,11 +17,12 @@
 
 <div class="card">
   <table>
-    <tr><th>Locksmith</th><th>Soter ID(s)</th><th>Status</th></tr>
+    <tr><th>Locksmith</th><th>Soter ID(s)</th><th>Email</th><th>Status</th></tr>
     {% for row in preview_rows %}
     <tr>
       <td>{{ row.display }}{% if row.unusual_count %} <span class="flag">⚠</span>{% endif %}</td>
       <td>{{ row.ids|join:", " }}</td>
+      <td>{{ row.email }}</td>
       <td>{{ row.status }}</td>
     </tr>
     {% endfor %}

@@ -55,9 +55,10 @@ class HandlClient(ABC):
         """Current expected van-stock quantity and unit cost for the given part codes."""
 
     @abstractmethod
-    def list_locksmiths(self) -> list[tuple[str, str]]:
-        """Every (Lookup_Locksmiths.ID, LocksmithName) row — WGTK's own
-        staff and panel/subcontractor firms alike."""
+    def list_locksmiths(self) -> list[tuple[str, str, str]]:
+        """(ID, LocksmithName, EmailAddress) for every active WGTK
+        locksmith (WGTKLocksmith=1, isDeleted=0 in Lookup_Locksmiths) —
+        excludes panel/subcontractor firms and soft-deleted rows."""
 
 
 class MockHandlClient(HandlClient):
@@ -137,14 +138,15 @@ class MockHandlClient(HandlClient):
             )
         return result
 
-    def list_locksmiths(self) -> list[tuple[str, str]]:
+    def list_locksmiths(self) -> list[tuple[str, str, str]]:
+        # Mirrors what the real SQL query already returns: only active
+        # WGTK-flagged, non-deleted rows — panel firms and ex-staff
+        # never come back from Soter in the first place.
         return [
-            ("1204", "WGTK - Andrew S"),
-            ("887", "WGTK - Dean S (A)"),
-            ("885", "WGTK - Dean S (V)"),
-            ("999", "WGTK - BCA"),
-            ("197", "Acorn Security Locksmiths Ltd T/A Keyhole Kates"),
-            ("1200", "XWGTK - Andrew S (A)"),
+            ("1204", "WGTK - Andrew S", "andrew.s@wgtk.co.uk"),
+            ("887", "WGTK - Dean S (A)", "dean.s@wgtk.co.uk"),
+            ("885", "WGTK - Dean S (V)", "dean.s@wgtk.co.uk"),
+            ("999", "WGTK - BCA", ""),
         ]
 
 
@@ -246,13 +248,27 @@ class SQLHandlClient(HandlClient):
             for row in rows
         }
 
-    def list_locksmiths(self) -> list[tuple[str, str]]:
-        query = "SELECT ID, LocksmithName FROM Lookup_Locksmiths ORDER BY LocksmithName"
+    def list_locksmiths(self) -> list[tuple[str, str, str]]:
+        # WGTKLocksmith=1 identifies WGTK's own staff vs panel/
+        # subcontractor firms (also everything else in this table);
+        # isDeleted=0 excludes soft-deleted rows. Not filtering on
+        # Active — its exact meaning (currently employed? on shift
+        # today?) isn't confirmed, and excluding on a guess risks
+        # silently dropping someone who should still get stock checks.
+        query = """
+            SELECT ID, LocksmithName, EmailAddress
+            FROM Lookup_Locksmiths
+            WHERE WGTKLocksmith = 1 AND isDeleted = 0
+            ORDER BY LocksmithName
+        """
         with self._connection() as conn:
             cursor = conn.cursor()
             cursor.execute(query)
             rows = cursor.fetchall()
-        return [(str(row["ID"]), row["LocksmithName"] or "") for row in rows]
+        return [
+            (str(row["ID"]), row["LocksmithName"] or "", row["EmailAddress"] or "")
+            for row in rows
+        ]
 
 
 def get_handl_client() -> HandlClient:

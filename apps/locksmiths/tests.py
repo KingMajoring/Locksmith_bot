@@ -26,13 +26,13 @@ class NormalizeBaseNameTests(TestCase):
 
 class GroupLocksmithsTests(TestCase):
     ROWS = [
-        ("111", ""),
-        ("1204", "WGTK - Andrew S"),
-        ("1200", "XWGTK - Andrew S (A)"),
-        ("887", "WGTK - Dean S (A)"),
-        ("885", "WGTK - Dean S (V)"),
-        ("999", "WGTK - BCA"),
-        ("197", "Acorn Security Locksmiths Ltd T/A Keyhole Kates"),
+        ("111", "", ""),
+        ("1204", "WGTK - Andrew S", "andrew.s@wgtk.co.uk"),
+        ("1200", "XWGTK - Andrew S (A)", ""),
+        ("887", "WGTK - Dean S (A)", "dean.s@wgtk.co.uk"),
+        ("885", "WGTK - Dean S (V)", ""),
+        ("999", "WGTK - BCA", ""),
+        ("197", "Acorn Security Locksmiths Ltd T/A Keyhole Kates", ""),
     ]
 
     def test_groups_and_counts_correctly(self):
@@ -46,17 +46,40 @@ class GroupLocksmithsTests(TestCase):
         self.assertNotIn("WGTK - ANDREW S", groups)
         self.assertEqual(stats["excluded"], 2)
 
+    def test_captures_first_non_blank_email_in_group(self):
+        groups, _ = group_locksmiths(self.ROWS)
+        self.assertEqual(groups["WGTK - ANDREW S"]["email"], "andrew.s@wgtk.co.uk")
+        # (A) row has the email, (V) row doesn't — either order should pick it up.
+        self.assertEqual(groups["WGTK - DEAN S"]["email"], "dean.s@wgtk.co.uk")
+
+    def test_already_filtered_skips_wgtk_xwgtk_check(self):
+        rows = [
+            ("500", "Some Panel Firm", ""),
+            ("501", "XWGTK - Ex Staff", ""),
+        ]
+        groups, stats = group_locksmiths(rows, already_filtered=True)
+        # Neither is excluded by name-prefix logic when already_filtered —
+        # the caller (e.g. the live SQL query) is trusted to have scoped
+        # rows to active WGTK staff already.
+        self.assertEqual(set(groups.keys()), {"SOME PANEL FIRM", "XWGTK - EX STAFF"})
+        self.assertEqual(stats, {"excluded": 0, "xwgtk": 0})
+
 
 class ParseRowsTests(TestCase):
     def test_parses_tab_separated_with_header(self):
         lines = ["ID\tLocksmithName", "111\tSome Locksmith", "112\tAnother One"]
         rows = parse_rows(lines)
-        self.assertEqual(rows, [("111", "Some Locksmith"), ("112", "Another One")])
+        self.assertEqual(rows, [("111", "Some Locksmith", ""), ("112", "Another One", "")])
 
     def test_skips_blank_name_rows(self):
         lines = ["ID\tLocksmithName", "111", "112\tHas A Name"]
         rows = parse_rows(lines)
-        self.assertEqual(rows, [("112", "Has A Name")])
+        self.assertEqual(rows, [("112", "Has A Name", "")])
+
+    def test_parses_optional_email_column(self):
+        lines = ["ID\tLocksmithName\tEmailAddress", "111\tSome Locksmith\tsome@wgtk.co.uk"]
+        rows = parse_rows(lines)
+        self.assertEqual(rows, [("111", "Some Locksmith", "some@wgtk.co.uk")])
 
 
 class ImportCommandTests(TestCase):
@@ -143,6 +166,13 @@ class SyncFromSoterViewTests(TestCase):
         self.assertEqual(Locksmith.objects.count(), 2)
         dean = Locksmith.objects.get(name="WGTK - Dean S")
         self.assertEqual(sorted(dean.soter_id_list), ["885", "887"])
+        self.assertEqual(dean.email, "dean.s@wgtk.co.uk")
+
+    def test_post_updates_email_on_existing_locksmith(self):
+        Locksmith.objects.create(name="WGTK - Dean S", email="stale@example.com")
+        self.client.post(reverse("locksmiths:sync_from_soter"))
+        dean = Locksmith.objects.get(name="WGTK - Dean S")
+        self.assertEqual(dean.email, "dean.s@wgtk.co.uk")
 
     def test_extra_excludes_querystring_filters_preview(self):
         response = self.client.get(

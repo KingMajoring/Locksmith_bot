@@ -9,22 +9,27 @@ from .services import commit_groups, group_locksmiths
 
 
 def _preview_rows(groups):
-    """Annotate each group with whether it's new, would add IDs to an
-    existing locksmith, or is already fully up to date."""
+    """Annotate each group with what would change: a new locksmith,
+    added Soter ID(s), an updated email, or already up to date."""
     rows = []
     for base_upper, group in sorted(groups.items()):
         existing = Locksmith.objects.filter(name=group["display"]).first()
+        changes = []
         if existing is None:
-            status = "new"
-        elif set(existing.soter_id_list) >= set(group["ids"]):
-            status = "up to date"
+            changes.append("new")
         else:
-            status = "adds ID(s)"
+            if not set(existing.soter_id_list) >= set(group["ids"]):
+                changes.append("adds ID(s)")
+            if group["email"] and existing.email != group["email"]:
+                changes.append("updates email")
+            if not changes:
+                changes.append("up to date")
         rows.append(
             {
                 "display": group["display"],
                 "ids": group["ids"],
-                "status": status,
+                "email": group["email"] or "(none)",
+                "status": " + ".join(changes),
                 "unusual_count": len(group["ids"]) not in (1, 2),
             }
         )
@@ -40,14 +45,14 @@ def sync_from_soter(request):
 
     handl = get_handl_client()
     rows = handl.list_locksmiths()
-    groups, stats = group_locksmiths(rows, extra_excludes)
+    groups, stats = group_locksmiths(rows, extra_excludes, already_filtered=True)
 
     if request.method == "POST":
-        created_locksmiths, created_ids = commit_groups(groups)
+        created_locksmiths, created_ids, emails_updated = commit_groups(groups)
         messages.success(
             request,
             f"Synced from Soter: {created_locksmiths} new locksmith(s), "
-            f"{created_ids} new Soter ID row(s) added.",
+            f"{created_ids} new Soter ID row(s), {emails_updated} email(s) updated.",
         )
         return redirect("admin:locksmiths_locksmith_changelist")
 

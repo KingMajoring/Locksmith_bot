@@ -8,21 +8,22 @@ Usage:
 
 Input file: whatever you get from running, in Soter/Azure Data Studio
 (or SSMS, or the portal's Query editor) and saving/exporting the
-results:
+results — a plain 2-column export still works (email left blank):
 
-    SELECT ID, LocksmithName FROM Lookup_Locksmiths ORDER BY LocksmithName;
+    SELECT ID, LocksmithName, EmailAddress FROM Lookup_Locksmiths ORDER BY LocksmithName;
 
-Tab- or comma-separated, two columns (ID, LocksmithName), header row
-optional — auto-detected.
+Tab- or comma-separated, 2 or 3 columns (ID, LocksmithName[, EmailAddress]),
+header row optional — auto-detected.
 
 Prefer the "Sync from Soter" page in /admin/ (Locksmiths) if the app
 already has a working Soter connection — it does the same thing live,
 no file export needed. This command is for offline review/import, or
 if the app can't reach Soter for some reason.
 
-See apps/locksmiths/services.py for the filtering/grouping rules
-(active-staff detection, non-person account exclusions, (V)/(A) row
-grouping).
+Since a plain export like this has no WGTKLocksmith/isDeleted flag
+columns, this command filters active-staff by parsing "WGTK -" vs
+"XWGTK -" (ex-staff) out of the name text instead — see
+apps/locksmiths/services.py for the full filtering/grouping rules.
 """
 from __future__ import annotations
 
@@ -34,7 +35,7 @@ from django.core.management.base import BaseCommand, CommandError
 from apps.locksmiths.services import commit_groups, group_locksmiths
 
 
-def parse_rows(lines: list[str]) -> list[tuple[str, str]]:
+def parse_rows(lines: list[str]) -> list[tuple[str, str, str]]:
     sample = "\n".join(lines[:5])
     dialect = csv.excel_tab if "\t" in sample else csv.excel
     reader = csv.reader(lines, dialect=dialect)
@@ -43,9 +44,10 @@ def parse_rows(lines: list[str]) -> list[tuple[str, str]]:
         if len(row) < 2:
             continue
         soter_id, name = row[0].strip(), row[1].strip()
+        email = row[2].strip() if len(row) > 2 else ""
         if not soter_id or not soter_id[0].isdigit():
             continue  # header row or blank
-        rows.append((soter_id, name))
+        rows.append((soter_id, name, email))
     return rows
 
 
@@ -54,7 +56,7 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument(
-            "file", nargs="?", help="Path to the exported ID/LocksmithName file. Reads stdin if omitted."
+            "file", nargs="?", help="Path to the exported ID/LocksmithName[/EmailAddress] file. Reads stdin if omitted."
         )
         parser.add_argument(
             "--commit", action="store_true", help="Actually write to the database. Default is dry-run."
@@ -86,7 +88,8 @@ class Command(BaseCommand):
 
         for base_upper, group in sorted(groups.items()):
             flag = " ⚠ unusual ID count, check this one" if len(group["ids"]) not in (1, 2) else ""
-            self.stdout.write(f"{group['display']}: {', '.join(group['ids'])}{flag}")
+            email = group["email"] or "(no email)"
+            self.stdout.write(f"{group['display']}: {', '.join(group['ids'])} — {email}{flag}")
 
         if not options["commit"]:
             self.stdout.write("")
@@ -95,9 +98,9 @@ class Command(BaseCommand):
             ))
             return
 
-        created_locksmiths, created_ids = commit_groups(groups)
+        created_locksmiths, created_ids, emails_updated = commit_groups(groups)
         self.stdout.write("")
         self.stdout.write(self.style.SUCCESS(
-            f"Done. {created_locksmiths} new Locksmith record(s), {created_ids} new SoterLocksmithId row(s). "
-            "Existing locksmiths with matching names were left as-is and just got any missing Soter IDs added."
+            f"Done. {created_locksmiths} new Locksmith record(s), {created_ids} new SoterLocksmithId row(s), "
+            f"{emails_updated} existing email(s) updated."
         ))
