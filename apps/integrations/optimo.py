@@ -144,6 +144,7 @@ class RealOptimoClient(OptimoClient):
             "search_orders",
             {
                 "dateRange": {"from": date_str, "to": date_str},
+                "includeOrderData": True,
                 "includeScheduleInformation": True,
             },
         )
@@ -152,7 +153,12 @@ class RealOptimoClient(OptimoClient):
             schedule = order.get("scheduleInformation")
             if not schedule:
                 continue
-            order_no = order.get("data", {}).get("orderNo") or order.get("orderNo")
+            # orderNo only comes back inside "data", and only because we
+            # asked for includeOrderData above — without it every order
+            # in the response has no orderNo field at all (confirmed
+            # against real Optimo data, where every order was silently
+            # skipped as a result).
+            order_no = order.get("data", {}).get("orderNo")
             if not order_no:
                 continue
             summaries.append(
