@@ -1,0 +1,153 @@
+"""
+Base settings shared by all environments.
+
+WGTK Ops Tool covers four areas: Stock Accuracy, Job Completion, Job Costing
+and Panelled Jobs. Build starts with Stock Accuracy (see apps/stock_accuracy).
+"""
+from pathlib import Path
+
+import environ
+
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+
+env = environ.Env(
+    DJANGO_DEBUG=(bool, False),
+)
+environ.Env.read_env(BASE_DIR / ".env")
+
+SECRET_KEY = env("DJANGO_SECRET_KEY", default="dev-insecure-secret-key-change-me")
+DEBUG = env("DJANGO_DEBUG")
+ALLOWED_HOSTS = env.list("DJANGO_ALLOWED_HOSTS", default=["localhost", "127.0.0.1"])
+
+INSTALLED_APPS = [
+    "django.contrib.admin",
+    "django.contrib.auth",
+    "django.contrib.contenttypes",
+    "django.contrib.sessions",
+    "django.contrib.messages",
+    "django.contrib.staticfiles",
+    "django.contrib.sites",
+    "allauth",
+    "allauth.account",
+    "allauth.socialaccount",
+    "allauth.socialaccount.providers.microsoft",
+    "apps.accounts",
+    "apps.locksmiths",
+    "apps.integrations",
+    "apps.stock_accuracy",
+]
+
+MIDDLEWARE = [
+    "django.middleware.security.SecurityMiddleware",
+    "django.contrib.sessions.middleware.SessionMiddleware",
+    "django.middleware.common.CommonMiddleware",
+    "django.middleware.csrf.CsrfViewMiddleware",
+    "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "django.contrib.messages.middleware.MessageMiddleware",
+    "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    "allauth.account.middleware.AccountMiddleware",
+]
+
+ROOT_URLCONF = "config.urls"
+
+TEMPLATES = [
+    {
+        "BACKEND": "django.template.backends.django.DjangoTemplates",
+        "DIRS": [BASE_DIR / "templates"],
+        "APP_DIRS": True,
+        "OPTIONS": {
+            "context_processors": [
+                "django.template.context_processors.debug",
+                "django.template.context_processors.request",
+                "django.contrib.auth.context_processors.auth",
+                "django.contrib.messages.context_processors.messages",
+            ],
+        },
+    },
+]
+
+WSGI_APPLICATION = "config.wsgi.application"
+
+DATABASES = {
+    "default": env.db("DATABASE_URL", default="sqlite:///" + str(BASE_DIR / "db.sqlite3")),
+}
+
+# Handl is a separate, external system. Read-only DB access is configured
+# here once real connection details are confirmed (see apps/integrations).
+# Left unset by default so the app falls back to the mock Handl client.
+_handl_db_url = env("HANDL_DATABASE_URL", default=None)
+if _handl_db_url:
+    DATABASES["handl"] = environ.Env.db_url_config(_handl_db_url)
+
+AUTH_PASSWORD_VALIDATORS = [
+    {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
+    {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
+    {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
+    {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
+]
+
+AUTHENTICATION_BACKENDS = [
+    "django.contrib.auth.backends.ModelBackend",
+    "allauth.account.auth_backends.AuthenticationBackend",
+]
+
+LANGUAGE_CODE = "en-gb"
+TIME_ZONE = "Europe/London"
+USE_I18N = True
+USE_TZ = True
+
+STATIC_URL = "static/"
+STATIC_ROOT = BASE_DIR / "staticfiles"
+
+DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+SITE_ID = 1
+LOGIN_URL = "/accounts/login/"
+LOGIN_REDIRECT_URL = "/"
+LOGOUT_REDIRECT_URL = "/accounts/login/"
+
+ACCOUNT_LOGIN_METHODS = {"email"}
+ACCOUNT_SIGNUP_FIELDS = ["email*"]
+ACCOUNT_EMAIL_VERIFICATION = "none"
+SOCIALACCOUNT_LOGIN_ON_GET = True
+SOCIALACCOUNT_AUTO_SIGNUP = True
+SOCIALACCOUNT_ADAPTER = "apps.accounts.adapter.WGTKSocialAccountAdapter"
+ACCOUNT_ADAPTER = "apps.accounts.adapter.WGTKAccountAdapter"
+
+# Only these email domains may sign in. Configure via env; the deploy admin
+# should set this to WGTK's real Microsoft 365 domain(s), comma separated.
+ALLOWED_EMAIL_DOMAINS = env.list("ALLOWED_EMAIL_DOMAINS", default=["wgtk.co.uk"])
+
+SOCIALACCOUNT_PROVIDERS = {
+    "microsoft": {
+        "APPS": [
+            {
+                "client_id": env("MICROSOFT_CLIENT_ID", default=""),
+                "secret": env("MICROSOFT_CLIENT_SECRET", default=""),
+                "settings": {
+                    "tenant": env("MICROSOFT_TENANT_ID", default="common"),
+                },
+            }
+        ],
+    }
+}
+
+# --- Email (weekly stock check to locksmiths, Area 1) ----------------------
+# Sent via the company's Microsoft 365 mailbox/SMTP relay.
+EMAIL_BACKEND = env("EMAIL_BACKEND", default="django.core.mail.backends.console.EmailBackend")
+EMAIL_HOST = env("EMAIL_HOST", default="smtp.office365.com")
+EMAIL_PORT = env.int("EMAIL_PORT", default=587)
+EMAIL_USE_TLS = env.bool("EMAIL_USE_TLS", default=True)
+EMAIL_HOST_USER = env("EMAIL_HOST_USER", default="")
+EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD", default="")
+DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="stock-checks@wgtk.co.uk")
+
+# --- Stock Accuracy (Area 1) config defaults --------------------------------
+STOCK_CHECK_LINES_PER_WEEK = env.int("STOCK_CHECK_LINES_PER_WEEK", default=10)
+STOCK_CHECK_POOL_SIZE = env.int("STOCK_CHECK_POOL_SIZE", default=30)
+STOCK_CHECK_USAGE_WINDOW_DAYS = env.int("STOCK_CHECK_USAGE_WINDOW_DAYS", default=90)
+STOCK_CHECK_NO_REPEAT_WEEKS = env.int("STOCK_CHECK_NO_REPEAT_WEEKS", default=4)
+
+# --- Optimo API (Area 2+, wired up in a later phase) ------------------------
+OPTIMO_API_BASE_URL = env("OPTIMO_API_BASE_URL", default="")
+OPTIMO_API_KEY = env("OPTIMO_API_KEY", default="")

@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>{% block title %}WGTK Ops Tool{% endblock %}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 0; background: #f5f6f8; color: #1a1a1a; }
+    header { background: #111; color: #fff; padding: 0.75rem 1.5rem; display: flex; justify-content: space-between; align-items: center; }
+    header a { color: #fff; text-decoration: none; font-weight: 600; }
+    main { padding: 1.5rem; max-width: 1100px; margin: 0 auto; }
+    table { border-collapse: collapse; width: 100%; background: #fff; }
+    th, td { border: 1px solid #ddd; padding: 0.5rem 0.75rem; text-align: left; font-size: 0.9rem; }
+    th { background: #eee; }
+    .flag { color: #b00020; font-weight: 600; }
+    .card { background: #fff; border: 1px solid #ddd; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; }
+    .btn { display: inline-block; background: #111; color: #fff; padding: 0.5rem 1rem; border-radius: 4px; text-decoration: none; border: none; cursor: pointer; }
+    input[type=number] { width: 5rem; }
+  </style>
+</head>
+<body>
+  <header>
+    <a href="{% url 'stock_accuracy:dashboard' %}">WGTK Ops Tool</a>
+    <nav>
+      {% if user.is_authenticated %}
+        <span>{{ user.email }}</span>
+        &middot; <a href="{% url 'account_logout' %}" style="color:#ccc;">Sign out</a>
+      {% endif %}
+    </nav>
+  </header>
+  <main>
+    {% for message in messages %}
+      <div class="card">{{ message }}</div>
+    {% endfor %}
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

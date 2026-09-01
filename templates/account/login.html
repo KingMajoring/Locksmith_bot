@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}Sign in{% endblock %}
+{% block content %}
+<div class="card" style="max-width: 360px; margin: 4rem auto; text-align: center;">
+  <h1>WGTK Ops Tool</h1>
+  <p>Office/admin access only. Sign in with your WGTK Microsoft 365 account.</p>
+  <a class="btn" href="{% url 'microsoft_login' %}">Sign in with Microsoft</a>
+</div>
+{% endblock %}

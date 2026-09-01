@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}{{ locksmith.name }} — Stock Accuracy{% endblock %}
+{% block content %}
+<h1>{{ locksmith.name }}</h1>
+
+<div class="card">
+  <p>Lines checked (12wk): {{ summary.lines_checked }}</p>
+  <p>Lines flagged: {{ summary.lines_flagged }}</p>
+  <p>£ impact: £{{ summary.total_value_impact }}</p>
+  <p>Repeat offender: {% if summary.is_repeat_offender %}<span class="flag">Yes</span>{% else %}No{% endif %}</p>
+</div>
+
+<div class="card">
+  <h2>Flagged lines</h2>
+  {% if flagged %}
+  <table>
+    <tr><th>Week</th><th>Part code</th><th>Description</th><th>Expected</th><th>Actual</th><th>Variance</th><th>£ impact</th></tr>
+    {% for item in flagged %}
+    <tr>
+      <td>{{ item.weekly_check.week_starting }}</td>
+      <td>{{ item.part_code }}</td>
+      <td>{{ item.part_name }}</td>
+      <td>{{ item.expected_qty }}</td>
+      <td>{{ item.actual_qty }}</td>
+      <td class="flag">{{ item.variance }}</td>
+      <td>£{{ item.value_impact }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p>No flagged lines in the last 12 weeks.</p>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Enter counts — {{ weekly_check.locksmith.name }}{% endblock %}
+{% block content %}
+<h1>{{ weekly_check.locksmith.name }} — week of {{ weekly_check.week_starting }}</h1>
+
+<form method="post" class="card">
+  {% csrf_token %}
+  <table>
+    <tr><th>Part code</th><th>Description</th><th>Counted quantity</th></tr>
+    {% for item in items %}
+    <tr>
+      <td>{{ item.part_code }}</td>
+      <td>{{ item.part_name }}</td>
+      <td>
+        <input type="number" min="0" name="qty_{{ item.id }}"
+               value="{% if item.actual_qty is not None %}{{ item.actual_qty }}{% endif %}">
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  <p><button class="btn" type="submit">Save counts</button></p>
+</form>
+{% endblock %}

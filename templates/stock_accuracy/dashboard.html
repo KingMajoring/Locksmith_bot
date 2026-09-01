@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Stock Accuracy{% endblock %}
+{% block content %}
+<h1>Stock Accuracy</h1>
+
+<div class="card">
+  <h2>Awaiting count entry</h2>
+  {% if pending %}
+  <table>
+    <tr><th>Locksmith</th><th>Week</th><th>Sent</th><th></th></tr>
+    {% for wc in pending %}
+    <tr>
+      <td>{{ wc.locksmith.name }}</td>
+      <td>{{ wc.week_starting }}</td>
+      <td>{{ wc.sent_at|date:"d M H:i" }}</td>
+      <td><a class="btn" href="{% url 'stock_accuracy:entry_detail' wc.pk %}">Enter counts</a></td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p>Nothing outstanding.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Locksmith summary (last 12 weeks)</h2>
+  <table>
+    <tr><th>Locksmith</th><th>Lines checked</th><th>Flagged</th><th>£ impact</th><th>Repeat offender</th><th></th></tr>
+    {% for s in summaries %}
+    <tr>
+      <td>{{ s.locksmith.name }}</td>
+      <td>{{ s.lines_checked }}</td>
+      <td class="{% if s.lines_flagged %}flag{% endif %}">{{ s.lines_flagged }}</td>
+      <td>£{{ s.total_value_impact }}</td>
+      <td>{% if s.is_repeat_offender %}<span class="flag">Yes</span>{% else %}No{% endif %}</td>
+      <td><a href="{% url 'stock_accuracy:locksmith_report' s.locksmith.pk %}">Details</a></td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+
+<div class="card">
+  <h2>Most-flagged lines (last 12 weeks)</h2>
+  <table>
+    <tr><th>Part code</th><th>Description</th><th>Checked</th><th>Flagged</th></tr>
+    {% for l in top_lines %}
+    <tr>
+      <td>{{ l.part_code }}</td>
+      <td>{{ l.part_name }}</td>
+      <td>{{ l.checked }}</td>
+      <td class="{% if l.flagged %}flag{% endif %}">{{ l.flagged }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}
