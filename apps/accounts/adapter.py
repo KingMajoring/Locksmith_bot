@@ -3,6 +3,7 @@ from allauth.core.exceptions import ImmediateHttpResponse
 from allauth.socialaccount.adapter import DefaultSocialAccountAdapter
 from django.conf import settings
 from django.contrib import messages
+from django.contrib.auth import get_user_model
 from django.shortcuts import redirect
 
 
@@ -38,6 +39,20 @@ class WGTKSocialAccountAdapter(DefaultSocialAccountAdapter):
                 "Sign in with your WGTK email.",
             )
             raise ImmediateHttpResponse(redirect("account_login"))
+
+        # If this exact Microsoft account has never signed in before but a
+        # local account already exists with the same email (e.g. because
+        # the Azure AD app registration used for login was swapped, giving
+        # a new provider account id), connect this sign-in to that
+        # existing account instead of hitting the "confirm signup" form
+        # and colliding on the unique email constraint.
+        if sociallogin.is_existing:
+            return
+        try:
+            existing_user = get_user_model().objects.get(email__iexact=email)
+        except get_user_model().DoesNotExist:
+            return
+        sociallogin.connect(request, existing_user)
 
     def populate_user(self, request, sociallogin, data):
         # Single-tier access model (see README): anyone signing in with an
