@@ -21,6 +21,12 @@ class WGTKSocialAccountAdapter(DefaultSocialAccountAdapter):
     check rather than a full role system.
     """
 
+    def is_open_for_signup(self, request, sociallogin):
+        # Unlike the account adapter below (which closes the local
+        # password-based signup form), first-time Microsoft SSO sign-ins
+        # from an allowed WGTK domain should be auto-provisioned.
+        return True
+
     def pre_social_login(self, request, sociallogin):
         email = sociallogin.account.extra_data.get("mail") or sociallogin.account.extra_data.get(
             "userPrincipalName", ""
