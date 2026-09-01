@@ -94,11 +94,17 @@ if [ -z "$AD_APP_ID" ]; then
     --sign-in-audience AzureADMyOrg \
     --web-redirect-uris "${APP_URL}/accounts/microsoft/login/callback/" \
     --query appId -o tsv)
+  # permission grant needs a Service Principal for the app, which
+  # `ad app create` doesn't create on its own.
+  az ad sp create --id "$AD_APP_ID"
   # Microsoft Graph User.Read (delegated) — lets the app read the signed-in
   # user's basic profile/email, which is all this login needs.
   az ad app permission add --id "$AD_APP_ID" \
     --api 00000003-0000-0000-c000-000000000000 \
     --api-permissions e1fe6dd8-ba31-4d61-89e7-88639da4683d=Scope
+  # Newly-added permissions can take a few seconds to replicate before
+  # the grant call below can see them.
+  sleep 10
   az ad app permission grant --id "$AD_APP_ID" --api 00000003-0000-0000-c000-000000000000 --scope User.Read
 else
   echo "    already exists (appId $AD_APP_ID), reusing."
