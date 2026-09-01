@@ -39,7 +39,7 @@ az postgres flexible-server create \
   --tier Burstable \
   --storage-size 32 \
   --version 16 \
-  --public-access AzureServices \
+  --public-access 0.0.0.0 \
   --database-name "$DB_NAME" \
   --yes
 
