@@ -73,12 +73,15 @@ DATABASES = {
     "default": env.db("DATABASE_URL", default="sqlite:///" + str(BASE_DIR / "db.sqlite3")),
 }
 
-# Handl is a separate, external system. Read-only DB access is configured
-# here once real connection details are confirmed (see apps/integrations).
+# Handl/Soter is a separate, external Azure SQL database, read via
+# pymssql (see apps/integrations/handl.py) rather than Django's ORM.
 # Left unset by default so the app falls back to the mock Handl client.
-_handl_db_url = env("HANDL_DATABASE_URL", default=None)
-if _handl_db_url:
-    DATABASES["handl"] = environ.Env.db_url_config(_handl_db_url)
+# In production these are Key Vault references, not plain values.
+HANDL_SQL_SERVER = env("HANDL_SQL_SERVER", default="")
+HANDL_SQL_PORT = env.int("HANDL_SQL_PORT", default=1433)
+HANDL_SQL_DATABASE = env("HANDL_SQL_DATABASE", default="")
+HANDL_SQL_USER = env("HANDL_SQL_USER", default="")
+HANDL_SQL_PASSWORD = env("HANDL_SQL_PASSWORD", default="")
 
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},

@@ -1,20 +1,26 @@
-"""Read-only access to Handl.
+"""Read-only access to Handl (internally 'Soter'), an Azure SQL database.
 
-Handl is reached via a direct, read-only database connection (confirmed
-with the business) rather than an API. The real connection is configured
-via HANDL_DATABASE_URL (see config/settings/base.py); until that's set,
-get_handl_client() returns MockHandlClient so the rest of the app can be
-built and tested against realistic-shaped data.
+Reached via a direct, read-only SQL connection (confirmed with the
+business) rather than an API, using pymssql — a pure-Python driver, so it
+works on the standard Azure App Service Python runtime without needing a
+custom container image just to get the Microsoft ODBC driver installed.
 
-SQLHandlClient's methods are stubs: the actual table/column names depend
-on Handl's schema, which hasn't been confirmed yet. Fill in the queries
-once that's available.
+Connection settings (HANDL_SQL_*, see config/settings/base.py) are read
+from Key Vault references in production, not plain app settings. Until
+HANDL_SQL_SERVER is set, get_handl_client() returns MockHandlClient so
+the rest of the app can be built and tested against realistic-shaped
+data.
+
+SQLHandlClient's queries are stubs: the actual table/column names depend
+on Soter's schema, which hasn't been confirmed yet. Fill in the two
+queries below once that's available.
 """
 from __future__ import annotations
 
 import hashlib
 import random
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, timedelta
 
@@ -125,32 +131,49 @@ class MockHandlClient(HandlClient):
 
 
 class SQLHandlClient(HandlClient):
-    """Real Handl DB-backed implementation.
+    """Real Soter (Handl) DB-backed implementation, over pymssql.
 
-    TODO once the Handl schema is confirmed: fill these in using Django's
-    'handl' database alias (settings.DATABASES["handl"]), e.g. via
-    `django.db.connections["handl"].cursor()` and raw SQL, or unmanaged
-    Django models (managed = False) pointed at the real tables. Needed:
+    TODO once Soter's schema is confirmed, fill in the two queries below.
+    Needed:
     - the stock/parts-disposed table + how it links to an engineer,
     - the van-stock/expected-quantity table + unit cost field,
     - confirmation the engineer identifier used here matches
       Locksmith.handl_engineer_id.
     """
 
+    @contextmanager
+    def _connection(self):
+        import pymssql
+
+        conn = pymssql.connect(
+            server=settings.HANDL_SQL_SERVER,
+            port=settings.HANDL_SQL_PORT,
+            database=settings.HANDL_SQL_DATABASE,
+            user=settings.HANDL_SQL_USER,
+            password=settings.HANDL_SQL_PASSWORD,
+            as_dict=True,
+        )
+        try:
+            yield conn
+        finally:
+            conn.close()
+
     def get_stock_usage(self, handl_engineer_id: str, since: date) -> list[StockUsage]:
         raise NotImplementedError(
-            "SQLHandlClient.get_stock_usage: Handl schema not yet confirmed."
+            "SQLHandlClient.get_stock_usage: Soter schema not yet confirmed. "
+            "The pymssql connection itself is wired up in _connection() above — "
+            "write the SELECT here once the stock/parts table is known."
         )
 
     def get_expected_stock(
         self, handl_engineer_id: str, part_codes: list[str]
     ) -> dict[str, ExpectedStock]:
         raise NotImplementedError(
-            "SQLHandlClient.get_expected_stock: Handl schema not yet confirmed."
+            "SQLHandlClient.get_expected_stock: Soter schema not yet confirmed."
         )
 
 
 def get_handl_client() -> HandlClient:
-    if "handl" in settings.DATABASES:
+    if settings.HANDL_SQL_SERVER:
         return SQLHandlClient()
     return MockHandlClient()

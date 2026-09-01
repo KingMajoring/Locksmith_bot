@@ -57,25 +57,34 @@ session).
 
 ## What's still needed to go live
 
-These are flagged inline in the code (search `TODO`) but summarised here:
+Status as of the first live deploy (`wgtk-ops-tool` in Azure, resource
+group `wgtk-ops-tool-rg`):
 
-- **Handl DB access**: `HANDL_DATABASE_URL` in `.env`, plus the actual
-  table/column names for stock usage and expected-quantity-by-engineer,
-  to fill in `SQLHandlClient` in `apps/integrations/handl.py`.
-- **Azure AD app registration**: `MICROSOFT_CLIENT_ID`,
-  `MICROSOFT_CLIENT_SECRET`, `MICROSOFT_TENANT_ID`, and
-  `ALLOWED_EMAIL_DOMAINS` set to WGTK's real domain(s).
-- **Microsoft 365 SMTP**: `EMAIL_HOST_USER` / `EMAIL_HOST_PASSWORD` (or
+- ✅ **Azure hosting**: App Service + Postgres provisioned and deployed.
+- ✅ **Azure AD app registration / login**: working — WGTK Microsoft 365
+  accounts can sign in and get full admin access.
+- ⏳ **Secrets in Key Vault**: `azure_setup.sh` puts secrets straight in
+  app settings for the first deploy; run `deploy/keyvault_setup.sh`
+  afterwards to migrate them properly (see `deploy/README.md`).
+- ⏳ **Handl/Soter DB access**: server/database/username are known
+  (`soterlive1.database.windows.net` / `soter_live` / `ExcelReader`, a
+  read-only reporting account) — still needed: the password (set via
+  Key Vault, never as a plain app setting), confirming the SQL Server
+  firewall allows the App Service's outbound IPs, and the actual
+  table/column names for stock usage and expected-quantity-by-engineer
+  to fill in the two queries in `SQLHandlClient`
+  (`apps/integrations/handl.py`, uses `pymssql`).
+- ⏳ **Microsoft 365 SMTP**: `EMAIL_HOST_USER` / `EMAIL_HOST_PASSWORD` (or
   swap to Graph API sending if app-password SMTP is locked down), and
   `EMAIL_BACKEND` set to the SMTP backend.
-- **Locksmith → Handl engineer ID mapping**: populate `Locksmith` records
-  (name, `handl_engineer_id`, email) — currently done via `/admin/`.
-- **Stock check schedule**: one `StockCheckSchedule` row per locksmith in
-  `/admin/`, picking which weekday they're sent their check.
-- **Azure hosting**: App Service + Postgres, `DJANGO_SECRET_KEY`,
-  `DATABASE_URL`, `DJANGO_ALLOWED_HOSTS` for the real domain, and a
-  scheduled job (Azure WebJob / Container App Job / cron) running
-  `python manage.py send_weekly_stock_checks` daily each morning.
+- ⏳ **Locksmith → Handl engineer ID mapping**: populate `Locksmith`
+  records (name, `handl_engineer_id`, email) via `/admin/`.
+- ⏳ **Stock check schedule**: one `StockCheckSchedule` row per locksmith
+  in `/admin/`, picking which weekday they're sent their check.
+- ⏳ **Scheduled job**: nothing yet triggers
+  `python manage.py send_weekly_stock_checks` daily — needs an Azure
+  WebJob, Container App Job, or similar cron-like trigger against the
+  App Service.
 
 ## Stock Accuracy — how it works
 

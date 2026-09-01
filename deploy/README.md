@@ -52,14 +52,24 @@ SMTP sending once those details are confirmed (see the main `README.md`).
 
 Once `MICROSOFT_CLIENT_ID`/`MICROSOFT_CLIENT_SECRET`/`MICROSOFT_TENANT_ID`
 are set (the script does this), anyone with a `@<WGTK_EMAIL_DOMAIN>`
-Microsoft 365 account can sign in and reach the app. For a superuser
-(needed for the Django `/admin/` config screens — locksmiths, schedules,
-thresholds), either:
+Microsoft 365 account can sign in — first-time sign-ins are automatically
+given full admin access (single-tier access model: this tool is
+office/admin-only to begin with, see the main `README.md`), so no manual
+promotion step is needed.
 
-- promote a Microsoft-SSO user to staff/superuser afterwards via
-  `az webapp ssh` → `python manage.py shell`, or
-- create a local superuser the same way: `az webapp ssh` →
-  `python manage.py createsuperuser`.
+## Secrets: moving to Key Vault
+
+`azure_setup.sh` puts secrets (`DJANGO_SECRET_KEY`, `DATABASE_URL`,
+`MICROSOFT_CLIENT_SECRET`) straight into App Service app settings so the
+first deploy works with nothing extra. Once that's up, run
+`deploy/keyvault_setup.sh` (same editable-variables-at-top pattern) to
+create a Key Vault, grant the App Service's managed identity read access
+to it, migrate those secrets into it, and repoint the app settings at
+Key Vault references (`@Microsoft.KeyVault(...)`) instead of plain
+values. It also prints the commands for adding the Soter/Handl SQL
+credentials (`HANDL_SQL_*`) the same way once you have them — you can
+set those directly with `az keyvault secret set` without needing to
+paste the password anywhere else.
 
 ## Redeploying after code changes
 
