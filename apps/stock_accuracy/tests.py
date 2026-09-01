@@ -14,11 +14,16 @@ from .services.generation import generate_weekly_check
 from .services.reporting import locksmith_summary
 
 
+def _make_locksmith(name, email, soter_ids=("1",)):
+    locksmith = Locksmith.objects.create(name=name, email=email)
+    for soter_id in soter_ids:
+        locksmith.soter_ids.create(soter_locksmith_id=soter_id)
+    return locksmith
+
+
 class GenerationTests(TestCase):
     def setUp(self):
-        self.locksmith = Locksmith.objects.create(
-            handl_engineer_id="ENG-001", name="Jane Smith", email="jane@example.com"
-        )
+        self.locksmith = _make_locksmith("Jane Smith", "jane@example.com", ["ENG-001"])
 
     def test_generates_configured_number_of_lines(self):
         weekly_check = generate_weekly_check(self.locksmith, date(2026, 9, 7))
@@ -61,9 +66,7 @@ class GenerationTests(TestCase):
 
 class EmailingTests(TestCase):
     def setUp(self):
-        self.locksmith = Locksmith.objects.create(
-            handl_engineer_id="ENG-002", name="Bob Jones", email="bob@example.com"
-        )
+        self.locksmith = _make_locksmith("Bob Jones", "bob@example.com", ["ENG-002"])
         self.weekly_check = generate_weekly_check(self.locksmith, date(2026, 9, 7))
 
     def test_send_attaches_excel_and_marks_sent(self):
@@ -85,9 +88,7 @@ class EmailingTests(TestCase):
 
 class VarianceFlaggingTests(TestCase):
     def setUp(self):
-        self.locksmith = Locksmith.objects.create(
-            handl_engineer_id="ENG-003", name="Ali Khan", email="ali@example.com"
-        )
+        self.locksmith = _make_locksmith("Ali Khan", "ali@example.com", ["ENG-003"])
         self.weekly_check = WeeklyStockCheck.objects.create(
             locksmith=self.locksmith, week_starting=date(2026, 9, 7)
         )
@@ -173,9 +174,7 @@ class ViewsSmokeTests(TestCase):
             username="office_admin", email="admin@wgtk.co.uk", password="x", is_staff=True
         )
         self.client.force_login(self.user)
-        self.locksmith = Locksmith.objects.create(
-            handl_engineer_id="ENG-010", name="Sam Lee", email="sam@example.com"
-        )
+        self.locksmith = _make_locksmith("Sam Lee", "sam@example.com", ["ENG-010"])
         self.weekly_check = generate_weekly_check(self.locksmith, date(2026, 9, 7))
         self.weekly_check.status = WeeklyStockCheck.Status.SENT
         self.weekly_check.sent_at = timezone.now()

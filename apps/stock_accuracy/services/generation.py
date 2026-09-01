@@ -34,7 +34,7 @@ def _recently_checked_part_codes(locksmith: Locksmith, weeks: int) -> set[str]:
 def _choose_lines(locksmith: Locksmith) -> list:
     handl = get_handl_client()
     since = date.today() - timedelta(days=settings.STOCK_CHECK_USAGE_WINDOW_DAYS)
-    usage = handl.get_stock_usage(locksmith.handl_engineer_id, since)
+    usage = handl.get_stock_usage(locksmith.soter_id_list, since)
     usage_sorted = sorted(usage, key=lambda u: u.qty_used, reverse=True)
     pool = usage_sorted[: settings.STOCK_CHECK_POOL_SIZE]
 
@@ -62,7 +62,7 @@ def generate_weekly_check(locksmith: Locksmith, week_starting: date) -> WeeklySt
     chosen = _choose_lines(locksmith)
     handl = get_handl_client()
     expected = handl.get_expected_stock(
-        locksmith.handl_engineer_id, [u.part_code for u in chosen]
+        locksmith.soter_id_list, [u.part_code for u in chosen]
     )
 
     weekly_check = WeeklyStockCheck.objects.create(

@@ -66,19 +66,27 @@ group `wgtk-ops-tool-rg`):
 - ⏳ **Secrets in Key Vault**: `azure_setup.sh` puts secrets straight in
   app settings for the first deploy; run `deploy/keyvault_setup.sh`
   afterwards to migrate them properly (see `deploy/README.md`).
-- ⏳ **Handl/Soter DB access**: server/database/username are known
-  (`soterlive1.database.windows.net` / `soter_live` / `ExcelReader`, a
-  read-only reporting account) — still needed: the password (set via
-  Key Vault, never as a plain app setting), confirming the SQL Server
-  firewall allows the App Service's outbound IPs, and the actual
-  table/column names for stock usage and expected-quantity-by-engineer
-  to fill in the two queries in `SQLHandlClient`
-  (`apps/integrations/handl.py`, uses `pymssql`).
+- ✅ **Handl/Soter DB access**: connected — `soterlive1.database.windows.net`
+  / `soter_live` / `ExcelReader`, credentials in Key Vault. The real
+  queries are implemented in `SQLHandlClient`
+  (`apps/integrations/handl.py`, over `pymssql`): usage from
+  `Inventory_Disposals` (has `LookupLocksmithId` directly), expected
+  stock from `Inventory_Locksmith_Stock` (same table the business's own
+  van-stock Excel report uses), unit cost from `Inventory_Stock.PartValue`
+  (cost basis, not RRP). Still to confirm: the SQL Server firewall
+  allows the App Service's outbound IPs.
 - ⏳ **Microsoft 365 SMTP**: `EMAIL_HOST_USER` / `EMAIL_HOST_PASSWORD` (or
   swap to Graph API sending if app-password SMTP is locked down), and
   `EMAIL_BACKEND` set to the SMTP backend.
-- ⏳ **Locksmith → Handl engineer ID mapping**: populate `Locksmith`
-  records (name, `handl_engineer_id`, email) via `/admin/`.
+- ⏳ **Locksmith → Soter ID mapping**: populate `Locksmith` records
+  (name, email) via `/admin/`, each with one or two `SoterLocksmithId`
+  rows (Soter's `Lookup_Locksmiths.ID` — a locksmith usually has both a
+  "(V)" and "(A)" row, whose stock/usage this tool sums together).
+  Only names starting `WGTK -` (not `XWGTK -`, which marks ex-staff,
+  and excluding non-person accounts like `WGTK - LOGISTICS TEAM`) are
+  current active staff — everything else in `Lookup_Locksmiths` is a
+  panel/subcontractor firm, which is also how Panelled Jobs (Area 4)
+  will identify a job that went to panel.
 - ⏳ **Stock check schedule**: one `StockCheckSchedule` row per locksmith
   in `/admin/`, picking which weekday they're sent their check.
 - ⏳ **Scheduled job**: nothing yet triggers

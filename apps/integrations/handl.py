@@ -11,9 +11,9 @@ HANDL_SQL_SERVER is set, get_handl_client() returns MockHandlClient so
 the rest of the app can be built and tested against realistic-shaped
 data.
 
-SQLHandlClient's queries are stubs: the actual table/column names depend
-on Soter's schema, which hasn't been confirmed yet. Fill in the two
-queries below once that's available.
+A WGTK locksmith maps to one or two Soter Lookup_Locksmiths.ID values
+(Locksmith.soter_id_list — usually a "(V)" and "(A)" row for the same
+person), whose stock/usage gets summed together.
 """
 from __future__ import annotations
 
@@ -44,20 +44,20 @@ class ExpectedStock:
 class HandlClient(ABC):
     @abstractmethod
     def get_stock_usage(
-        self, handl_engineer_id: str, since: date
+        self, soter_locksmith_ids: list[str], since: date
     ) -> list[StockUsage]:
         """Parts used/disposed by this locksmith since `since`, for ranking fast movers."""
 
     @abstractmethod
     def get_expected_stock(
-        self, handl_engineer_id: str, part_codes: list[str]
+        self, soter_locksmith_ids: list[str], part_codes: list[str]
     ) -> dict[str, ExpectedStock]:
         """Current expected van-stock quantity and unit cost for the given part codes."""
 
 
 class MockHandlClient(HandlClient):
     """Deterministic fake data for local dev/tests, standing in until the
-    real Handl DB connection and schema are confirmed."""
+    real Soter DB connection is available (e.g. no HANDL_SQL_SERVER set)."""
 
     _CATALOGUE = [
         ("TK-100", "Transponder key blank"),
@@ -98,12 +98,15 @@ class MockHandlClient(HandlClient):
         ("TK-135", "Key blank (generic)"),
     ]
 
-    def _rng_for(self, handl_engineer_id: str) -> random.Random:
-        seed = int(hashlib.sha256(handl_engineer_id.encode()).hexdigest(), 16) % (2**32)
+    def _rng_for(self, soter_locksmith_ids: list[str]) -> random.Random:
+        key = ",".join(sorted(soter_locksmith_ids))
+        seed = int(hashlib.sha256(key.encode()).hexdigest(), 16) % (2**32)
         return random.Random(seed)
 
-    def get_stock_usage(self, handl_engineer_id: str, since: date) -> list[StockUsage]:
-        rng = self._rng_for(handl_engineer_id)
+    def get_stock_usage(
+        self, soter_locksmith_ids: list[str], since: date
+    ) -> list[StockUsage]:
+        rng = self._rng_for(soter_locksmith_ids)
         days = max((date.today() - since).days, 1)
         sample = rng.sample(self._CATALOGUE, k=min(len(self._CATALOGUE), 30))
         return [
@@ -116,9 +119,9 @@ class MockHandlClient(HandlClient):
         ]
 
     def get_expected_stock(
-        self, handl_engineer_id: str, part_codes: list[str]
+        self, soter_locksmith_ids: list[str], part_codes: list[str]
     ) -> dict[str, ExpectedStock]:
-        rng = self._rng_for(handl_engineer_id)
+        rng = self._rng_for(soter_locksmith_ids)
         result = {}
         for code in part_codes:
             name = next((n for c, n in self._CATALOGUE if c == code), code)
@@ -133,14 +136,15 @@ class MockHandlClient(HandlClient):
 class SQLHandlClient(HandlClient):
     """Real Soter (Handl) DB-backed implementation, over pymssql.
 
-    Locksmith.handl_engineer_id is Soter's Lookup_Locksmiths.ID (an int,
-    stored as a string on our side). Usage comes from Inventory_Disposals
-    (has LookupLocksmithId directly); expected stock from
-    Inventory_Locksmith_Stock, the same table the business's own "current
-    van stock" Excel report is built from. Unit cost is Inventory_Stock's
-    PartValue (cost basis) rather than Inventory_Parts.RecommendedRetailPrice
-    (sell price) — averaged across that part's stock batches, since
-    PartValue is recorded per batch rather than per part.
+    Usage comes from Inventory_Disposals (has LookupLocksmithId
+    directly); expected stock from Inventory_Locksmith_Stock, the same
+    table the business's own "current van stock" Excel report is built
+    from. Both are summed across a locksmith's Soter ID(s) — Soter
+    tracks "(V)" and "(A)" as separate stock locations for one physical
+    person. Unit cost is Inventory_Stock's PartValue (cost basis) rather
+    than Inventory_Parts.RecommendedRetailPrice (sell price), averaged
+    across that part's stock batches since PartValue is recorded per
+    batch rather than per part.
     """
 
     @contextmanager
@@ -160,8 +164,11 @@ class SQLHandlClient(HandlClient):
         finally:
             conn.close()
 
-    def get_stock_usage(self, handl_engineer_id: str, since: date) -> list[StockUsage]:
-        query = """
+    def get_stock_usage(
+        self, soter_locksmith_ids: list[str], since: date
+    ) -> list[StockUsage]:
+        id_placeholders = ", ".join(f"%(lid{i})s" for i in range(len(soter_locksmith_ids)))
+        query = f"""
             SELECT
                 ip.SKU AS part_code,
                 ip.Name AS part_name,
@@ -169,18 +176,17 @@ class SQLHandlClient(HandlClient):
             FROM Inventory_Disposals idp
             JOIN Inventory_Stock ist ON idp.StockId = ist.Id
             JOIN Inventory_Parts ip ON ist.PartId = ip.Id
-            WHERE idp.LookupLocksmithId = %(locksmith_id)s
+            WHERE idp.LookupLocksmithId IN ({id_placeholders})
               AND idp.DateCreated >= %(since)s
             GROUP BY ip.SKU, ip.Name
             HAVING SUM(idp.Quantity) > 0
             ORDER BY qty_used DESC
         """
+        params = {f"lid{i}": int(lid) for i, lid in enumerate(soter_locksmith_ids)}
+        params["since"] = since
         with self._connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                query,
-                {"locksmith_id": int(handl_engineer_id), "since": since},
-            )
+            cursor.execute(query, params)
             rows = cursor.fetchall()
         return [
             StockUsage(
@@ -192,24 +198,25 @@ class SQLHandlClient(HandlClient):
         ]
 
     def get_expected_stock(
-        self, handl_engineer_id: str, part_codes: list[str]
+        self, soter_locksmith_ids: list[str], part_codes: list[str]
     ) -> dict[str, ExpectedStock]:
         if not part_codes:
             return {}
-        placeholders = ", ".join(f"%(code{i})s" for i in range(len(part_codes)))
+        id_placeholders = ", ".join(f"%(lid{i})s" for i in range(len(soter_locksmith_ids)))
+        code_placeholders = ", ".join(f"%(code{i})s" for i in range(len(part_codes)))
         query = f"""
             SELECT
                 ipa.SKU AS part_code,
-                ils.Quantity AS expected_qty,
+                SUM(ils.Quantity) AS expected_qty,
                 AVG(ist.PartValue) AS unit_cost
             FROM Inventory_Locksmith_Stock ils
             JOIN Inventory_Parts ipa ON ils.PartId = ipa.Id
             LEFT JOIN Inventory_Stock ist ON ist.PartId = ipa.Id
-            WHERE ils.LookupLocksmithId = %(locksmith_id)s
-              AND ipa.SKU IN ({placeholders})
-            GROUP BY ipa.SKU, ils.Quantity
+            WHERE ils.LookupLocksmithId IN ({id_placeholders})
+              AND ipa.SKU IN ({code_placeholders})
+            GROUP BY ipa.SKU
         """
-        params = {"locksmith_id": int(handl_engineer_id)}
+        params = {f"lid{i}": int(lid) for i, lid in enumerate(soter_locksmith_ids)}
         params.update({f"code{i}": code for i, code in enumerate(part_codes)})
         with self._connection() as conn:
             cursor = conn.cursor()
