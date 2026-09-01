@@ -40,8 +40,12 @@ az postgres flexible-server create \
   --storage-size 32 \
   --version 16 \
   --public-access 0.0.0.0 \
-  --database-name "$DB_NAME" \
   --yes
+
+az postgres flexible-server db create \
+  --resource-group "$RESOURCE_GROUP" \
+  --server-name "$DB_SERVER_NAME" \
+  --database-name "$DB_NAME"
 
 DATABASE_URL="postgres://${DB_ADMIN_USER}:${DB_ADMIN_PASSWORD}@${DB_SERVER_NAME}.postgres.database.azure.com:5432/${DB_NAME}?sslmode=require"
 
