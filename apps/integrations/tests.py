@@ -157,6 +157,24 @@ class SQLHandlClientTests(TestCase):
         cursor = fake_conn.cursor.return_value
         cost_query, cost_params = cursor.execute.call_args_list[1][0]
         self.assertNotIn("lid0", cost_params)
+
+    def test_get_expected_stock_cost_query_uses_most_recent_batch_not_average(self):
+        """Regression test: AVG(PartValue) across a part's whole
+        purchase history skews badly on real data (CR2032 averaged out
+        at £13.13 vs £0.25-£2.45 actually seen across its real
+        suppliers). The most recent batch is the right read on
+        "current" cost, matching how Soter's own UI shows per-supplier
+        cost — so no AVG(, and a recency-ranked ROW_NUMBER() instead.
+        """
+        fake_conn = _fake_connection_multi([], [])
+        client = SQLHandlClient()
+        with patch.object(client, "_connection", return_value=fake_conn):
+            client.get_expected_stock(["42"], ["TK-100"])
+        cursor = fake_conn.cursor.return_value
+        cost_query = cursor.execute.call_args_list[1][0][0]
+        self.assertNotIn("AVG(", cost_query)
+        self.assertIn("ROW_NUMBER()", cost_query)
+        self.assertIn("ORDER BY ist.DateCreated DESC", cost_query)
         self.assertIn("Inventory_Stock", cost_query)
 
 

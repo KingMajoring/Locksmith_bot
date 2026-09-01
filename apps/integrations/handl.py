@@ -159,9 +159,9 @@ class SQLHandlClient(HandlClient):
     from. Both are summed across a locksmith's Soter ID(s) — Soter
     tracks "(V)" and "(A)" as separate stock locations for one physical
     person. Unit cost is Inventory_Stock's PartValue (cost basis) rather
-    than Inventory_Parts.RecommendedRetailPrice (sell price), averaged
-    across that part's stock batches since PartValue is recorded per
-    batch rather than per part.
+    than Inventory_Parts.RecommendedRetailPrice (sell price), taken from
+    that part's most recently received batch rather than averaged
+    across all of them.
     """
 
     @contextmanager
@@ -237,12 +237,25 @@ class SQLHandlClient(HandlClient):
               AND ipa.SKU IN ({code_placeholders})
             GROUP BY ipa.SKU
         """
+        # Most recent batch's PartValue, not an average across all
+        # history — matches how Soter's own UI shows "last purchased
+        # cost per unit" per supplier, and avoids an old/anomalous
+        # batch skewing a years-long average (confirmed against real
+        # data: CR2032's average came out at £13.13 vs £0.25-£2.45
+        # actually seen across its real suppliers).
         cost_query = f"""
-            SELECT ipa.SKU AS part_code, AVG(ist.PartValue) AS unit_cost
-            FROM Inventory_Stock ist
-            JOIN Inventory_Parts ipa ON ist.PartId = ipa.Id
-            WHERE ipa.SKU IN ({code_placeholders})
-            GROUP BY ipa.SKU
+            SELECT part_code, unit_cost FROM (
+                SELECT
+                    ipa.SKU AS part_code,
+                    ist.PartValue AS unit_cost,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY ipa.SKU ORDER BY ist.DateCreated DESC
+                    ) AS rn
+                FROM Inventory_Stock ist
+                JOIN Inventory_Parts ipa ON ist.PartId = ipa.Id
+                WHERE ipa.SKU IN ({code_placeholders})
+            ) ranked
+            WHERE rn = 1
         """
         cost_params = {f"code{i}": code for i, code in enumerate(part_codes)}
 
