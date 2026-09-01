@@ -99,7 +99,7 @@ if [ -z "$AD_APP_ID" ]; then
   az ad app permission add --id "$AD_APP_ID" \
     --api 00000003-0000-0000-c000-000000000000 \
     --api-permissions e1fe6dd8-ba31-4d61-89e7-88639da4683d=Scope
-  az ad app permission grant --id "$AD_APP_ID" --api 00000003-0000-0000-c000-000000000000
+  az ad app permission grant --id "$AD_APP_ID" --api 00000003-0000-0000-c000-000000000000 --scope User.Read
 else
   echo "    already exists (appId $AD_APP_ID), reusing."
 fi
