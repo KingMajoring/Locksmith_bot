@@ -56,3 +56,25 @@ class SoterLocksmithId(models.Model):
 
     def __str__(self):
         return f"{self.locksmith} → Soter #{self.soter_locksmith_id}"
+
+
+class OptimoDriverId(models.Model):
+    """A locksmith's Optimo driver identifier (driverSerial), for
+    correlating completed-job data pulled from the Optimo API (Area 2)
+    back to a WGTK locksmith. Kept separate from soter_id_list since
+    Optimo and Soter identify the same person differently.
+    """
+
+    locksmith = models.ForeignKey(
+        Locksmith, on_delete=models.CASCADE, related_name="optimo_driver_ids"
+    )
+    optimo_driver_serial = models.CharField(
+        max_length=64, help_text="Optimo driverSerial, e.g. '011'."
+    )
+
+    class Meta:
+        unique_together = ("locksmith", "optimo_driver_serial")
+        verbose_name = "Optimo driver ID"
+
+    def __str__(self):
+        return f"{self.locksmith} → Optimo #{self.optimo_driver_serial}"

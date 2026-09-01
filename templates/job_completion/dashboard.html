@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Job Completion{% endblock %}
+{% block content %}
+<h1>Job Completion</h1>
+
+<div class="card">
+  <h2>Needs categorization</h2>
+  {% if needs_categorization %}
+  <table>
+    <tr><th>Order</th><th>Date</th><th>Locksmith</th><th>Service</th><th>Note</th><th></th></tr>
+    {% for job in needs_categorization %}
+    <tr>
+      <td>{{ job.order_no }}</td>
+      <td>{{ job.job_date }}</td>
+      <td>{% if job.locksmith %}{{ job.locksmith.name }}{% else %}Unmatched ({{ job.driver_serial }}){% endif %}</td>
+      <td>{{ job.service_type }}</td>
+      <td>{{ job.failure_note }}</td>
+      <td><a href="{% url 'admin:job_completion_completedjob_change' job.pk %}">Categorize</a></td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p>Nothing outstanding.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Locksmith summary (last 90 days)</h2>
+  <table>
+    <tr><th>Locksmith</th><th>Total jobs</th><th>Failed</th><th>Failure rate</th><th></th></tr>
+    {% for s in summaries %}
+    <tr>
+      <td>{{ s.locksmith.name }}</td>
+      <td>{{ s.total_jobs }}</td>
+      <td class="{% if s.failed_jobs %}flag{% endif %}">{{ s.failed_jobs }}</td>
+      <td>{{ s.failure_rate_pct }}%</td>
+      <td><a href="{% url 'job_completion:locksmith_report' s.locksmith.pk %}">Details</a></td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+
+<div class="card">
+  <h2>Failure reasons (last 90 days)</h2>
+  <table>
+    <tr><th>Category</th><th>Count</th></tr>
+    {% for c in categories %}
+    <tr>
+      <td>{{ c.category }}</td>
+      <td>{{ c.count }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}

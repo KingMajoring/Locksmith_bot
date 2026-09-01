@@ -2,11 +2,16 @@ from collections import Counter
 
 from django.contrib import admin
 
-from .models import Locksmith, SoterLocksmithId
+from .models import Locksmith, OptimoDriverId, SoterLocksmithId
 
 
 class SoterLocksmithIdInline(admin.TabularInline):
     model = SoterLocksmithId
+    extra = 1
+
+
+class OptimoDriverIdInline(admin.TabularInline):
+    model = OptimoDriverId
     extra = 1
 
 
@@ -42,7 +47,7 @@ class LocksmithAdmin(admin.ModelAdmin):
     list_display = ("name", "soter_ids_display", "email", "has_schedule", "active")
     list_filter = ("active",)
     search_fields = ("name", "email", "soter_ids__soter_locksmith_id")
-    inlines = [SoterLocksmithIdInline]
+    inlines = [SoterLocksmithIdInline, OptimoDriverIdInline]
     actions = [assign_stock_check_schedule]
 
     def get_queryset(self, request):

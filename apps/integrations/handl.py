@@ -41,6 +41,15 @@ class ExpectedStock:
     unit_cost: float
 
 
+@dataclass(frozen=True)
+class JobDetails:
+    report_id: str
+    make: str
+    model: str
+    year: str
+    service_type: str
+
+
 class HandlClient(ABC):
     @abstractmethod
     def get_stock_usage(
@@ -59,6 +68,13 @@ class HandlClient(ABC):
         """(ID, LocksmithName, EmailAddress) for every active WGTK
         locksmith (WGTKLocksmith=1, isDeleted=0 in Lookup_Locksmiths) —
         excludes panel/subcontractor firms and soft-deleted rows."""
+
+    @abstractmethod
+    def get_job_details(self, report_ids: list[str]) -> dict[str, JobDetails]:
+        """Vehicle/service details (make, model, year, service type) for
+        the given Handl ReportID values, keyed by report_id — for Area 2
+        (Job Completion), which resolves an Optimo orderNo of the form
+        "<ReportID>_<date>" back to Handl for these details."""
 
 
 class MockHandlClient(HandlClient):
@@ -148,6 +164,23 @@ class MockHandlClient(HandlClient):
             ("885", "WGTK - Dean S (V)", "dean.s@wgtk.co.uk"),
             ("999", "WGTK - BCA", ""),
         ]
+
+    _MAKES = ["Ford", "Vauxhall", "BMW", "Volkswagen", "Audi", "Mercedes-Benz", "Toyota"]
+    _MODELS = ["Focus", "Corsa", "3 Series", "Golf", "A4", "C-Class", "Yaris"]
+    _SERVICE_TYPES = ["Lockout", "Key cutting", "Key programming", "Barrel change", "Boot lockout"]
+
+    def get_job_details(self, report_ids: list[str]) -> dict[str, JobDetails]:
+        result = {}
+        for report_id in report_ids:
+            rng = random.Random(int(hashlib.sha256(report_id.encode()).hexdigest(), 16) % (2**32))
+            result[report_id] = JobDetails(
+                report_id=report_id,
+                make=rng.choice(self._MAKES),
+                model=rng.choice(self._MODELS),
+                year=str(rng.randint(2008, 2025)),
+                service_type=rng.choice(self._SERVICE_TYPES),
+            )
+        return result
 
 
 class SQLHandlClient(HandlClient):
@@ -304,6 +337,36 @@ class SQLHandlClient(HandlClient):
             (str(row["ID"]), row["LocksmithName"] or "", row["EmailAddress"] or "")
             for row in rows
         ]
+
+    def get_job_details(self, report_ids: list[str]) -> dict[str, JobDetails]:
+        if not report_ids:
+            return {}
+        id_placeholders = ", ".join(f"%(rid{i})s" for i in range(len(report_ids)))
+        params = {f"rid{i}": rid for i, rid in enumerate(report_ids)}
+        # Make/Model/YearOfManufacture confirmed live against Policy_Details
+        # in earlier testing (Area 1). service_type's real column isn't
+        # confirmed yet — needs checking against real Policy_KeyClaims
+        # data before this is trusted; returns "" until then rather than
+        # guessing a wrong column name silently.
+        query = f"""
+            SELECT ReportID, Make, Model, YearOfManufacture
+            FROM Policy_Details
+            WHERE ReportID IN ({id_placeholders})
+        """
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+        return {
+            str(row["ReportID"]): JobDetails(
+                report_id=str(row["ReportID"]),
+                make=row["Make"] or "",
+                model=row["Model"] or "",
+                year=str(row["YearOfManufacture"] or ""),
+                service_type="",
+            )
+            for row in rows
+        }
 
 
 def get_handl_client() -> HandlClient:
