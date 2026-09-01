@@ -23,6 +23,7 @@
     <a href="{% url 'stock_accuracy:dashboard' %}">WGTK Ops Tool</a>
     <nav>
       {% if user.is_authenticated %}
+        <a href="{% url 'admin:index' %}" style="color:#ccc; margin-right: 0.75rem;">Admin</a>
         <span>{{ user.email }}</span>
         &middot; <a href="{% url 'account_logout' %}" style="color:#ccc;">Sign out</a>
       {% endif %}
