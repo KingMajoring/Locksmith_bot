@@ -4,11 +4,11 @@
 <h1>{{ locksmith.name }}</h1>
 
 <div class="card">
-  <h2>Duration benchmark by service type (last 90 days)</h2>
+  <h2>Duration benchmark by loss type (last 90 days)</h2>
   {% if benchmarks %}
   <table>
     <tr>
-      <th>Service type</th>
+      <th>Loss type</th>
       <th>SLA target</th>
       <th>Company avg</th>
       <th>{{ locksmith.name }}'s avg</th>
@@ -16,7 +16,7 @@
     </tr>
     {% for b in benchmarks %}
     <tr>
-      <td>{{ b.service_type }}</td>
+      <td>{{ b.loss_type }}</td>
       <td>{% if b.sla_target_minutes %}{{ b.sla_target_minutes }} min{% else %}—{% endif %}</td>
       <td>{% if b.company_avg_minutes %}{{ b.company_avg_minutes }} min{% else %}—{% endif %}</td>
       <td class="{% if b.sla_target_minutes and b.locksmith_avg_minutes and b.locksmith_avg_minutes > b.sla_target_minutes %}flag{% endif %}">

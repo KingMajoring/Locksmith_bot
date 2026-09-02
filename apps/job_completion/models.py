@@ -38,20 +38,22 @@ class FailureCategory(models.Model):
 
 
 class SLATarget(models.Model):
-    """Admin-configurable target on-site duration for a service type,
-    used as one of three benchmarks shown for a completed job (the
-    others being the company average and the locksmith's own average).
+    """Admin-configurable target on-site duration for a loss type (e.g.
+    "AKL", "Gain access", "Lockout" — see services/labels.py for the
+    display names Handl's raw loss_type values map to), used as one of
+    three benchmarks shown for a completed job (the others being the
+    company average and the locksmith's own average).
     """
 
-    service_type = models.CharField(max_length=100, unique=True)
+    loss_type = models.CharField(max_length=100, unique=True)
     target_minutes = models.PositiveIntegerField()
     active = models.BooleanField(default=True)
 
     class Meta:
-        ordering = ["service_type"]
+        ordering = ["loss_type"]
 
     def __str__(self):
-        return f"{self.service_type}: {self.target_minutes} min"
+        return f"{self.loss_type}: {self.target_minutes} min"
 
 
 class CompletedJob(models.Model):

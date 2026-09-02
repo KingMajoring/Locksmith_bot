@@ -11,9 +11,9 @@ from .services.model_analysis import locksmith_model_failure_breakdown
 from .services.reporting import (
     all_locksmith_summaries,
     failure_category_breakdown,
+    loss_types_for_locksmith,
     master_reason_breakdown,
     needs_categorization_queryset,
-    service_types_for_locksmith,
 )
 
 
@@ -80,8 +80,8 @@ def model_analysis(request):
 @login_required
 def locksmith_report(request, pk):
     locksmith = get_object_or_404(Locksmith, pk=pk)
-    service_types = service_types_for_locksmith(locksmith)
-    benchmarks = [duration_benchmark(locksmith, service_type) for service_type in service_types]
+    loss_types = loss_types_for_locksmith(locksmith)
+    benchmarks = [duration_benchmark(locksmith, loss_type) for loss_type in loss_types]
     jobs = (
         CompletedJob.objects.filter(locksmith=locksmith)
         .select_related("failure_category")

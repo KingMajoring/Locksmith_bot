@@ -232,7 +232,7 @@ class BenchmarkingTests(TestCase):
     def setUp(self):
         self.locksmith = _make_locksmith()
         self.other_locksmith = _make_locksmith(name="WGTK - Other", driver_serial="023")
-        SLATarget.objects.create(service_type="Lockout", target_minutes=30, active=True)
+        SLATarget.objects.create(loss_type="Lockout", target_minutes=30, active=True)
 
     def _make_job(self, locksmith, minutes, status=CompletedJob.Status.SUCCESS, order_no=None):
         start = datetime(2026, 9, 1, 9, 0, tzinfo=dt_timezone.utc)
@@ -245,7 +245,7 @@ class BenchmarkingTests(TestCase):
             status=status,
             start_time=start,
             end_time=end,
-            service_type="Lockout",
+            loss_type="Lockout",
         )
 
     def test_benchmark_includes_sla_target(self):

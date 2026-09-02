@@ -13,7 +13,7 @@ class FailureCategoryAdmin(admin.ModelAdmin):
 
 @admin.register(SLATarget)
 class SLATargetAdmin(admin.ModelAdmin):
-    list_display = ("service_type", "target_minutes", "active")
+    list_display = ("loss_type", "target_minutes", "active")
     list_filter = ("active",)
 
 

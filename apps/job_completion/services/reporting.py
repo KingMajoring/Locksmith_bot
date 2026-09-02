@@ -6,6 +6,7 @@ from datetime import date, timedelta
 from apps.locksmiths.models import Locksmith
 
 from ..models import CompletedJob, FailureCategory
+from .labels import display_loss_type
 
 DEFAULT_WINDOW_DAYS = 90
 
@@ -94,17 +95,23 @@ def master_reason_breakdown(window_days: int = DEFAULT_WINDOW_DAYS) -> list[dict
     )
 
 
-def service_types_for_locksmith(locksmith: Locksmith, window_days: int = DEFAULT_WINDOW_DAYS) -> list[str]:
+def loss_types_for_locksmith(locksmith: Locksmith, window_days: int = DEFAULT_WINDOW_DAYS) -> list[str]:
+    """Distinct loss_type display labels (see services/labels.py) this
+    locksmith has jobs for — the benchmark grouping used on their
+    report, since loss_type ("AKL", "Gain access", "Lockout", ...) is
+    the meaningful classification, unlike service_type/KeyType which
+    is almost always just "Car"."""
     since = date.today() - timedelta(days=window_days)
-    return sorted(
+    raw_values = (
         CompletedJob.objects.filter(locksmith=locksmith, job_date__gte=since)
-        .exclude(service_type="")
+        .exclude(loss_type="")
         # CompletedJob's default ordering (job_date, order_no) gets
         # pulled into the query even with values_list()+distinct(),
-        # which makes DISTINCT operate on (service_type, job_date,
-        # order_no) instead of service_type alone — order_by() with no
-        # args clears it so this actually dedupes on service_type.
+        # which makes DISTINCT operate on (loss_type, job_date,
+        # order_no) instead of loss_type alone — order_by() with no
+        # args clears it so this actually dedupes on loss_type.
         .order_by()
-        .values_list("service_type", flat=True)
+        .values_list("loss_type", flat=True)
         .distinct()
     )
+    return sorted({display_loss_type(v) for v in raw_values})
