@@ -40,6 +40,14 @@
     .day-summary dt { color: #666; font-size: 0.8rem; margin-top: 0.75rem; }
     .day-summary dt:first-child { margin-top: 0; }
     .day-summary dd { margin: 0; font-size: 1.2rem; font-weight: 700; }
+    .toggle-row { display: flex; align-items: center; gap: 0.75rem; }
+    .toggle-switch { position: relative; display: inline-block; width: 44px; height: 24px; flex-shrink: 0; }
+    .toggle-switch input { opacity: 0; width: 0; height: 0; }
+    .toggle-slider { position: absolute; inset: 0; background: #ccc; transition: 0.15s; border-radius: 999px; cursor: pointer; }
+    .toggle-slider::before { content: ""; position: absolute; height: 18px; width: 18px; left: 3px; bottom: 3px; background: #fff; transition: 0.15s; border-radius: 50%; }
+    .toggle-switch input:checked + .toggle-slider { background: #1a9d4c; }
+    .toggle-switch input:checked + .toggle-slider::before { transform: translateX(20px); }
+    .toggle-switch input:focus-visible + .toggle-slider { outline: 2px solid #111; outline-offset: 2px; }
   </style>
 </head>
 <body>

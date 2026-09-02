@@ -6,6 +6,7 @@ app_name = "stock_accuracy"
 
 urlpatterns = [
     path("", views.dashboard, name="dashboard"),
+    path("emails-live/toggle/", views.toggle_emails_live, name="toggle_emails_live"),
     path("checks/<int:pk>/", views.entry_detail, name="entry_detail"),
     path("locksmiths/<int:pk>/", views.locksmith_report, name="locksmith_report"),
 ]

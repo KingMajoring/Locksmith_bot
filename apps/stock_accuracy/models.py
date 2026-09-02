@@ -69,6 +69,32 @@ class VarianceThreshold(models.Model):
         return cls.objects.create()
 
 
+class EmailSettings(models.Model):
+    """Whether stock-check emails go to real locksmiths (True) or are
+    redirected to the STOCK_CHECK_TEST_REDIRECT_EMAIL address (False,
+    the default) — a dashboard toggle rather than an Azure app setting,
+    so office admin can flip it live without a redeploy. A single row
+    is used tool-wide, same pattern as VarianceThreshold/OptimoSettings.
+    """
+
+    emails_live = models.BooleanField(default=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Email settings"
+        verbose_name_plural = "Email settings"
+
+    def __str__(self):
+        return "Emails live" if self.emails_live else "Emails NOT live (test redirect)"
+
+    @classmethod
+    def current(cls) -> "EmailSettings":
+        obj = cls.objects.order_by("-id").first()
+        if obj:
+            return obj
+        return cls.objects.create()
+
+
 class WeeklyStockCheck(models.Model):
     """One locksmith's stock check for one week: the 10 lines drawn, sent
     out, and (eventually) reconciled against the counts they return."""

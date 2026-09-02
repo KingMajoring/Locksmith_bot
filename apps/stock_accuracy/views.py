@@ -5,7 +5,7 @@ from django.utils import timezone
 
 from apps.locksmiths.models import Locksmith
 
-from .models import WeeklyStockCheck
+from .models import EmailSettings, WeeklyStockCheck
 from .services.reporting import flagged_items_queryset, line_summary, locksmith_summary
 
 
@@ -22,8 +22,31 @@ def dashboard(request):
     return render(
         request,
         "stock_accuracy/dashboard.html",
-        {"pending": pending, "summaries": summaries, "top_lines": top_lines},
+        {
+            "pending": pending,
+            "summaries": summaries,
+            "top_lines": top_lines,
+            "emails_live": EmailSettings.current().emails_live,
+        },
     )
+
+
+@login_required
+def toggle_emails_live(request):
+    if request.method != "POST":
+        return redirect("stock_accuracy:dashboard")
+
+    email_settings = EmailSettings.current()
+    email_settings.emails_live = not email_settings.emails_live
+    email_settings.save(update_fields=["emails_live"])
+
+    if email_settings.emails_live:
+        messages.warning(
+            request, "Emails are now LIVE — locksmiths will receive real stock-check emails."
+        )
+    else:
+        messages.success(request, "Emails are now in test mode — nothing goes to real locksmiths.")
+    return redirect("stock_accuracy:dashboard")
 
 
 @login_required

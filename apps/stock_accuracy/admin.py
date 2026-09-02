@@ -1,6 +1,24 @@
 from django.contrib import admin
 
-from .models import StockCheckItem, StockCheckSchedule, VarianceThreshold, WeeklyStockCheck
+from .models import (
+    EmailSettings,
+    StockCheckItem,
+    StockCheckSchedule,
+    VarianceThreshold,
+    WeeklyStockCheck,
+)
+
+
+@admin.register(EmailSettings)
+class EmailSettingsAdmin(admin.ModelAdmin):
+    list_display = ("__str__", "updated_at")
+
+    def has_add_permission(self, request):
+        # Single row, tool-wide — same pattern as OptimoSettings/VarianceThreshold.
+        return not EmailSettings.objects.exists()
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(StockCheckSchedule)

@@ -4,6 +4,24 @@
 <h1>Stock Accuracy</h1>
 
 <div class="card">
+  <form method="post" action="{% url 'stock_accuracy:toggle_emails_live' %}">
+    {% csrf_token %}
+    <label class="toggle-row">
+      <span class="toggle-switch">
+        <input type="checkbox" onchange="this.form.submit()" {% if emails_live %}checked{% endif %}>
+        <span class="toggle-slider"></span>
+      </span>
+      <strong>Emails live</strong>
+      {% if emails_live %}
+      <span>— ON: locksmiths receive real stock-check emails.</span>
+      {% else %}
+      <span>— OFF: all stock-check emails redirect to a test address, nothing goes to real locksmiths.</span>
+      {% endif %}
+    </label>
+  </form>
+</div>
+
+<div class="card">
   <h2>Awaiting count entry</h2>
   {% if pending %}
   <table>
