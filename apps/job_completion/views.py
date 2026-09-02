@@ -1,9 +1,11 @@
+from django.contrib import messages
 from django.contrib.auth.decorators import login_required
-from django.shortcuts import get_object_or_404, render
+from django.shortcuts import get_object_or_404, redirect, render
+from django.utils import timezone
 
 from apps.locksmiths.models import Locksmith
 
-from .models import CompletedJob
+from .models import CompletedJob, FailureCategory
 from .services.benchmarking import duration_benchmark
 from .services.reporting import (
     all_locksmith_summaries,
@@ -18,6 +20,7 @@ def dashboard(request):
     needs_categorization = needs_categorization_queryset()[:20]
     summaries = all_locksmith_summaries()
     categories = failure_category_breakdown()
+    failure_category_choices = FailureCategory.objects.filter(active=True)
     return render(
         request,
         "job_completion/dashboard.html",
@@ -25,8 +28,25 @@ def dashboard(request):
             "needs_categorization": needs_categorization,
             "summaries": summaries,
             "categories": categories,
+            "failure_category_choices": failure_category_choices,
         },
     )
+
+
+@login_required
+def categorize_job(request, pk):
+    job = get_object_or_404(CompletedJob, pk=pk)
+    if request.method == "POST":
+        category_id = request.POST.get("failure_category")
+        if category_id:
+            job.failure_category = get_object_or_404(FailureCategory, pk=category_id)
+            job.categorized_by = request.user
+            job.categorized_at = timezone.now()
+            job.save(update_fields=["failure_category", "categorized_by", "categorized_at"])
+            messages.success(request, f"{job.order_no} categorized as {job.failure_category}.")
+        else:
+            messages.error(request, "Choose a category first.")
+    return redirect("job_completion:dashboard")
 
 
 @login_required

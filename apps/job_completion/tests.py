@@ -314,6 +314,52 @@ class ViewsSmokeTests(TestCase):
         self.assertEqual(response.status_code, 302)
 
 
+class CategorizeJobViewTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username="office_admin", email="admin@wgtk.co.uk", password="x", is_staff=True
+        )
+        self.client.force_login(self.user)
+        self.job = CompletedJob.objects.create(
+            order_no="a", report_id="1", job_date=date(2026, 9, 1),
+            status=CompletedJob.Status.FAILED,
+        )
+        self.category = FailureCategory.objects.create(name="Customer not present")
+
+    def test_post_sets_category_and_audit_fields(self):
+        response = self.client.post(
+            reverse("job_completion:categorize_job", args=[self.job.pk]),
+            {"failure_category": self.category.pk},
+        )
+        self.assertRedirects(response, reverse("job_completion:dashboard"))
+        self.job.refresh_from_db()
+        self.assertEqual(self.job.failure_category, self.category)
+        self.assertEqual(self.job.categorized_by, self.user)
+        self.assertIsNotNone(self.job.categorized_at)
+
+    def test_post_without_category_leaves_job_unchanged(self):
+        self.client.post(reverse("job_completion:categorize_job", args=[self.job.pk]), {})
+        self.job.refresh_from_db()
+        self.assertIsNone(self.job.failure_category)
+
+    def test_login_required(self):
+        self.client.logout()
+        response = self.client.post(
+            reverse("job_completion:categorize_job", args=[self.job.pk]),
+            {"failure_category": self.category.pk},
+        )
+        self.assertEqual(response.status_code, 302)
+        self.job.refresh_from_db()
+        self.assertIsNone(self.job.failure_category)
+
+    def test_dashboard_shows_dropdown_for_needs_categorization_job(self):
+        response = self.client.get(reverse("job_completion:dashboard"))
+        self.assertContains(response, "Customer not present")
+        self.assertContains(
+            response, reverse("job_completion:categorize_job", args=[self.job.pk])
+        )
+
+
 class BackfillCompletedJobsCommandTests(TestCase):
     def test_calls_pull_for_every_day_in_range_and_sums_totals(self):
         from io import StringIO
