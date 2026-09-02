@@ -271,22 +271,31 @@ class ReportingTests(TestCase):
         self.locksmith = _make_locksmith()
 
     def test_needs_categorization_only_uncategorized_failures(self):
+        locksmith = _make_locksmith()
         CompletedJob.objects.create(
             order_no="a", report_id="1", job_date=date(2026, 9, 1),
-            status=CompletedJob.Status.FAILED,
+            status=CompletedJob.Status.FAILED, locksmith=locksmith,
         )
         CompletedJob.objects.create(
             order_no="b", report_id="2", job_date=date(2026, 9, 1),
-            status=CompletedJob.Status.SUCCESS,
+            status=CompletedJob.Status.SUCCESS, locksmith=locksmith,
         )
         category = FailureCategory.objects.create(name="Wrong parts")
         CompletedJob.objects.create(
             order_no="c", report_id="3", job_date=date(2026, 9, 1),
-            status=CompletedJob.Status.FAILED, failure_category=category,
+            status=CompletedJob.Status.FAILED, failure_category=category, locksmith=locksmith,
         )
         results = list(needs_categorization_queryset())
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0].order_no, "a")
+
+    def test_needs_categorization_excludes_unmatched_driver_jobs(self):
+        CompletedJob.objects.create(
+            order_no="unmatched", report_id="9", job_date=date(2026, 9, 1),
+            status=CompletedJob.Status.FAILED, driver_serial="SomeoneNew",
+        )
+        results = list(needs_categorization_queryset())
+        self.assertEqual(results, [])
 
     def test_locksmith_summary_failure_rate(self):
         for i in range(3):
@@ -366,13 +375,14 @@ class CategorizeJobsBulkViewTests(TestCase):
             username="office_admin", email="admin@wgtk.co.uk", password="x", is_staff=True
         )
         self.client.force_login(self.user)
+        self.locksmith = _make_locksmith()
         self.job1 = CompletedJob.objects.create(
             order_no="a", report_id="1", job_date=date(2026, 9, 1),
-            status=CompletedJob.Status.FAILED,
+            status=CompletedJob.Status.FAILED, locksmith=self.locksmith,
         )
         self.job2 = CompletedJob.objects.create(
             order_no="b", report_id="2", job_date=date(2026, 9, 1),
-            status=CompletedJob.Status.FAILED,
+            status=CompletedJob.Status.FAILED, locksmith=self.locksmith,
         )
         self.category = FailureCategory.objects.create(name="Customer not present")
         self.other_category = FailureCategory.objects.create(name="Wrong parts")

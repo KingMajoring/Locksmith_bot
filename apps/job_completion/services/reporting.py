@@ -11,9 +11,14 @@ DEFAULT_WINDOW_DAYS = 90
 
 
 def needs_categorization_queryset():
+    # Excludes jobs with no matched locksmith (driver not yet mapped via
+    # OptimoDriverId) — nothing useful to do with those here until the
+    # mapping exists, so they'd just be noise in the queue.
     return (
         CompletedJob.objects.filter(
-            status=CompletedJob.Status.FAILED, failure_category__isnull=True
+            status=CompletedJob.Status.FAILED,
+            failure_category__isnull=True,
+            locksmith__isnull=False,
         )
         .select_related("locksmith")
         .order_by("-job_date")
