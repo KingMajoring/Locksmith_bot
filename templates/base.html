@@ -33,13 +33,11 @@
     .tabs a { display: inline-block; padding: 0.4rem 0.9rem; border-radius: 4px; text-decoration: none; color: #1a1a1a; background: #e8e9ec; white-space: nowrap; }
     .tabs a.tab-active { background: #111; color: #fff; }
     input[type=number] { width: 5rem; }
-    .day-layout { display: flex; gap: 1rem; align-items: flex-start; }
-    .day-layout .table-wrap { flex: 1; min-width: 0; overflow-x: auto; }
-    .day-summary { width: 220px; flex-shrink: 0; }
-    .day-summary dl { margin: 0; }
-    .day-summary dt { color: #666; font-size: 0.8rem; margin-top: 0.75rem; }
-    .day-summary dt:first-child { margin-top: 0; }
-    .day-summary dd { margin: 0; font-size: 1.2rem; font-weight: 700; }
+    .table-wrap { overflow-x: auto; }
+    .stat-row { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 1rem; }
+    .stat-tile { background: #f8f9fa; border: 1px solid #eee; border-radius: 6px; padding: 0.6rem 1rem; min-width: 140px; flex: 1; }
+    .stat-tile .stat-label { color: #666; font-size: 0.75rem; }
+    .stat-tile .stat-value { font-size: 1.3rem; font-weight: 700; }
     .toggle-row { display: flex; align-items: center; gap: 0.75rem; }
     .toggle-switch { position: relative; display: inline-block; width: 44px; height: 24px; flex-shrink: 0; }
     .toggle-switch input { opacity: 0; width: 0; height: 0; }
