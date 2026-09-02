@@ -6,6 +6,16 @@ on:
       - claude/multi-area-management-tool-1cn4og
   workflow_dispatch: {}
 
+# Azure's Kudu zip-deploy endpoint only runs one deployment at a time
+# per site — without this, two pushes close together (or a manual
+# workflow_dispatch alongside a push) queue overlapping "deploy" jobs
+# that both hit Kudu concurrently and stall waiting on its lock.
+# Only the latest commit's deploy matters, so cancel any older run
+# for the same branch rather than letting them race.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
