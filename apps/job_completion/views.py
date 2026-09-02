@@ -7,7 +7,10 @@ from apps.locksmiths.models import Locksmith
 
 from .models import CompletedJob, FailureCategory
 from .services.benchmarking import duration_benchmark
-from .services.model_analysis import locksmith_model_failure_breakdown
+from .services.model_analysis import (
+    company_model_failure_breakdown,
+    locksmith_model_failure_breakdown,
+)
 from .services.reporting import (
     all_locksmith_summaries,
     failure_category_breakdown,
@@ -71,9 +74,13 @@ def categorize_jobs(request):
 
 @login_required
 def model_analysis(request):
-    breakdown = locksmith_model_failure_breakdown()
+    scope = request.GET.get("scope") if request.GET.get("scope") == "company" else "locksmith"
+    if scope == "company":
+        breakdown = company_model_failure_breakdown()
+    else:
+        breakdown = locksmith_model_failure_breakdown()
     return render(
-        request, "job_completion/model_analysis.html", {"breakdown": breakdown}
+        request, "job_completion/model_analysis.html", {"breakdown": breakdown, "scope": scope}
     )
 
 

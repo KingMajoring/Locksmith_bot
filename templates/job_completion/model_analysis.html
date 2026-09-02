@@ -2,33 +2,44 @@
 {% block title %}Model Analysis — Job Completion{% endblock %}
 {% block content %}
 <h1>Model Analysis</h1>
-<p>Which locksmith is failing on which vehicle model (last 90 days), worst first. Model names are grouped to a
+<p>Which vehicle models are failing (last 90 days), worst first. Model names are grouped to a
    broad family (e.g. "Corsa Sting" and "Corsa SE Auto" both count as "Corsa"; BMW/Mercedes group by series/class).</p>
+
+<ul class="tabs">
+  <li><a href="{% url 'job_completion:model_analysis' %}?scope=locksmith" class="{% if scope == 'locksmith' %}tab-active{% endif %}">By locksmith</a></li>
+  <li><a href="{% url 'job_completion:model_analysis' %}?scope=company" class="{% if scope == 'company' %}tab-active{% endif %}">Company-wide</a></li>
+</ul>
 
 <div class="card">
   {% if breakdown %}
   <table>
     <tr>
-      <th>Locksmith</th>
+      {% if scope == 'locksmith' %}<th>Locksmith</th>{% endif %}
       <th>Make</th>
       <th>Model family</th>
       <th>Total jobs</th>
       <th>Failed</th>
       <th>Failure rate</th>
+      <th>Master reason breakdown</th>
     </tr>
     {% for row in breakdown %}
     <tr>
+      {% if scope == 'locksmith' %}
       <td><a href="{% url 'job_completion:locksmith_report' row.locksmith.pk %}">{{ row.locksmith.name }}</a></td>
+      {% endif %}
       <td>{{ row.make }}</td>
       <td>{{ row.model_family }}</td>
       <td>{{ row.total }}</td>
       <td class="flag">{{ row.failed }}</td>
       <td>{{ row.failure_rate_pct }}%</td>
+      <td>
+        {% for r in row.master_reasons %}{{ r.label }}: {{ r.count }}/{{ row.failed }} ({{ r.pct }}%){% if not forloop.last %}, {% endif %}{% endfor %}
+      </td>
     </tr>
     {% endfor %}
   </table>
   {% else %}
-  <p>No failures on file with a matched locksmith and model in the last 90 days.</p>
+  <p>No failures on file{% if scope == 'locksmith' %} with a matched locksmith{% endif %} and model in the last 90 days.</p>
   {% endif %}
 </div>
 {% endblock %}

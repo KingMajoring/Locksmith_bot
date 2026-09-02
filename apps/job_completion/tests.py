@@ -11,7 +11,10 @@ from apps.locksmiths.models import Locksmith, OptimoDriverId
 
 from .models import CompletedJob, FailureCategory, SLATarget
 from .services.benchmarking import duration_benchmark
-from .services.model_analysis import locksmith_model_failure_breakdown
+from .services.model_analysis import (
+    company_model_failure_breakdown,
+    locksmith_model_failure_breakdown,
+)
 from .services.model_normalization import normalize_model
 from .services.pulling import pull_completed_jobs_for_date
 from .services.reporting import (
@@ -555,10 +558,11 @@ class LocksmithModelFailureBreakdownTests(TestCase):
     def setUp(self):
         self.locksmith = _make_locksmith()
 
-    def _make_job(self, make, model, status, order_no):
+    def _make_job(self, make, model, status, order_no, locksmith=None, failure_category=None):
         CompletedJob.objects.create(
             order_no=order_no, report_id=order_no, job_date=date(2026, 9, 1),
-            locksmith=self.locksmith, status=status, make=make, model=model,
+            locksmith=locksmith or self.locksmith, status=status, make=make, model=model,
+            failure_category=failure_category,
         )
 
     def test_groups_by_normalized_model_and_counts_failures(self):
@@ -591,6 +595,40 @@ class LocksmithModelFailureBreakdownTests(TestCase):
         breakdown = locksmith_model_failure_breakdown()
         self.assertEqual(breakdown, [])
 
+    def test_master_reason_breakdown_percentages(self):
+        # 5 failed jobs on the same model family, 1 of them client-fault —
+        # the breakdown should read "Client: 1/5 (20%)".
+        client_fault = FailureCategory.objects.create(
+            name="Customer not present", master_reason=FailureCategory.MasterReason.CLIENT
+        )
+        self._make_job("Ford", "FOCUS ST", CompletedJob.Status.FAILED, "a", failure_category=client_fault)
+        self._make_job("Ford", "FOCUS TITANIUM", CompletedJob.Status.FAILED, "b")
+        self._make_job("Ford", "FOCUS ZETEC", CompletedJob.Status.FAILED, "c")
+        self._make_job("Ford", "FOCUS RS", CompletedJob.Status.FAILED, "d")
+        self._make_job("Ford", "FOCUS ECOBOOST", CompletedJob.Status.FAILED, "e")
+
+        breakdown = locksmith_model_failure_breakdown()
+        row = breakdown[0]
+        self.assertEqual(row["failed"], 5)
+        reasons = {r["label"]: r for r in row["master_reasons"]}
+        self.assertEqual(reasons["Client"]["count"], 1)
+        self.assertAlmostEqual(reasons["Client"]["pct"], 20.0, places=1)
+        self.assertEqual(reasons["Uncategorized"]["count"], 4)
+
+    def test_company_breakdown_aggregates_across_locksmiths(self):
+        other = _make_locksmith(name="WGTK - Other", driver_serial="099")
+        self._make_job("Ford", "FOCUS ST", CompletedJob.Status.FAILED, "a", locksmith=self.locksmith)
+        self._make_job("Ford", "FOCUS TITANIUM", CompletedJob.Status.FAILED, "b", locksmith=other)
+        self._make_job("Ford", "FOCUS ZETEC", CompletedJob.Status.SUCCESS, "c", locksmith=other)
+
+        breakdown = company_model_failure_breakdown()
+        self.assertEqual(len(breakdown), 1)
+        row = breakdown[0]
+        self.assertNotIn("locksmith", row)
+        self.assertEqual(row["model_family"], "FOCUS")
+        self.assertEqual(row["total"], 3)
+        self.assertEqual(row["failed"], 2)
+
 
 class ModelAnalysisViewTests(TestCase):
     def setUp(self):
@@ -602,6 +640,11 @@ class ModelAnalysisViewTests(TestCase):
     def test_renders(self):
         response = self.client.get(reverse("job_completion:model_analysis"))
         self.assertEqual(response.status_code, 200)
+
+    def test_company_scope_renders(self):
+        response = self.client.get(reverse("job_completion:model_analysis"), {"scope": "company"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["scope"], "company")
 
     def test_login_required(self):
         self.client.logout()
