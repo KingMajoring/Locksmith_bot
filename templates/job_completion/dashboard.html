@@ -55,6 +55,19 @@
 </div>
 
 <div class="card">
+  <h2>Training focus — by master reason (last 90 days)</h2>
+  <table>
+    <tr><th>Master reason</th><th>Count</th></tr>
+    {% for r in master_reasons %}
+    <tr>
+      <td>{{ r.master_reason }}</td>
+      <td>{{ r.count }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+
+<div class="card">
   <h2>Failure reasons (last 90 days)</h2>
   <table>
     <tr><th>Category</th><th>Count</th></tr>

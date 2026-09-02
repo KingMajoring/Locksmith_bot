@@ -9,9 +9,24 @@ class FailureCategory(models.Model):
     present"). Starts empty — office staff build the list as real
     failures come in, rather than presets that might not match how
     WGTK actually talks about failures.
+
+    master_reason buckets each category into who/what was actually at
+    fault, for a training-needs view: is it WGTK's own office process,
+    the client, a supplier, or the locksmith themselves that most
+    failures trace back to.
     """
 
+    class MasterReason(models.TextChoices):
+        WGTK_OFFICE = "wgtk_office", "WGTK Office"
+        CLIENT = "client", "Client"
+        SUPPLIER = "supplier", "Supplier"
+        WGTK_LOCKSMITH = "wgtk_locksmith", "WGTK Locksmith"
+        NONE = "none", "None"
+
     name = models.CharField(max_length=200, unique=True)
+    master_reason = models.CharField(
+        max_length=20, choices=MasterReason.choices, default=MasterReason.NONE
+    )
     active = models.BooleanField(default=True)
 
     class Meta:

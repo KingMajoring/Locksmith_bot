@@ -5,7 +5,7 @@ from datetime import date, timedelta
 
 from apps.locksmiths.models import Locksmith
 
-from ..models import CompletedJob
+from ..models import CompletedJob, FailureCategory
 
 DEFAULT_WINDOW_DAYS = 90
 
@@ -60,6 +60,35 @@ def failure_category_breakdown(window_days: int = DEFAULT_WINDOW_DAYS) -> list[d
 
     return sorted(
         ({"category": k, "count": v} for k, v in by_category.items()),
+        key=lambda e: e["count"],
+        reverse=True,
+    )
+
+
+def master_reason_breakdown(window_days: int = DEFAULT_WINDOW_DAYS) -> list[dict]:
+    """Failure counts grouped by FailureCategory.master_reason — who or
+    what was actually at fault (WGTK Office, Client, Supplier, WGTK
+    Locksmith, or None) — to help spot where training is needed, rather
+    than just which specific category comes up most."""
+    since = date.today() - timedelta(days=window_days)
+    failed = CompletedJob.objects.filter(
+        status=CompletedJob.Status.FAILED, job_date__gte=since
+    ).select_related("failure_category")
+
+    labels = dict(FailureCategory.MasterReason.choices)
+    by_reason: dict[str, int] = {}
+    for job in failed:
+        if job.failure_category:
+            key = job.failure_category.master_reason
+        else:
+            key = "uncategorized"
+        by_reason[key] = by_reason.get(key, 0) + 1
+
+    return sorted(
+        (
+            {"master_reason": labels.get(k, "Uncategorized"), "count": v}
+            for k, v in by_reason.items()
+        ),
         key=lambda e: e["count"],
         reverse=True,
     )

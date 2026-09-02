@@ -10,6 +10,7 @@ from .services.benchmarking import duration_benchmark
 from .services.reporting import (
     all_locksmith_summaries,
     failure_category_breakdown,
+    master_reason_breakdown,
     needs_categorization_queryset,
     service_types_for_locksmith,
 )
@@ -20,6 +21,7 @@ def dashboard(request):
     needs_categorization = needs_categorization_queryset()[:20]
     summaries = all_locksmith_summaries()
     categories = failure_category_breakdown()
+    master_reasons = master_reason_breakdown()
     failure_category_choices = FailureCategory.objects.filter(active=True)
     return render(
         request,
@@ -28,6 +30,7 @@ def dashboard(request):
             "needs_categorization": needs_categorization,
             "summaries": summaries,
             "categories": categories,
+            "master_reasons": master_reasons,
             "failure_category_choices": failure_category_choices,
         },
     )

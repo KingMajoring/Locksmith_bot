@@ -6,8 +6,9 @@ from .models import CompletedJob, FailureCategory, SLATarget
 
 @admin.register(FailureCategory)
 class FailureCategoryAdmin(admin.ModelAdmin):
-    list_display = ("name", "active")
-    list_filter = ("active",)
+    list_display = ("name", "master_reason", "active")
+    list_editable = ("master_reason",)
+    list_filter = ("master_reason", "active")
 
 
 @admin.register(SLATarget)

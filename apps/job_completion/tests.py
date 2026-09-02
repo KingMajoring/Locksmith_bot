@@ -15,6 +15,7 @@ from .services.pulling import pull_completed_jobs_for_date
 from .services.reporting import (
     all_locksmith_summaries,
     failure_category_breakdown,
+    master_reason_breakdown,
     needs_categorization_queryset,
 )
 
@@ -320,6 +321,39 @@ class ReportingTests(TestCase):
         )
         breakdown = failure_category_breakdown()
         self.assertEqual(breakdown, [{"category": "Uncategorized", "count": 1}])
+
+    def test_master_reason_breakdown_groups_by_category_master_reason(self):
+        locksmith_fault = FailureCategory.objects.create(
+            name="Wrong approach", master_reason=FailureCategory.MasterReason.WGTK_LOCKSMITH
+        )
+        client_fault = FailureCategory.objects.create(
+            name="Customer not present", master_reason=FailureCategory.MasterReason.CLIENT
+        )
+        CompletedJob.objects.create(
+            order_no="a", report_id="1", job_date=date(2026, 9, 1),
+            status=CompletedJob.Status.FAILED, failure_category=locksmith_fault,
+        )
+        CompletedJob.objects.create(
+            order_no="b", report_id="2", job_date=date(2026, 9, 1),
+            status=CompletedJob.Status.FAILED, failure_category=locksmith_fault,
+        )
+        CompletedJob.objects.create(
+            order_no="c", report_id="3", job_date=date(2026, 9, 1),
+            status=CompletedJob.Status.FAILED, failure_category=client_fault,
+        )
+        CompletedJob.objects.create(
+            order_no="d", report_id="4", job_date=date(2026, 9, 1),
+            status=CompletedJob.Status.FAILED,
+        )
+        breakdown = master_reason_breakdown()
+        self.assertEqual(
+            breakdown,
+            [
+                {"master_reason": "WGTK Locksmith", "count": 2},
+                {"master_reason": "Client", "count": 1},
+                {"master_reason": "Uncategorized", "count": 1},
+            ],
+        )
 
 
 class AdminCategorizationTests(TestCase):
