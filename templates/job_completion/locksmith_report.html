@@ -45,6 +45,7 @@
       <th>VIN</th>
       <th>Service</th>
       <th>Duration</th>
+      <th>Parts disposed (SKU)</th>
       <th>Failure category</th>
     </tr>
     {% for job in jobs %}
@@ -58,6 +59,7 @@
       <td>{{ job.vin }}</td>
       <td>{{ job.service_type }}</td>
       <td>{% if job.duration_minutes %}{{ job.duration_minutes }} min{% else %}—{% endif %}</td>
+      <td>{{ job.disposed_skus }}</td>
       <td class="{% if job.needs_categorization %}flag{% endif %}">
         {{ job.failure_category|default:"" }}
       </td>

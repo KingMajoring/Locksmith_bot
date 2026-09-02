@@ -59,6 +59,15 @@ class MockHandlClientTests(TestCase):
         second = self.client.get_job_details(["1001"])["1001"]
         self.assertEqual(first, second)
 
+    def test_get_disposed_skus_is_deterministic_and_valid_codes(self):
+        first = self.client.get_disposed_skus(["1001"])
+        second = self.client.get_disposed_skus(["1001"])
+        self.assertEqual(first, second)
+        valid_codes = {code for code, _name in self.client._CATALOGUE}
+        for skus in first.values():
+            for sku in skus:
+                self.assertIn(sku, valid_codes)
+
 
 def _fake_connection(rows):
     """A MagicMock usable as `with client._connection() as conn:`, with
@@ -260,6 +269,29 @@ class SQLHandlClientTests(TestCase):
     def test_get_job_details_empty_input_returns_empty_without_querying(self):
         client = SQLHandlClient()
         self.assertEqual(client.get_job_details([]), {})
+
+    def test_get_disposed_skus_groups_rows_by_report_id_in_order(self):
+        rows = [
+            {"ReportID": "496390", "SKU": "TK-104"},
+            {"ReportID": "496390", "SKU": "TK-100"},
+            {"ReportID": "500001", "SKU": "TK-113"},
+        ]
+        fake_conn = _fake_connection(rows)
+        client = SQLHandlClient()
+        with patch.object(client, "_connection", return_value=fake_conn):
+            skus = client.get_disposed_skus(["496390", "500001"])
+
+        cursor = fake_conn.cursor.return_value
+        query = cursor.execute.call_args_list[0][0][0]
+        self.assertIn("Inventory_Disposals", query)
+        self.assertIn("idp.ReportID", query)
+
+        self.assertEqual(skus["496390"], ["TK-104", "TK-100"])
+        self.assertEqual(skus["500001"], ["TK-113"])
+
+    def test_get_disposed_skus_empty_input_returns_empty_without_querying(self):
+        client = SQLHandlClient()
+        self.assertEqual(client.get_disposed_skus([]), {})
 
 
 class GetHandlClientTests(TestCase):

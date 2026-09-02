@@ -35,11 +35,15 @@ class FakeOptimoClient:
 
 
 class FakeHandlClient:
-    def __init__(self, details_by_report_id):
+    def __init__(self, details_by_report_id, disposed_skus_by_report_id=None):
         self._details = details_by_report_id
+        self._disposed_skus = disposed_skus_by_report_id or {}
 
     def get_job_details(self, report_ids):
         return {rid: self._details[rid] for rid in report_ids if rid in self._details}
+
+    def get_disposed_skus(self, report_ids):
+        return {rid: self._disposed_skus[rid] for rid in report_ids if rid in self._disposed_skus}
 
 
 def _make_locksmith(name="WGTK - Test", driver_serial="011"):
@@ -105,6 +109,7 @@ class PullingTests(TestCase):
                 vin="VIN1002", service_type="Lockout",
             ),
         }
+        self.disposed_skus = {"1001": ["TK-100", "TK-104"]}
 
     def _run_pull(self):
         with patch(
@@ -112,7 +117,7 @@ class PullingTests(TestCase):
             return_value=FakeOptimoClient(self.summaries, self.completions),
         ), patch(
             "apps.job_completion.services.pulling.get_handl_client",
-            return_value=FakeHandlClient(self.job_details),
+            return_value=FakeHandlClient(self.job_details, self.disposed_skus),
         ):
             return pull_completed_jobs_for_date(self.for_date)
 
@@ -143,6 +148,16 @@ class PullingTests(TestCase):
         self._run_pull()
         job = CompletedJob.objects.get(order_no=f"1001_{self.for_date.isoformat()}")
         self.assertEqual(job.duration_minutes, 30)
+
+    def test_disposed_skus_stored_comma_separated(self):
+        self._run_pull()
+        job = CompletedJob.objects.get(order_no=f"1001_{self.for_date.isoformat()}")
+        self.assertEqual(job.disposed_skus, "TK-100, TK-104")
+
+    def test_no_disposed_skus_leaves_field_blank(self):
+        self._run_pull()
+        job = CompletedJob.objects.get(order_no=f"1002_{self.for_date.isoformat()}")
+        self.assertEqual(job.disposed_skus, "")
 
     def test_rerun_does_not_duplicate_or_overwrite_category(self):
         self._run_pull()
@@ -297,3 +312,46 @@ class ViewsSmokeTests(TestCase):
         self.client.logout()
         response = self.client.get(reverse("job_completion:dashboard"))
         self.assertEqual(response.status_code, 302)
+
+
+class BackfillCompletedJobsCommandTests(TestCase):
+    def test_calls_pull_for_every_day_in_range_and_sums_totals(self):
+        from io import StringIO
+
+        from django.core.management import call_command
+
+        from apps.job_completion.services.pulling import PullSummary
+
+        with patch(
+            "apps.job_completion.management.commands.backfill_completed_jobs.pull_completed_jobs_for_date",
+            side_effect=[
+                PullSummary(created=2, updated=0, skipped_not_completed=1),
+                PullSummary(created=0, updated=3, skipped_not_completed=0),
+                PullSummary(created=1, updated=1, skipped_not_completed=2),
+            ],
+        ) as mock_pull:
+            out = StringIO()
+            call_command(
+                "backfill_completed_jobs", "--start", "2026-01-01", "--end", "2026-01-03", stdout=out
+            )
+
+        self.assertEqual(mock_pull.call_count, 3)
+        called_dates = [call.args[0] for call in mock_pull.call_args_list]
+        self.assertEqual(
+            called_dates, [date(2026, 1, 1), date(2026, 1, 2), date(2026, 1, 3)]
+        )
+        self.assertIn("3 created, 4 updated", out.getvalue())
+
+    def test_start_after_end_does_nothing(self):
+        from io import StringIO
+
+        from django.core.management import call_command
+
+        with patch(
+            "apps.job_completion.management.commands.backfill_completed_jobs.pull_completed_jobs_for_date"
+        ) as mock_pull:
+            err = StringIO()
+            call_command(
+                "backfill_completed_jobs", "--start", "2026-02-01", "--end", "2026-01-01", stderr=err
+            )
+        mock_pull.assert_not_called()

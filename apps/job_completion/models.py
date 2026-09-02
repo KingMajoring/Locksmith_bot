@@ -78,6 +78,10 @@ class CompletedJob(models.Model):
     year = models.CharField(max_length=10, blank=True)
     vin = models.CharField(max_length=32, blank=True, verbose_name="VIN")
     service_type = models.CharField(max_length=100, blank=True)
+    disposed_skus = models.CharField(
+        max_length=255, blank=True,
+        help_text="SKUs of parts disposed against this job (comma-separated, most recent first).",
+    )
 
     failure_category = models.ForeignKey(
         FailureCategory, null=True, blank=True, on_delete=models.SET_NULL,

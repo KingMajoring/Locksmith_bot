@@ -58,6 +58,7 @@ def pull_completed_jobs_for_date(for_date: date) -> PullSummary:
     ]
     report_ids = [_report_id_from_order_no(s.order_no) for s in completed_summaries]
     job_details = handl.get_job_details(report_ids)
+    disposed_skus = handl.get_disposed_skus(report_ids)
 
     created = 0
     updated = 0
@@ -81,6 +82,7 @@ def pull_completed_jobs_for_date(for_date: date) -> PullSummary:
             "year": details.year if details else "",
             "vin": details.vin if details else "",
             "service_type": details.service_type if details else "",
+            "disposed_skus": ", ".join(disposed_skus.get(report_id, [])),
             "completion_note": completion.note,
         }
         _obj, was_created = CompletedJob.objects.update_or_create(

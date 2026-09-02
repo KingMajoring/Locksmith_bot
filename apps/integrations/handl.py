@@ -77,6 +77,14 @@ class HandlClient(ABC):
         (Job Completion), which resolves an Optimo orderNo of the form
         "<ReportID>_<date>" back to Handl for these details."""
 
+    @abstractmethod
+    def get_disposed_skus(self, report_ids: list[str]) -> dict[str, list[str]]:
+        """SKUs of parts disposed against each Handl ReportID (most
+        recent first, capped at 10 per job), keyed by report_id — for
+        Area 2 (Job Completion), same disposal data as Area 1's stock
+        usage but looked up by ReportID directly rather than
+        LookupLocksmithId."""
+
 
 class MockHandlClient(HandlClient):
     """Deterministic fake data for local dev/tests, standing in until the
@@ -182,6 +190,15 @@ class MockHandlClient(HandlClient):
                 vin=f"MOCK{rng.randint(10**12, 10**13 - 1)}",
                 service_type=rng.choice(self._SERVICE_TYPES),
             )
+        return result
+
+    def get_disposed_skus(self, report_ids: list[str]) -> dict[str, list[str]]:
+        result = {}
+        for report_id in report_ids:
+            rng = random.Random(int(hashlib.sha256(report_id.encode()).hexdigest(), 16) % (2**32))
+            count = rng.randint(0, 4)
+            sample = rng.sample(self._CATALOGUE, k=min(len(self._CATALOGUE), count))
+            result[report_id] = [code for code, _name in sample]
         return result
 
 
@@ -383,6 +400,42 @@ class SQLHandlClient(HandlClient):
             )
             for row in rows
         }
+
+    def get_disposed_skus(self, report_ids: list[str]) -> dict[str, list[str]]:
+        if not report_ids:
+            return {}
+        id_placeholders = ", ".join(f"%(rid{i})s" for i in range(len(report_ids)))
+        params = {f"rid{i}": rid for i, rid in enumerate(report_ids)}
+        # Inventory_Disposals.ReportID links a disposal directly to the
+        # claim it was used on. Most recent 10 per ReportID, matching
+        # the business's own reporting pattern for this — earlier
+        # batches are dropped rather than risking an unbounded list.
+        query = f"""
+            SELECT ReportID, SKU FROM (
+                SELECT
+                    idp.ReportID,
+                    ipa.SKU,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY idp.ReportID
+                        ORDER BY idp.DateCreated DESC, idp.Id DESC
+                    ) AS rn
+                FROM Inventory_Disposals idp
+                JOIN Inventory_Stock ist ON idp.StockId = ist.Id
+                JOIN Inventory_Parts ipa ON ist.PartId = ipa.Id
+                WHERE idp.ReportID IN ({id_placeholders})
+            ) ranked
+            WHERE rn <= 10
+            ORDER BY ReportID, rn
+        """
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+        result: dict[str, list[str]] = {}
+        for row in rows:
+            report_id = str(row["ReportID"])
+            result.setdefault(report_id, []).append(row["SKU"])
+        return result
 
 
 def get_handl_client() -> HandlClient:
