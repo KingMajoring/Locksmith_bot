@@ -4,6 +4,9 @@
 <h1>Jobs by Day</h1>
 
 <ul class="tabs">
+  {% if offset > 0 %}
+  <li><a href="?offset={{ prev_offset }}">← Show more recent days</a></li>
+  {% endif %}
   {% for d in pills %}
   <li><a href="?offset={{ offset }}&date={{ d|date:'Y-m-d' }}" class="{% if d == selected %}tab-active{% endif %}">{{ d|date:"D j M" }}</a></li>
   {% endfor %}

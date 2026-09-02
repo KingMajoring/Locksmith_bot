@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Job Failures — Job Completion{% endblock %}
+{% block content %}
+<h1>Job Failures</h1>
+
+<div class="card">
+  <h2>Needs categorization</h2>
+  {% if needs_categorization %}
+  <form method="post" action="{% url 'job_completion:categorize_jobs' %}">
+    {% csrf_token %}
+    <table>
+      <tr><th>Order</th><th>Date</th><th>Locksmith</th><th>Service</th><th>Note</th><th>Category</th></tr>
+      {% for job in needs_categorization %}
+      <tr>
+        <td>{{ job.order_no }}</td>
+        <td>{{ job.job_date }}</td>
+        <td>{% if job.locksmith %}{{ job.locksmith.name }}{% else %}Unmatched ({{ job.driver_serial }}){% endif %}</td>
+        <td>{{ job.service_type }}</td>
+        <td>{{ job.completion_note }}</td>
+        <td>
+          <select name="category_{{ job.pk }}">
+            <option value="">Choose a reason…</option>
+            {% for choice in failure_category_choices %}
+            <option value="{{ choice.pk }}">{{ choice.name }}</option>
+            {% endfor %}
+          </select>
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+    <p><button class="btn" type="submit">Save all</button></p>
+  </form>
+  {% if not failure_category_choices %}
+  <p>No failure categories exist yet — add one via the <a href="{% url 'admin:job_completion_failurecategory_add' %}">admin</a> first.</p>
+  {% endif %}
+  {% else %}
+  <p>Nothing outstanding.</p>
+  {% endif %}
+</div>
+{% endblock %}

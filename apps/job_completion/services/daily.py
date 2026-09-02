@@ -27,6 +27,13 @@ def next_offset(offset: int) -> int:
     return RECENT_DAYS if offset == 0 else offset + PAGE_DAYS
 
 
+def prev_offset(offset: int) -> int:
+    """Paging backwards towards today — the inverse of next_offset."""
+    if offset <= RECENT_DAYS:
+        return 0
+    return offset - PAGE_DAYS
+
+
 def jobs_for_day(for_date: date):
     return (
         CompletedJob.objects.filter(job_date=for_date)

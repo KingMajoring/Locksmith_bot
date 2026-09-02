@@ -10,7 +10,7 @@ from apps.locksmiths.models import Locksmith
 from .models import CompletedJob, FailureCategory
 from .services.benchmarking import duration_benchmark
 from .services.costing import parts_cost_for_jobs
-from .services.daily import day_pills, jobs_for_day, next_offset
+from .services.daily import day_pills, jobs_for_day, next_offset, prev_offset
 from .services.model_analysis import (
     MASTER_REASON_LABELS,
     company_model_failure_breakdown,
@@ -27,19 +27,29 @@ from .services.reporting import (
 
 @login_required
 def dashboard(request):
-    needs_categorization = needs_categorization_queryset()[:20]
     summaries = all_locksmith_summaries()
     categories = failure_category_breakdown()
     master_reasons = master_reason_breakdown()
-    failure_category_choices = FailureCategory.objects.filter(active=True)
     return render(
         request,
         "job_completion/dashboard.html",
         {
-            "needs_categorization": needs_categorization,
             "summaries": summaries,
             "categories": categories,
             "master_reasons": master_reasons,
+        },
+    )
+
+
+@login_required
+def job_failures(request):
+    needs_categorization = needs_categorization_queryset()
+    failure_category_choices = FailureCategory.objects.filter(active=True)
+    return render(
+        request,
+        "job_completion/job_failures.html",
+        {
+            "needs_categorization": needs_categorization,
             "failure_category_choices": failure_category_choices,
         },
     )
@@ -47,12 +57,13 @@ def dashboard(request):
 
 @login_required
 def categorize_jobs(request):
-    """Bulk categorization: the dashboard's "Needs categorization" table
-    is one form with a category dropdown per row and a single "Save
-    all" button, so office staff can pick reasons for several jobs
-    before submitting once — rather than a full page reload per row."""
+    """Bulk categorization: the Job Failures page's "Needs categorization"
+    table is one form with a category dropdown per row and a single
+    "Save all" button, so office staff can pick reasons for several
+    jobs before submitting once — rather than a full page reload per
+    row."""
     if request.method != "POST":
-        return redirect("job_completion:dashboard")
+        return redirect("job_completion:job_failures")
 
     categories_by_id = {str(c.pk): c for c in FailureCategory.objects.all()}
     saved = 0
@@ -74,7 +85,7 @@ def categorize_jobs(request):
         messages.success(request, f"Categorized {saved} job(s).")
     else:
         messages.error(request, "Nothing selected — choose a reason for at least one job.")
-    return redirect("job_completion:dashboard")
+    return redirect("job_completion:job_failures")
 
 
 @login_required
@@ -128,6 +139,7 @@ def jobs_by_day(request):
             "jobs": jobs,
             "offset": offset,
             "next_offset": next_offset(offset),
+            "prev_offset": prev_offset(offset),
         },
     )
 

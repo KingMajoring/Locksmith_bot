@@ -12,7 +12,7 @@ from apps.locksmiths.models import Locksmith, OptimoDriverId
 from .models import CompletedJob, FailureCategory, SLATarget
 from .services.benchmarking import duration_benchmark
 from .services.costing import parts_cost_for_jobs
-from .services.daily import day_pills, jobs_for_day, next_offset
+from .services.daily import day_pills, jobs_for_day, next_offset, prev_offset
 from .services.model_analysis import (
     company_model_failure_breakdown,
     locksmith_model_failure_breakdown,
@@ -417,6 +417,24 @@ class ViewsSmokeTests(TestCase):
         )
         self.assertEqual(response.status_code, 200)
 
+    def test_job_failures_renders(self):
+        response = self.client.get(reverse("job_completion:job_failures"))
+        self.assertEqual(response.status_code, 200)
+
+    def test_sidebar_badge_shows_needs_categorization_count(self):
+        CompletedJob.objects.create(
+            order_no="a", report_id="1", job_date=date(2026, 9, 1),
+            status=CompletedJob.Status.FAILED, locksmith=self.locksmith,
+        )
+        response = self.client.get(reverse("job_completion:dashboard"))
+        self.assertEqual(response.context["needs_categorization_count"], 1)
+        self.assertContains(response, '<span class="badge">1</span>')
+
+    def test_sidebar_badge_hidden_when_nothing_outstanding(self):
+        response = self.client.get(reverse("job_completion:dashboard"))
+        self.assertEqual(response.context["needs_categorization_count"], 0)
+        self.assertNotContains(response, 'class="badge"')
+
     def test_jobs_by_day_renders(self):
         response = self.client.get(reverse("job_completion:jobs_by_day"))
         self.assertEqual(response.status_code, 200)
@@ -427,6 +445,12 @@ class ViewsSmokeTests(TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.context["selected"], date(2026, 1, 1))
+        self.assertEqual(response.context["prev_offset"], 0)
+        self.assertContains(response, "Show more recent days")
+
+    def test_jobs_by_day_hides_more_recent_link_at_offset_zero(self):
+        response = self.client.get(reverse("job_completion:jobs_by_day"))
+        self.assertNotContains(response, "Show more recent days")
 
     def test_jobs_by_day_computes_margin_from_net_cost_and_parts_cost(self):
         CompletedJob.objects.create(
@@ -474,7 +498,7 @@ class CategorizeJobsBulkViewTests(TestCase):
             reverse("job_completion:categorize_jobs"),
             {f"category_{self.job1.pk}": self.category.pk, f"category_{self.job2.pk}": self.other_category.pk},
         )
-        self.assertRedirects(response, reverse("job_completion:dashboard"))
+        self.assertRedirects(response, reverse("job_completion:job_failures"))
         self.job1.refresh_from_db()
         self.job2.refresh_from_db()
         self.assertEqual(self.job1.failure_category, self.category)
@@ -487,7 +511,7 @@ class CategorizeJobsBulkViewTests(TestCase):
             reverse("job_completion:categorize_jobs"),
             {f"category_{self.job1.pk}": self.category.pk, f"category_{self.job2.pk}": ""},
         )
-        self.assertRedirects(response, reverse("job_completion:dashboard"))
+        self.assertRedirects(response, reverse("job_completion:job_failures"))
         self.job1.refresh_from_db()
         self.job2.refresh_from_db()
         self.assertEqual(self.job1.failure_category, self.category)
@@ -510,8 +534,8 @@ class CategorizeJobsBulkViewTests(TestCase):
         self.job1.refresh_from_db()
         self.assertIsNone(self.job1.failure_category)
 
-    def test_dashboard_shows_dropdown_and_single_save_form(self):
-        response = self.client.get(reverse("job_completion:dashboard"))
+    def test_job_failures_shows_dropdown_and_single_save_form(self):
+        response = self.client.get(reverse("job_completion:job_failures"))
         self.assertContains(response, "Customer not present")
         self.assertContains(response, reverse("job_completion:categorize_jobs"))
         self.assertContains(response, f'name="category_{self.job1.pk}"')
@@ -709,6 +733,12 @@ class DailyJobsTests(TestCase):
         self.assertEqual(next_offset(0), 7)
         self.assertEqual(next_offset(7), 17)
         self.assertEqual(next_offset(17), 27)
+
+    def test_prev_offset_reverses_next_offset(self):
+        self.assertEqual(prev_offset(0), 0)
+        self.assertEqual(prev_offset(7), 0)
+        self.assertEqual(prev_offset(17), 7)
+        self.assertEqual(prev_offset(27), 17)
 
     def test_jobs_for_day_filters_by_job_date(self):
         locksmith = _make_locksmith()
