@@ -119,12 +119,12 @@ class PullingTests(TestCase):
             "1001": JobDetails(
                 report_id="1001", make="Ford", model="Focus", year="2020",
                 vin="VIN1001", service_type="Car", loss_type="Lockout",
-                supplied_service="Non-Destructive Entry",
+                supplied_service="Non-Destructive Entry", net_cost=120.0,
             ),
             "1002": JobDetails(
                 report_id="1002", make="BMW", model="335D", year="2019",
                 vin="VIN1002", service_type="Car", loss_type="Lost Keys",
-                supplied_service="Key Programming",
+                supplied_service="Key Programming", net_cost=None,
             ),
         }
         self.disposed_skus = {"1001": ["TK-100", "TK-104"]}
@@ -163,6 +163,7 @@ class PullingTests(TestCase):
         self.assertEqual(job.service_type, "Car")
         self.assertEqual(job.loss_type, "Lockout")
         self.assertEqual(job.supplied_service, "Non-Destructive Entry")
+        self.assertEqual(job.net_cost, 120.0)
 
     def test_duration_computed_from_start_end_time(self):
         self._run_pull()
@@ -426,6 +427,23 @@ class ViewsSmokeTests(TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.context["selected"], date(2026, 1, 1))
+
+    def test_jobs_by_day_computes_margin_from_net_cost_and_parts_cost(self):
+        CompletedJob.objects.create(
+            order_no="a", report_id="1", job_date=date(2026, 1, 1),
+            locksmith=self.locksmith, status=CompletedJob.Status.SUCCESS,
+            net_cost=100.0, disposed_skus="TK-100",
+        )
+        with patch(
+            "apps.job_completion.views.parts_cost_for_jobs",
+            return_value={"a": 30.0},
+        ):
+            response = self.client.get(
+                reverse("job_completion:jobs_by_day"), {"date": "2026-01-01"}
+            )
+        job = response.context["jobs"][0]
+        self.assertEqual(job.parts_cost, 30.0)
+        self.assertEqual(job.margin, 70.0)
 
     def test_login_required_redirects_anonymous(self):
         self.client.logout()

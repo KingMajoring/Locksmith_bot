@@ -104,6 +104,12 @@ class CompletedJob(models.Model):
         max_length=100, blank=True,
         help_text="Service the locksmith actually supplied, e.g. Non-Destructive Entry.",
     )
+    net_cost = models.FloatField(
+        null=True, blank=True,
+        help_text="Handl's net cost for the job (Policy_Financial.NetCost) — "
+        "what the client was charged, excl. VAT; the 'selling price' side "
+        "of the parts-cost margin calc.",
+    )
     disposed_skus = models.CharField(
         max_length=255, blank=True,
         help_text="SKUs of parts disposed against this job (comma-separated, most recent first).",

@@ -51,6 +51,7 @@ class JobDetails:
     service_type: str
     loss_type: str
     supplied_service: str
+    net_cost: float | None
 
 
 class HandlClient(ABC):
@@ -76,10 +77,12 @@ class HandlClient(ABC):
     def get_job_details(self, report_ids: list[str]) -> dict[str, JobDetails]:
         """Vehicle/claim details (make, model, year, VIN, service_type
         i.e. Lookup_KeyType, loss_type i.e. Lookup_LossEvent_Details,
-        supplied_service i.e. Lookup_LocksmithSuppliedServices) for the
-        given Handl ReportID values, keyed by report_id — for Area 2
-        (Job Completion), which resolves an Optimo orderNo of the form
-        "<ReportID>_<date>" back to Handl for these details."""
+        supplied_service i.e. Lookup_LocksmithSuppliedServices, net_cost
+        i.e. Policy_Financial.NetCost — what the client was charged,
+        excl. VAT, the business's own "selling price" figure for a job)
+        for the given Handl ReportID values, keyed by report_id — for
+        Area 2 (Job Completion), which resolves an Optimo orderNo of the
+        form "<ReportID>_<date>" back to Handl for these details."""
 
     @abstractmethod
     def get_disposed_skus(self, report_ids: list[str]) -> dict[str, list[str]]:
@@ -207,6 +210,7 @@ class MockHandlClient(HandlClient):
                 service_type=rng.choice(self._SERVICE_TYPES),
                 loss_type=rng.choice(self._LOSS_TYPES),
                 supplied_service=rng.choice(self._SUPPLIED_SERVICES),
+                net_cost=round(rng.uniform(60, 350), 2),
             )
         return result
 
@@ -451,13 +455,25 @@ class SQLHandlClient(HandlClient):
                         ELSE NULL
                     END
                 WHERE pld.Selected = 1 AND pld.ReportID IN ({id_placeholders})
+            ),
+            Finance AS (
+                -- What the client was charged (excl. VAT) — the
+                -- business's own "selling price" figure for margin
+                -- reporting, per their reporting query. Summed since a
+                -- ReportID can have more than one Policy_Financial row
+                -- (e.g. amendments).
+                SELECT pf.ReportID, SUM(pf.NetCost) AS NetCost
+                FROM Policy_Financial pf
+                WHERE pf.ReportID IN ({id_placeholders})
+                GROUP BY pf.ReportID
             )
             SELECT
                 v.ReportID, v.Make, v.Model, v.yearOfManufacture, v.VehicleVIN, v.KeyType,
-                lt.LossEvent, ss.SuppliedService
+                lt.LossEvent, ss.SuppliedService, f.NetCost
             FROM VehicleRanked v
             LEFT JOIN LossType lt ON v.ReportID = lt.ReportID
             LEFT JOIN SuppliedServiceRanked ss ON v.ReportID = ss.ReportID AND ss.rn = 1
+            LEFT JOIN Finance f ON v.ReportID = f.ReportID
             WHERE v.rn = 1
         """
         with self._connection() as conn:
@@ -474,6 +490,7 @@ class SQLHandlClient(HandlClient):
                 service_type=row["KeyType"] or "",
                 loss_type=row["LossEvent"] or "",
                 supplied_service=row["SuppliedService"] or "",
+                net_cost=float(row["NetCost"]) if row["NetCost"] is not None else None,
             )
             for row in rows
         }

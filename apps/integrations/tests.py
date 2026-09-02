@@ -259,6 +259,7 @@ class SQLHandlClientTests(TestCase):
                 "KeyType": "Car",
                 "LossEvent": "Lost Keys",
                 "SuppliedService": "Key Programming",
+                "NetCost": 145.5,
             }
         ]
         fake_conn = _fake_connection(rows)
@@ -272,6 +273,7 @@ class SQLHandlClientTests(TestCase):
         self.assertIn("Lookup_KeyType", query)
         self.assertIn("Lookup_LossEvent_Details", query)
         self.assertIn("Lookup_LocksmithSuppliedServices", query)
+        self.assertIn("Policy_Financial", query)
 
         job = details["496390"]
         self.assertEqual(job.make, "NISSAN")
@@ -280,6 +282,27 @@ class SQLHandlClientTests(TestCase):
         self.assertEqual(job.service_type, "Car")
         self.assertEqual(job.loss_type, "Lost Keys")
         self.assertEqual(job.supplied_service, "Key Programming")
+        self.assertEqual(job.net_cost, 145.5)
+
+    def test_get_job_details_null_net_cost_maps_to_none(self):
+        rows = [
+            {
+                "ReportID": "496390",
+                "Make": "NISSAN",
+                "Model": "X-TRAIL",
+                "yearOfManufacture": 2017,
+                "VehicleVIN": "SJNFAAJ11U1234567",
+                "KeyType": "Car",
+                "LossEvent": "Lost Keys",
+                "SuppliedService": "Key Programming",
+                "NetCost": None,
+            }
+        ]
+        fake_conn = _fake_connection(rows)
+        client = SQLHandlClient()
+        with patch.object(client, "_connection", return_value=fake_conn):
+            details = client.get_job_details(["496390"])
+        self.assertIsNone(details["496390"].net_cost)
 
     def test_get_job_details_empty_input_returns_empty_without_querying(self):
         client = SQLHandlClient()

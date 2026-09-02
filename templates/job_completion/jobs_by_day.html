@@ -24,6 +24,8 @@
       <th>Duration</th>
       <th>Parts disposed (SKU)</th>
       <th>Parts cost</th>
+      <th>Net cost (client charge)</th>
+      <th>Margin</th>
       <th>Failure category</th>
     </tr>
     {% for job in jobs %}
@@ -37,6 +39,8 @@
       <td>{% if job.duration_minutes %}{{ job.duration_minutes }} min{% else %}—{% endif %}</td>
       <td>{{ job.disposed_skus }}</td>
       <td>{% if job.parts_cost %}£{{ job.parts_cost }}{% else %}—{% endif %}</td>
+      <td>{% if job.net_cost %}£{{ job.net_cost }}{% else %}—{% endif %}</td>
+      <td class="{% if job.margin and job.margin < 0 %}flag{% endif %}">{% if job.margin is not None %}£{{ job.margin }}{% else %}—{% endif %}</td>
       <td class="{% if job.needs_categorization %}flag{% endif %}">
         {{ job.failure_category|default:"" }}
       </td>

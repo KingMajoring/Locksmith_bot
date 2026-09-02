@@ -50,6 +50,7 @@ class CompletedJobAdmin(admin.ModelAdmin):
         "service_type",
         "loss_type",
         "supplied_service",
+        "net_cost",
         "disposed_skus",
         "completion_note",
         "categorized_by",

@@ -114,6 +114,10 @@ def jobs_by_day(request):
     parts_costs = parts_cost_for_jobs(jobs)
     for job in jobs:
         job.parts_cost = parts_costs.get(job.order_no)
+        if job.net_cost is not None and job.parts_cost is not None:
+            job.margin = round(job.net_cost - job.parts_cost, 2)
+        else:
+            job.margin = None
 
     return render(
         request,
