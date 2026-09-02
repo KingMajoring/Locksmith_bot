@@ -11,6 +11,8 @@ from apps.locksmiths.models import Locksmith, OptimoDriverId
 
 from .models import CompletedJob, FailureCategory, SLATarget
 from .services.benchmarking import duration_benchmark
+from .services.model_analysis import locksmith_model_failure_breakdown
+from .services.model_normalization import normalize_model
 from .services.pulling import pull_completed_jobs_for_date
 from .services.reporting import (
     all_locksmith_summaries,
@@ -103,11 +105,13 @@ class PullingTests(TestCase):
         self.job_details = {
             "1001": JobDetails(
                 report_id="1001", make="Ford", model="Focus", year="2020",
-                vin="VIN1001", service_type="Lockout",
+                vin="VIN1001", service_type="Car", loss_type="Lockout",
+                supplied_service="Non-Destructive Entry",
             ),
             "1002": JobDetails(
-                report_id="1002", make="BMW", model="3 Series", year="2019",
-                vin="VIN1002", service_type="Lockout",
+                report_id="1002", make="BMW", model="335D", year="2019",
+                vin="VIN1002", service_type="Car", loss_type="Lost Keys",
+                supplied_service="Key Programming",
             ),
         }
         self.disposed_skus = {"1001": ["TK-100", "TK-104"]}
@@ -143,7 +147,9 @@ class PullingTests(TestCase):
         self._run_pull()
         job = CompletedJob.objects.get(order_no=f"1001_{self.for_date.isoformat()}")
         self.assertEqual(job.make, "Ford")
-        self.assertEqual(job.service_type, "Lockout")
+        self.assertEqual(job.service_type, "Car")
+        self.assertEqual(job.loss_type, "Lockout")
+        self.assertEqual(job.supplied_service, "Non-Destructive Entry")
 
     def test_duration_computed_from_start_end_time(self):
         self._run_pull()
@@ -511,3 +517,93 @@ class BackfillCompletedJobsCommandTests(TestCase):
                 "backfill_completed_jobs", "--start", "2026-02-01", "--end", "2026-01-01", stderr=err
             )
         mock_pull.assert_not_called()
+
+
+class NormalizeModelTests(TestCase):
+    def test_default_rule_takes_first_word(self):
+        self.assertEqual(normalize_model("Vauxhall", "CORSA STING"), "CORSA")
+        self.assertEqual(normalize_model("Vauxhall", "CORSA SE AUTO"), "CORSA")
+        self.assertEqual(normalize_model("Toyota", "PROACE ICON"), "PROACE")
+
+    def test_bmw_numeric_code_maps_to_series(self):
+        self.assertEqual(normalize_model("BMW", "335D"), "3 Series")
+        self.assertEqual(normalize_model("BMW", "430"), "4 Series")
+        self.assertEqual(normalize_model("BMW", "320i"), "3 Series")
+        self.assertEqual(normalize_model("BMW", "118d"), "1 Series")
+
+    def test_bmw_non_numeric_model_falls_back_to_first_word(self):
+        self.assertEqual(normalize_model("BMW", "X5"), "X5")
+        self.assertEqual(normalize_model("BMW", "i3"), "I3")
+
+    def test_mercedes_class_letter_prefix(self):
+        self.assertEqual(normalize_model("Mercedes-Benz", "C220"), "C-Class")
+        self.assertEqual(normalize_model("Mercedes-Benz", "C300 AMG Line"), "C-Class")
+        self.assertEqual(normalize_model("Mercedes-Benz", "E250"), "E-Class")
+
+    def test_mercedes_multi_letter_code_not_shadowed_by_single_letter(self):
+        # "CLA45" must match the 3-letter "CLA" code, not the 1-letter
+        # "C" alternative that happens to prefix it.
+        self.assertEqual(normalize_model("Mercedes-Benz", "CLA45"), "CLA-Class")
+        self.assertEqual(normalize_model("Mercedes-Benz", "GLC300"), "GLC-Class")
+
+    def test_blank_model_returns_blank(self):
+        self.assertEqual(normalize_model("Ford", ""), "")
+        self.assertEqual(normalize_model("Ford", None), "")
+
+
+class LocksmithModelFailureBreakdownTests(TestCase):
+    def setUp(self):
+        self.locksmith = _make_locksmith()
+
+    def _make_job(self, make, model, status, order_no):
+        CompletedJob.objects.create(
+            order_no=order_no, report_id=order_no, job_date=date(2026, 9, 1),
+            locksmith=self.locksmith, status=status, make=make, model=model,
+        )
+
+    def test_groups_by_normalized_model_and_counts_failures(self):
+        self._make_job("Vauxhall", "CORSA STING", CompletedJob.Status.FAILED, "a")
+        self._make_job("Vauxhall", "CORSA SE AUTO", CompletedJob.Status.FAILED, "b")
+        self._make_job("Vauxhall", "CORSA LIMITED", CompletedJob.Status.SUCCESS, "c")
+
+        breakdown = locksmith_model_failure_breakdown()
+        self.assertEqual(len(breakdown), 1)
+        row = breakdown[0]
+        self.assertEqual(row["model_family"], "CORSA")
+        self.assertEqual(row["total"], 3)
+        self.assertEqual(row["failed"], 2)
+        self.assertAlmostEqual(row["failure_rate_pct"], 66.7, places=1)
+
+    def test_jobs_with_no_failures_are_excluded(self):
+        self._make_job("Ford", "FOCUS ST", CompletedJob.Status.SUCCESS, "a")
+        breakdown = locksmith_model_failure_breakdown()
+        self.assertEqual(breakdown, [])
+
+    def test_jobs_without_locksmith_or_model_are_excluded(self):
+        CompletedJob.objects.create(
+            order_no="unmatched", report_id="9", job_date=date(2026, 9, 1),
+            status=CompletedJob.Status.FAILED, make="Ford", model="Focus",
+        )
+        CompletedJob.objects.create(
+            order_no="nomodel", report_id="10", job_date=date(2026, 9, 1),
+            locksmith=self.locksmith, status=CompletedJob.Status.FAILED,
+        )
+        breakdown = locksmith_model_failure_breakdown()
+        self.assertEqual(breakdown, [])
+
+
+class ModelAnalysisViewTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username="office_admin", email="admin@wgtk.co.uk", password="x", is_staff=True
+        )
+        self.client.force_login(self.user)
+
+    def test_renders(self):
+        response = self.client.get(reverse("job_completion:model_analysis"))
+        self.assertEqual(response.status_code, 200)
+
+    def test_login_required(self):
+        self.client.logout()
+        response = self.client.get(reverse("job_completion:model_analysis"))
+        self.assertEqual(response.status_code, 302)

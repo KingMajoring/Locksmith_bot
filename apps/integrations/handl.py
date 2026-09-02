@@ -49,6 +49,8 @@ class JobDetails:
     year: str
     vin: str
     service_type: str
+    loss_type: str
+    supplied_service: str
 
 
 class HandlClient(ABC):
@@ -72,8 +74,10 @@ class HandlClient(ABC):
 
     @abstractmethod
     def get_job_details(self, report_ids: list[str]) -> dict[str, JobDetails]:
-        """Vehicle/service details (make, model, year, service type) for
-        the given Handl ReportID values, keyed by report_id — for Area 2
+        """Vehicle/claim details (make, model, year, VIN, service_type
+        i.e. Lookup_KeyType, loss_type i.e. Lookup_LossEvent_Details,
+        supplied_service i.e. Lookup_LocksmithSuppliedServices) for the
+        given Handl ReportID values, keyed by report_id — for Area 2
         (Job Completion), which resolves an Optimo orderNo of the form
         "<ReportID>_<date>" back to Handl for these details."""
 
@@ -177,6 +181,11 @@ class MockHandlClient(HandlClient):
     _MAKES = ["Ford", "Vauxhall", "BMW", "Volkswagen", "Audi", "Mercedes-Benz", "Toyota"]
     _MODELS = ["Focus", "Corsa", "3 Series", "Golf", "A4", "C-Class", "Yaris"]
     _SERVICE_TYPES = ["Lockout", "Key cutting", "Key programming", "Barrel change", "Boot lockout"]
+    _LOSS_TYPES = ["Lost Keys", "Broken Key", "Lockout", "Keys Locked In", "Stolen Keys"]
+    _SUPPLIED_SERVICES = [
+        "Non-Destructive Entry", "Key Cutting", "Key Programming",
+        "Lock Change", "Boot Entry",
+    ]
 
     def get_job_details(self, report_ids: list[str]) -> dict[str, JobDetails]:
         result = {}
@@ -189,6 +198,8 @@ class MockHandlClient(HandlClient):
                 year=str(rng.randint(2008, 2025)),
                 vin=f"MOCK{rng.randint(10**12, 10**13 - 1)}",
                 service_type=rng.choice(self._SERVICE_TYPES),
+                loss_type=rng.choice(self._LOSS_TYPES),
+                supplied_service=rng.choice(self._SUPPLIED_SERVICES),
             )
         return result
 
@@ -364,13 +375,19 @@ class SQLHandlClient(HandlClient):
         params = {f"rid{i}": rid for i, rid in enumerate(report_ids)}
         # Confirmed live: Make/Model/yearOfManufacture/VehicleVIN live on
         # Policy_KeyClaims (not Policy_Details, which has no vehicle
-        # fields at all), and KeyTypeID/Lookup_KeyType ("Car", "Van",
-        # "Motorbike", ...) is the closest real proxy for "service type"
-        # — Handl has no lockout-vs-cutting-vs-programming breakdown. A
-        # ReportID can have more than one Policy_KeyClaims row (multiple
-        # keys claimed per report), so this takes the earliest one by ID.
+        # fields at all). KeyTypeID/Lookup_KeyType ("Car", "Van", ...) is
+        # broad; loss_type (Policy_Details.LossEventID ->
+        # Lookup_LossEvent_Details) and supplied_service
+        # (Policy_LocksmithDetails' selected row ->
+        # LocksmithSuppliedServicesIds's last id ->
+        # Lookup_LocksmithSuppliedServices) are the more specific
+        # "what actually happened" fields, per the business's own
+        # reporting query. A ReportID can have more than one
+        # Policy_KeyClaims/Policy_LocksmithDetails row, so both are
+        # ranked down to one (earliest key claim by ID; most recent
+        # selected locksmith-details row by ID).
         query = f"""
-            SELECT ReportID, Make, Model, yearOfManufacture, VehicleVIN, KeyType FROM (
+            WITH VehicleRanked AS (
                 SELECT
                     pkc.ReportID,
                     pkc.Make,
@@ -382,8 +399,41 @@ class SQLHandlClient(HandlClient):
                 FROM Policy_KeyClaims pkc
                 LEFT JOIN Lookup_KeyType lkt ON pkc.KeyTypeID = lkt.KeyTypeID
                 WHERE pkc.ReportID IN ({id_placeholders})
-            ) ranked
-            WHERE rn = 1
+            ),
+            LossType AS (
+                SELECT p.ReportID, lle.LossEvent
+                FROM Policy_Details p
+                LEFT JOIN Lookup_LossEvent_Details lle ON p.LossEventID = lle.LossEventID
+                WHERE p.ReportID IN ({id_placeholders})
+            ),
+            SuppliedServiceRanked AS (
+                SELECT
+                    pld.ReportID,
+                    llss.Service AS SuppliedService,
+                    ROW_NUMBER() OVER (PARTITION BY pld.ReportID ORDER BY pld.ID DESC) AS rn
+                FROM Policy_LocksmithDetails pld
+                LEFT JOIN Lookup_LocksmithSuppliedServices llss
+                    ON llss.ID = CASE
+                        WHEN pld.LocksmithSuppliedServicesIds IS NOT NULL
+                        THEN TRY_CAST(
+                            REVERSE(
+                                PARSENAME(
+                                    REPLACE(REVERSE(pld.LocksmithSuppliedServicesIds), ',', '.'),
+                                    1
+                                )
+                            ) AS INT
+                        )
+                        ELSE NULL
+                    END
+                WHERE pld.Selected = 1 AND pld.ReportID IN ({id_placeholders})
+            )
+            SELECT
+                v.ReportID, v.Make, v.Model, v.yearOfManufacture, v.VehicleVIN, v.KeyType,
+                lt.LossEvent, ss.SuppliedService
+            FROM VehicleRanked v
+            LEFT JOIN LossType lt ON v.ReportID = lt.ReportID
+            LEFT JOIN SuppliedServiceRanked ss ON v.ReportID = ss.ReportID AND ss.rn = 1
+            WHERE v.rn = 1
         """
         with self._connection() as conn:
             cursor = conn.cursor()
@@ -397,6 +447,8 @@ class SQLHandlClient(HandlClient):
                 year=str(row["yearOfManufacture"] or ""),
                 vin=row["VehicleVIN"] or "",
                 service_type=row["KeyType"] or "",
+                loss_type=row["LossEvent"] or "",
+                supplied_service=row["SuppliedService"] or "",
             )
             for row in rows
         }

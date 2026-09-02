@@ -88,6 +88,8 @@ def pull_completed_jobs_for_date(for_date: date) -> PullSummary:
             "year": details.year if details else "",
             "vin": details.vin if details else "",
             "service_type": details.service_type if details else "",
+            "loss_type": details.loss_type if details else "",
+            "supplied_service": details.supplied_service if details else "",
             "disposed_skus": ", ".join(disposed_skus.get(report_id, [])),
             "completion_note": completion.note,
         }

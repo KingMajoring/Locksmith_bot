@@ -7,6 +7,7 @@ from apps.locksmiths.models import Locksmith
 
 from .models import CompletedJob, FailureCategory
 from .services.benchmarking import duration_benchmark
+from .services.model_analysis import locksmith_model_failure_breakdown
 from .services.reporting import (
     all_locksmith_summaries,
     failure_category_breakdown,
@@ -66,6 +67,14 @@ def categorize_jobs(request):
     else:
         messages.error(request, "Nothing selected — choose a reason for at least one job.")
     return redirect("job_completion:dashboard")
+
+
+@login_required
+def model_analysis(request):
+    breakdown = locksmith_model_failure_breakdown()
+    return render(
+        request, "job_completion/model_analysis.html", {"breakdown": breakdown}
+    )
 
 
 @login_required

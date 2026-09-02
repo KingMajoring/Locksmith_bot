@@ -43,7 +43,9 @@
       <th>Model</th>
       <th>Year</th>
       <th>VIN</th>
-      <th>Service</th>
+      <th>Type</th>
+      <th>Loss type</th>
+      <th>Supplied service</th>
       <th>Duration</th>
       <th>Parts disposed (SKU)</th>
       <th>Failure category</th>
@@ -58,6 +60,8 @@
       <td>{{ job.year }}</td>
       <td>{{ job.vin }}</td>
       <td>{{ job.service_type }}</td>
+      <td>{{ job.loss_type }}</td>
+      <td>{{ job.supplied_service }}</td>
       <td>{% if job.duration_minutes %}{{ job.duration_minutes }} min{% else %}—{% endif %}</td>
       <td>{{ job.disposed_skus }}</td>
       <td class="{% if job.needs_categorization %}flag{% endif %}">

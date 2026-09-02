@@ -92,7 +92,16 @@ class CompletedJob(models.Model):
     model = models.CharField(max_length=100, blank=True)
     year = models.CharField(max_length=10, blank=True)
     vin = models.CharField(max_length=32, blank=True, verbose_name="VIN")
-    service_type = models.CharField(max_length=100, blank=True)
+    service_type = models.CharField(
+        max_length=100, blank=True, help_text="Handl KeyType, e.g. Car/Van/Motorbike."
+    )
+    loss_type = models.CharField(
+        max_length=100, blank=True, help_text="Handl LossEvent, e.g. Lost Keys/Lockout."
+    )
+    supplied_service = models.CharField(
+        max_length=100, blank=True,
+        help_text="Service the locksmith actually supplied, e.g. Non-Destructive Entry.",
+    )
     disposed_skus = models.CharField(
         max_length=255, blank=True,
         help_text="SKUs of parts disposed against this job (comma-separated, most recent first).",

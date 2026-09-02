@@ -5,10 +5,22 @@
   <title>{% block title %}WGTK Ops Tool{% endblock %}</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
+    * { box-sizing: border-box; }
     body { font-family: system-ui, sans-serif; margin: 0; background: #f5f6f8; color: #1a1a1a; }
-    header { background: #111; color: #fff; padding: 0.75rem 1.5rem; display: flex; justify-content: space-between; align-items: center; }
-    header a { color: #fff; text-decoration: none; font-weight: 600; }
-    main { padding: 1.5rem; max-width: 1100px; margin: 0 auto; }
+    .layout { display: flex; align-items: flex-start; min-height: 100vh; }
+    .sidebar { width: 230px; flex-shrink: 0; background: #111; color: #fff; min-height: 100vh; display: flex; flex-direction: column; }
+    .sidebar .brand { padding: 1rem 1.25rem; font-weight: 700; font-size: 1.1rem; border-bottom: 1px solid #333; }
+    .sidebar .brand a { color: #fff; text-decoration: none; }
+    .sidebar nav { flex: 1; padding: 0.75rem 0; }
+    .sidebar .section { margin-bottom: 0.25rem; }
+    .sidebar .section-title { display: block; padding: 0.5rem 1.25rem; color: #fff; text-decoration: none; font-weight: 600; }
+    .sidebar .section-title:hover { background: #1e1e1e; }
+    .sidebar .sub-link { display: block; padding: 0.35rem 1.25rem 0.35rem 2rem; color: #ccc; text-decoration: none; font-size: 0.9rem; }
+    .sidebar .sub-link:hover { background: #1e1e1e; color: #fff; }
+    .sidebar .sub-link.active { color: #fff; background: #1e1e1e; }
+    .sidebar .user-box { padding: 0.75rem 1.25rem; border-top: 1px solid #333; font-size: 0.85rem; color: #ccc; }
+    .sidebar .user-box a { color: #ccc; }
+    .content { flex: 1; padding: 1.5rem; max-width: 1200px; }
     table { border-collapse: collapse; width: 100%; background: #fff; }
     th, td { border: 1px solid #ddd; padding: 0.5rem 0.75rem; text-align: left; font-size: 0.9rem; }
     th { background: #eee; }
@@ -19,23 +31,35 @@
   </style>
 </head>
 <body>
-  <header>
-    <a href="{% url 'stock_accuracy:dashboard' %}">WGTK Ops Tool</a>
-    <nav>
-      {% if user.is_authenticated %}
-        <a href="{% url 'stock_accuracy:dashboard' %}" style="color:#ccc; margin-right: 0.75rem;">Stock Accuracy</a>
-        <a href="{% url 'job_completion:dashboard' %}" style="color:#ccc; margin-right: 0.75rem;">Job Completion</a>
-        <a href="{% url 'admin:index' %}" style="color:#ccc; margin-right: 0.75rem;">Admin</a>
-        <span>{{ user.email }}</span>
-        &middot; <a href="{% url 'account_logout' %}" style="color:#ccc;">Sign out</a>
-      {% endif %}
-    </nav>
-  </header>
-  <main>
-    {% for message in messages %}
-      <div class="card">{{ message }}</div>
-    {% endfor %}
-    {% block content %}{% endblock %}
-  </main>
+  <div class="layout">
+    {% if user.is_authenticated %}
+    <div class="sidebar">
+      <div class="brand"><a href="{% url 'stock_accuracy:dashboard' %}">WGTK Ops Tool</a></div>
+      <nav>
+        <div class="section">
+          <a class="section-title" href="{% url 'stock_accuracy:dashboard' %}">Stock Accuracy</a>
+        </div>
+        <div class="section">
+          <a class="section-title" href="{% url 'job_completion:dashboard' %}">Job Completion</a>
+          <a class="sub-link" href="{% url 'job_completion:dashboard' %}">Dashboard</a>
+          <a class="sub-link" href="{% url 'job_completion:model_analysis' %}">Model Analysis</a>
+        </div>
+        <div class="section">
+          <a class="section-title" href="{% url 'admin:index' %}">Admin</a>
+        </div>
+      </nav>
+      <div class="user-box">
+        {{ user.email }}<br>
+        <a href="{% url 'account_logout' %}">Sign out</a>
+      </div>
+    </div>
+    {% endif %}
+    <div class="content">
+      {% for message in messages %}
+        <div class="card">{{ message }}</div>
+      {% endfor %}
+      {% block content %}{% endblock %}
+    </div>
+  </div>
 </body>
 </html>

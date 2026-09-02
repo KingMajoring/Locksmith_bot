@@ -248,6 +248,8 @@ class SQLHandlClientTests(TestCase):
                 "yearOfManufacture": 2017,
                 "VehicleVIN": "SJNFAAJ11U1234567",
                 "KeyType": "Car",
+                "LossEvent": "Lost Keys",
+                "SuppliedService": "Key Programming",
             }
         ]
         fake_conn = _fake_connection(rows)
@@ -259,12 +261,16 @@ class SQLHandlClientTests(TestCase):
         query = cursor.execute.call_args_list[0][0][0]
         self.assertIn("Policy_KeyClaims", query)
         self.assertIn("Lookup_KeyType", query)
+        self.assertIn("Lookup_LossEvent_Details", query)
+        self.assertIn("Lookup_LocksmithSuppliedServices", query)
 
         job = details["496390"]
         self.assertEqual(job.make, "NISSAN")
         self.assertEqual(job.year, "2017")
         self.assertEqual(job.vin, "SJNFAAJ11U1234567")
         self.assertEqual(job.service_type, "Car")
+        self.assertEqual(job.loss_type, "Lost Keys")
+        self.assertEqual(job.supplied_service, "Key Programming")
 
     def test_get_job_details_empty_input_returns_empty_without_querying(self):
         client = SQLHandlClient()
