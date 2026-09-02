@@ -1,4 +1,4 @@
-from datetime import date, datetime, timezone as dt_timezone
+from datetime import date, datetime, timedelta, timezone as dt_timezone
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
@@ -11,6 +11,8 @@ from apps.locksmiths.models import Locksmith, OptimoDriverId
 
 from .models import CompletedJob, FailureCategory, SLATarget
 from .services.benchmarking import duration_benchmark
+from .services.costing import parts_cost_for_jobs
+from .services.daily import day_pills, jobs_for_day, next_offset
 from .services.model_analysis import (
     company_model_failure_breakdown,
     locksmith_model_failure_breakdown,
@@ -50,6 +52,14 @@ class FakeHandlClient:
 
     def get_disposed_skus(self, report_ids):
         return {rid: self._disposed_skus[rid] for rid in report_ids if rid in self._disposed_skus}
+
+
+class FakeCostHandlClient:
+    def __init__(self, costs):
+        self._costs = costs
+
+    def get_part_costs(self, skus):
+        return {sku: self._costs[sku] for sku in skus if sku in self._costs}
 
 
 def _make_locksmith(name="WGTK - Test", driver_serial="011"):
@@ -406,6 +416,17 @@ class ViewsSmokeTests(TestCase):
         )
         self.assertEqual(response.status_code, 200)
 
+    def test_jobs_by_day_renders(self):
+        response = self.client.get(reverse("job_completion:jobs_by_day"))
+        self.assertEqual(response.status_code, 200)
+
+    def test_jobs_by_day_with_offset_and_date_renders(self):
+        response = self.client.get(
+            reverse("job_completion:jobs_by_day"), {"offset": 7, "date": "2026-01-01"}
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["selected"], date(2026, 1, 1))
+
     def test_login_required_redirects_anonymous(self):
         self.client.logout()
         response = self.client.get(reverse("job_completion:dashboard"))
@@ -651,3 +672,70 @@ class ModelAnalysisViewTests(TestCase):
         self.client.logout()
         response = self.client.get(reverse("job_completion:model_analysis"))
         self.assertEqual(response.status_code, 302)
+
+
+class DailyJobsTests(TestCase):
+    def test_day_pills_offset_zero_is_last_seven_days_ending_today(self):
+        pills = day_pills(0)
+        self.assertEqual(len(pills), 7)
+        self.assertEqual(pills[0], date.today())
+        self.assertEqual(pills[-1], date.today() - timedelta(days=6))
+
+    def test_day_pills_pages_ten_days_at_a_time(self):
+        pills = day_pills(7)
+        self.assertEqual(len(pills), 10)
+        self.assertEqual(pills[0], date.today() - timedelta(days=7))
+        self.assertEqual(pills[-1], date.today() - timedelta(days=16))
+
+    def test_next_offset_starts_at_seven_then_pages_by_ten(self):
+        self.assertEqual(next_offset(0), 7)
+        self.assertEqual(next_offset(7), 17)
+        self.assertEqual(next_offset(17), 27)
+
+    def test_jobs_for_day_filters_by_job_date(self):
+        locksmith = _make_locksmith()
+        CompletedJob.objects.create(
+            order_no="a", report_id="1", job_date=date(2026, 9, 1),
+            status=CompletedJob.Status.SUCCESS, locksmith=locksmith,
+        )
+        CompletedJob.objects.create(
+            order_no="b", report_id="2", job_date=date(2026, 9, 2),
+            status=CompletedJob.Status.SUCCESS, locksmith=locksmith,
+        )
+        jobs = jobs_for_day(date(2026, 9, 1))
+        self.assertEqual([j.order_no for j in jobs], ["a"])
+
+
+class PartsCostForJobsTests(TestCase):
+    def setUp(self):
+        self.locksmith = _make_locksmith()
+
+    def _make_job(self, order_no, disposed_skus):
+        return CompletedJob.objects.create(
+            order_no=order_no, report_id=order_no, job_date=date(2026, 9, 1),
+            locksmith=self.locksmith, status=CompletedJob.Status.SUCCESS,
+            disposed_skus=disposed_skus,
+        )
+
+    def test_sums_unit_cost_across_disposed_skus(self):
+        job = self._make_job("a", "TK-100, TK-100, TK-101")
+        with patch(
+            "apps.job_completion.services.costing.get_handl_client",
+            return_value=FakeCostHandlClient({"TK-100": 2.5, "TK-101": 10.0}),
+        ):
+            costs = parts_cost_for_jobs([job])
+        self.assertEqual(costs["a"], 15.0)
+
+    def test_jobs_with_no_disposed_skus_are_omitted(self):
+        job = self._make_job("a", "")
+        costs = parts_cost_for_jobs([job])
+        self.assertEqual(costs, {})
+
+    def test_missing_cost_for_a_sku_treated_as_zero(self):
+        job = self._make_job("a", "TK-100, TK-999")
+        with patch(
+            "apps.job_completion.services.costing.get_handl_client",
+            return_value=FakeCostHandlClient({"TK-100": 2.5}),
+        ):
+            costs = parts_cost_for_jobs([job])
+        self.assertEqual(costs["a"], 2.5)

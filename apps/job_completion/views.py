@@ -1,3 +1,5 @@
+from datetime import date
+
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.shortcuts import get_object_or_404, redirect, render
@@ -7,6 +9,8 @@ from apps.locksmiths.models import Locksmith
 
 from .models import CompletedJob, FailureCategory
 from .services.benchmarking import duration_benchmark
+from .services.costing import parts_cost_for_jobs
+from .services.daily import day_pills, jobs_for_day, next_offset
 from .services.model_analysis import (
     MASTER_REASON_LABELS,
     company_model_failure_breakdown,
@@ -84,6 +88,43 @@ def model_analysis(request):
         request,
         "job_completion/model_analysis.html",
         {"breakdown": breakdown, "scope": scope, "master_reason_labels": MASTER_REASON_LABELS},
+    )
+
+
+@login_required
+def jobs_by_day(request):
+    try:
+        offset = max(int(request.GET.get("offset", 0)), 0)
+    except ValueError:
+        offset = 0
+
+    pills = day_pills(offset)
+
+    selected_str = request.GET.get("date")
+    selected = None
+    if selected_str:
+        try:
+            selected = date.fromisoformat(selected_str)
+        except ValueError:
+            selected = None
+    if selected is None:
+        selected = pills[0]
+
+    jobs = list(jobs_for_day(selected))
+    parts_costs = parts_cost_for_jobs(jobs)
+    for job in jobs:
+        job.parts_cost = parts_costs.get(job.order_no)
+
+    return render(
+        request,
+        "job_completion/jobs_by_day.html",
+        {
+            "pills": pills,
+            "selected": selected,
+            "jobs": jobs,
+            "offset": offset,
+            "next_offset": next_offset(offset),
+        },
     )
 
 

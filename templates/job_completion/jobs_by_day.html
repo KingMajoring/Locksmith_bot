@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Jobs by Day — Job Completion{% endblock %}
+{% block content %}
+<h1>Jobs by Day</h1>
+
+<ul class="tabs">
+  {% for d in pills %}
+  <li><a href="?offset={{ offset }}&date={{ d|date:'Y-m-d' }}" class="{% if d == selected %}tab-active{% endif %}">{{ d|date:"D j M" }}</a></li>
+  {% endfor %}
+  <li><a href="?offset={{ next_offset }}">Show earlier days →</a></li>
+</ul>
+
+<div class="card">
+  <h2>{{ selected|date:"l j F Y" }}</h2>
+  {% if jobs %}
+  <table>
+    <tr>
+      <th>Locksmith</th>
+      <th>Order</th>
+      <th>Status</th>
+      <th>Make</th>
+      <th>Model</th>
+      <th>Loss type</th>
+      <th>Duration</th>
+      <th>Parts disposed (SKU)</th>
+      <th>Parts cost</th>
+      <th>Failure category</th>
+    </tr>
+    {% for job in jobs %}
+    <tr>
+      <td>{% if job.locksmith %}<a href="{% url 'job_completion:locksmith_report' job.locksmith.pk %}">{{ job.locksmith.name }}</a>{% else %}Unmatched ({{ job.driver_serial }}){% endif %}</td>
+      <td>{{ job.order_no }}</td>
+      <td>{{ job.get_status_display }}</td>
+      <td>{{ job.make }}</td>
+      <td>{{ job.model }}</td>
+      <td>{{ job.loss_type }}</td>
+      <td>{% if job.duration_minutes %}{{ job.duration_minutes }} min{% else %}—{% endif %}</td>
+      <td>{{ job.disposed_skus }}</td>
+      <td>{% if job.parts_cost %}£{{ job.parts_cost }}{% else %}—{% endif %}</td>
+      <td class="{% if job.needs_categorization %}flag{% endif %}">
+        {{ job.failure_category|default:"" }}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p>No completed jobs on {{ selected }}.</p>
+  {% endif %}
+</div>
+{% endblock %}

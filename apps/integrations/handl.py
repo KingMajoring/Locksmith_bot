@@ -89,6 +89,13 @@ class HandlClient(ABC):
         usage but looked up by ReportID directly rather than
         LookupLocksmithId."""
 
+    @abstractmethod
+    def get_part_costs(self, skus: list[str]) -> dict[str, float]:
+        """Unit cost per SKU, keyed by SKU — same cost basis as Area 1's
+        get_expected_stock (Inventory_Stock's PartValue/Quantity for the
+        most recently priced batch), but not scoped to a locksmith, for
+        costing up a job's disposed_skus in Area 2."""
+
 
 class MockHandlClient(HandlClient):
     """Deterministic fake data for local dev/tests, standing in until the
@@ -212,6 +219,13 @@ class MockHandlClient(HandlClient):
             result[report_id] = [code for code, _name in sample]
         return result
 
+    def get_part_costs(self, skus: list[str]) -> dict[str, float]:
+        result = {}
+        for sku in skus:
+            rng = random.Random(int(hashlib.sha256(sku.encode()).hexdigest(), 16) % (2**32))
+            result[sku] = round(rng.uniform(3, 85), 2)
+        return result
+
 
 class SQLHandlClient(HandlClient):
     """Real Soter (Handl) DB-backed implementation, over pymssql.
@@ -244,6 +258,35 @@ class SQLHandlClient(HandlClient):
             yield conn
         finally:
             conn.close()
+
+    def _fetch_unit_costs(self, cursor, skus: list[str]) -> dict[str, float]:
+        """Shared by get_expected_stock and get_part_costs — same cost
+        basis (Inventory_Stock's PartValue/Quantity for the most
+        recently *priced* batch, see the class docstring), unscoped to
+        any locksmith since a part's cost isn't locksmith-specific."""
+        if not skus:
+            return {}
+        code_placeholders = ", ".join(f"%(code{i})s" for i in range(len(skus)))
+        params = {f"code{i}": code for i, code in enumerate(skus)}
+        query = f"""
+            SELECT part_code, unit_cost FROM (
+                SELECT
+                    ipa.SKU AS part_code,
+                    ist.PartValue / ist.Quantity AS unit_cost,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY ipa.SKU ORDER BY ist.DateCreated DESC
+                    ) AS rn
+                FROM Inventory_Stock ist
+                JOIN Inventory_Parts ipa ON ist.PartId = ipa.Id
+                WHERE ipa.SKU IN ({code_placeholders})
+                  AND ist.PartValue > 0
+                  AND ist.Quantity > 0
+            ) ranked
+            WHERE rn = 1
+        """
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+        return {row["part_code"]: float(row["unit_cost"] or 0) for row in rows}
 
     def get_stock_usage(
         self, soter_locksmith_ids: list[str], since: date
@@ -310,33 +353,15 @@ class SQLHandlClient(HandlClient):
         # all history — that skewed badly, e.g. CR2032 averaged £13.13
         # — and not just the most recent row by date either, since many
         # rows are periodic recount/adjustment noise with
-        # Quantity=0, PartValue=0 and no real price).
-        cost_query = f"""
-            SELECT part_code, unit_cost FROM (
-                SELECT
-                    ipa.SKU AS part_code,
-                    ist.PartValue / ist.Quantity AS unit_cost,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY ipa.SKU ORDER BY ist.DateCreated DESC
-                    ) AS rn
-                FROM Inventory_Stock ist
-                JOIN Inventory_Parts ipa ON ist.PartId = ipa.Id
-                WHERE ipa.SKU IN ({code_placeholders})
-                  AND ist.PartValue > 0
-                  AND ist.Quantity > 0
-            ) ranked
-            WHERE rn = 1
-        """
-        cost_params = {f"code{i}": code for i, code in enumerate(part_codes)}
-
+        # Quantity=0, PartValue=0 and no real price). See
+        # _fetch_unit_costs for the actual query, shared with
+        # get_part_costs below.
         with self._connection() as conn:
             cursor = conn.cursor()
             cursor.execute(qty_query, params)
             qty_rows = cursor.fetchall()
-            cursor.execute(cost_query, cost_params)
-            cost_rows = cursor.fetchall()
+            unit_costs = self._fetch_unit_costs(cursor, part_codes)
 
-        unit_costs = {row["part_code"]: float(row["unit_cost"] or 0) for row in cost_rows}
         return {
             row["part_code"]: ExpectedStock(
                 part_code=row["part_code"],
@@ -488,6 +513,13 @@ class SQLHandlClient(HandlClient):
             report_id = str(row["ReportID"])
             result.setdefault(report_id, []).append(row["SKU"])
         return result
+
+    def get_part_costs(self, skus: list[str]) -> dict[str, float]:
+        if not skus:
+            return {}
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            return self._fetch_unit_costs(cursor, skus)
 
 
 def get_handl_client() -> HandlClient:

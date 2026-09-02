@@ -68,6 +68,15 @@ class MockHandlClientTests(TestCase):
             for sku in skus:
                 self.assertIn(sku, valid_codes)
 
+    def test_get_part_costs_returns_all_requested_skus_and_is_deterministic(self):
+        skus = ["TK-100", "TK-101"]
+        first = self.client.get_part_costs(skus)
+        second = self.client.get_part_costs(skus)
+        self.assertEqual(set(first.keys()), set(skus))
+        self.assertEqual(first, second)
+        for cost in first.values():
+            self.assertGreater(cost, 0)
+
 
 def _fake_connection(rows):
     """A MagicMock usable as `with client._connection() as conn:`, with
@@ -298,6 +307,30 @@ class SQLHandlClientTests(TestCase):
     def test_get_disposed_skus_empty_input_returns_empty_without_querying(self):
         client = SQLHandlClient()
         self.assertEqual(client.get_disposed_skus([]), {})
+
+    def test_get_part_costs_maps_rows_and_uses_same_cost_basis_as_expected_stock(self):
+        rows = [
+            {"part_code": "TK-100", "unit_cost": 2.45},
+            {"part_code": "TK-101", "unit_cost": None},
+        ]
+        fake_conn = _fake_connection(rows)
+        client = SQLHandlClient()
+        with patch.object(client, "_connection", return_value=fake_conn):
+            costs = client.get_part_costs(["TK-100", "TK-101"])
+
+        self.assertEqual(costs["TK-100"], 2.45)
+        self.assertEqual(costs["TK-101"], 0)
+
+        cursor = fake_conn.cursor.return_value
+        query = cursor.execute.call_args[0][0]
+        self.assertIn("ROW_NUMBER()", query)
+        self.assertIn("ist.PartValue / ist.Quantity", query)
+        self.assertIn("ist.PartValue > 0", query)
+        self.assertIn("ist.Quantity > 0", query)
+
+    def test_get_part_costs_empty_input_returns_empty_without_querying(self):
+        client = SQLHandlClient()
+        self.assertEqual(client.get_part_costs([]), {})
 
 
 class GetHandlClientTests(TestCase):
