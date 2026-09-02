@@ -174,6 +174,52 @@ class PullingTests(TestCase):
         job.refresh_from_db()
         self.assertEqual(job.failure_category, category)
 
+    def test_non_numeric_report_id_is_not_sent_to_handl(self):
+        """Regression test: confirmed live that not every Optimo order
+        is a Handl claim — an ad-hoc job's orderNo was literally
+        "Sort flat tyre_2026-01-02", giving a non-numeric "report_id"
+        that broke Handl's integer ReportID column for the whole day's
+        batch, not just that one job."""
+        for_date = date(2026, 1, 2)
+        order_no = f"Sort flat tyre_{for_date.isoformat()}"
+        summaries = [
+            OptimoOrderSummary(
+                order_no=order_no, driver_serial="011", distance_metres=100.0, travel_time_seconds=60
+            )
+        ]
+        completions = {
+            order_no: OptimoCompletion(
+                order_no=order_no,
+                status="success",
+                start_time=datetime(2026, 1, 2, 9, 0, tzinfo=dt_timezone.utc),
+                end_time=datetime(2026, 1, 2, 9, 20, tzinfo=dt_timezone.utc),
+                note="",
+            )
+        }
+
+        class StrictFakeHandlClient:
+            def get_job_details(self, report_ids):
+                assert all(rid.isdigit() for rid in report_ids), report_ids
+                return {}
+
+            def get_disposed_skus(self, report_ids):
+                assert all(rid.isdigit() for rid in report_ids), report_ids
+                return {}
+
+        with patch(
+            "apps.job_completion.services.pulling.get_optimo_client",
+            return_value=FakeOptimoClient(summaries, completions),
+        ), patch(
+            "apps.job_completion.services.pulling.get_handl_client",
+            return_value=StrictFakeHandlClient(),
+        ):
+            summary = pull_completed_jobs_for_date(for_date)
+
+        self.assertEqual(summary.created, 1)
+        job = CompletedJob.objects.get(order_no=order_no)
+        self.assertEqual(job.report_id, "Sort flat tyre")
+        self.assertEqual(job.make, "")
+
 
 class BenchmarkingTests(TestCase):
     def setUp(self):

@@ -56,7 +56,13 @@ def pull_completed_jobs_for_date(for_date: date) -> PullSummary:
         if (completion := completions.get(summary.order_no))
         and completion.status in _COMPLETED_STATUSES
     ]
-    report_ids = [_report_id_from_order_no(s.order_no) for s in completed_summaries]
+    all_report_ids = [_report_id_from_order_no(s.order_no) for s in completed_summaries]
+    # Not every Optimo order is a Handl claim — some are ad-hoc jobs
+    # (confirmed live: one had orderNo starting "Sort flat tyre_...")
+    # with a descriptive orderNo instead of "<ReportID>_<date>". Handl's
+    # ReportID column is an integer, so passing a non-numeric value into
+    # that query breaks the whole batch, not just that one job.
+    report_ids = [rid for rid in all_report_ids if rid.isdigit()]
     job_details = handl.get_job_details(report_ids)
     disposed_skus = handl.get_disposed_skus(report_ids)
 
