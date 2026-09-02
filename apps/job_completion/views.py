@@ -10,7 +10,7 @@ from apps.locksmiths.models import Locksmith
 from .models import CompletedJob, FailureCategory
 from .services.benchmarking import duration_benchmark
 from .services.costing import parts_cost_for_jobs
-from .services.daily import day_pills, jobs_for_day, next_offset, prev_offset
+from .services.daily import day_pills, jobs_for_day, next_offset, prev_offset, summarize_day
 from .services.model_analysis import (
     MASTER_REASON_LABELS,
     company_model_failure_breakdown,
@@ -140,6 +140,7 @@ def jobs_by_day(request):
             "offset": offset,
             "next_offset": next_offset(offset),
             "prev_offset": prev_offset(offset),
+            "summary": summarize_day(jobs),
         },
     )
 

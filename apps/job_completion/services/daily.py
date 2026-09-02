@@ -40,3 +40,26 @@ def jobs_for_day(for_date: date):
         .select_related("locksmith", "failure_category")
         .order_by("locksmith__name", "order_no")
     )
+
+
+def summarize_day(jobs: list) -> dict:
+    """Totals for a day's jobs, for the summary box next to the table.
+    Expects `parts_cost`/`margin` already annotated onto each job (see
+    views.jobs_by_day) — this only sums what's present, so a job
+    missing a Handl figure just doesn't contribute to that total rather
+    than breaking the whole sum.
+    """
+    total_miles = sum(j.distance_miles for j in jobs if j.distance_miles is not None)
+    total_income = sum(j.net_cost for j in jobs if j.net_cost is not None)
+    total_cost = sum(j.parts_cost for j in jobs if getattr(j, "parts_cost", None) is not None)
+    total_margin = sum(j.margin for j in jobs if getattr(j, "margin", None) is not None)
+    locksmith_count = len({j.locksmith_id for j in jobs if j.locksmith_id})
+
+    return {
+        "total_miles": round(total_miles, 1),
+        "total_income": round(total_income, 2),
+        "total_cost": round(total_cost, 2),
+        "total_margin": round(total_margin, 2),
+        "job_count": len(jobs),
+        "locksmith_count": locksmith_count,
+    }

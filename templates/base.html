@@ -33,6 +33,13 @@
     .tabs a { display: inline-block; padding: 0.4rem 0.9rem; border-radius: 4px; text-decoration: none; color: #1a1a1a; background: #e8e9ec; white-space: nowrap; }
     .tabs a.tab-active { background: #111; color: #fff; }
     input[type=number] { width: 5rem; }
+    .day-layout { display: flex; gap: 1rem; align-items: flex-start; }
+    .day-layout .table-wrap { flex: 1; min-width: 0; overflow-x: auto; }
+    .day-summary { width: 220px; flex-shrink: 0; }
+    .day-summary dl { margin: 0; }
+    .day-summary dt { color: #666; font-size: 0.8rem; margin-top: 0.75rem; }
+    .day-summary dt:first-child { margin-top: 0; }
+    .day-summary dd { margin: 0; font-size: 1.2rem; font-weight: 700; }
   </style>
 </head>
 <body>

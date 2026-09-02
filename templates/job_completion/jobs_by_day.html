@@ -16,6 +16,8 @@
 <div class="card">
   <h2>{{ selected|date:"l j F Y" }}</h2>
   {% if jobs %}
+  <div class="day-layout">
+  <div class="table-wrap">
   <table>
     <tr>
       <th>Locksmith</th>
@@ -50,6 +52,24 @@
     </tr>
     {% endfor %}
   </table>
+  </div>
+  <div class="day-summary">
+    <dl>
+      <dt>Jobs</dt>
+      <dd>{{ summary.job_count }}</dd>
+      <dt>Locksmiths</dt>
+      <dd>{{ summary.locksmith_count }}</dd>
+      <dt>Total miles driven</dt>
+      <dd>{{ summary.total_miles }}</dd>
+      <dt>Total client charge</dt>
+      <dd>£{{ summary.total_income }}</dd>
+      <dt>Total parts cost</dt>
+      <dd>£{{ summary.total_cost }}</dd>
+      <dt>Total margin</dt>
+      <dd class="{% if summary.total_margin < 0 %}flag{% endif %}">£{{ summary.total_margin }}</dd>
+    </dl>
+  </div>
+  </div>
   {% else %}
   <p>No completed jobs on {{ selected }}.</p>
   {% endif %}

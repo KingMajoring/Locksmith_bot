@@ -12,7 +12,7 @@ from apps.locksmiths.models import Locksmith, OptimoDriverId
 from .models import CompletedJob, FailureCategory, SLATarget
 from .services.benchmarking import duration_benchmark
 from .services.costing import parts_cost_for_jobs
-from .services.daily import day_pills, jobs_for_day, next_offset, prev_offset
+from .services.daily import day_pills, jobs_for_day, next_offset, prev_offset, summarize_day
 from .services.model_analysis import (
     company_model_failure_breakdown,
     locksmith_model_failure_breakdown,
@@ -468,6 +468,10 @@ class ViewsSmokeTests(TestCase):
         job = response.context["jobs"][0]
         self.assertEqual(job.parts_cost, 30.0)
         self.assertEqual(job.margin, 70.0)
+        self.assertEqual(response.context["summary"]["total_income"], 100.0)
+        self.assertEqual(response.context["summary"]["total_cost"], 30.0)
+        self.assertEqual(response.context["summary"]["total_margin"], 70.0)
+        self.assertEqual(response.context["summary"]["job_count"], 1)
 
     def test_login_required_redirects_anonymous(self):
         self.client.logout()
@@ -752,6 +756,37 @@ class DailyJobsTests(TestCase):
         )
         jobs = jobs_for_day(date(2026, 9, 1))
         self.assertEqual([j.order_no for j in jobs], ["a"])
+
+    def test_summarize_day_totals_across_jobs(self):
+        locksmith_a = _make_locksmith(name="WGTK - A", driver_serial="001")
+        locksmith_b = _make_locksmith(name="WGTK - B", driver_serial="002")
+        job1 = CompletedJob.objects.create(
+            order_no="a", report_id="1", job_date=date(2026, 9, 1),
+            status=CompletedJob.Status.SUCCESS, locksmith=locksmith_a,
+            distance_metres=1609.344, net_cost=100.0,
+        )
+        job1.parts_cost = 30.0
+        job1.margin = 70.0
+        job2 = CompletedJob.objects.create(
+            order_no="b", report_id="2", job_date=date(2026, 9, 1),
+            status=CompletedJob.Status.SUCCESS, locksmith=locksmith_b,
+            distance_metres=1609.344 * 2, net_cost=50.0,
+        )
+        job2.parts_cost = None
+        job2.margin = None
+
+        summary = summarize_day([job1, job2])
+        self.assertEqual(summary["job_count"], 2)
+        self.assertEqual(summary["locksmith_count"], 2)
+        self.assertEqual(summary["total_miles"], 3.0)
+        self.assertEqual(summary["total_income"], 150.0)
+        self.assertEqual(summary["total_cost"], 30.0)
+        self.assertEqual(summary["total_margin"], 70.0)
+
+    def test_summarize_day_empty_jobs_list(self):
+        summary = summarize_day([])
+        self.assertEqual(summary["job_count"], 0)
+        self.assertEqual(summary["total_miles"], 0)
 
 
 class PartsCostForJobsTests(TestCase):
