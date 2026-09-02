@@ -34,18 +34,34 @@ def dashboard(request):
 
 
 @login_required
-def categorize_job(request, pk):
-    job = get_object_or_404(CompletedJob, pk=pk)
-    if request.method == "POST":
-        category_id = request.POST.get("failure_category")
-        if category_id:
-            job.failure_category = get_object_or_404(FailureCategory, pk=category_id)
-            job.categorized_by = request.user
-            job.categorized_at = timezone.now()
-            job.save(update_fields=["failure_category", "categorized_by", "categorized_at"])
-            messages.success(request, f"{job.order_no} categorized as {job.failure_category}.")
-        else:
-            messages.error(request, "Choose a category first.")
+def categorize_jobs(request):
+    """Bulk categorization: the dashboard's "Needs categorization" table
+    is one form with a category dropdown per row and a single "Save
+    all" button, so office staff can pick reasons for several jobs
+    before submitting once — rather than a full page reload per row."""
+    if request.method != "POST":
+        return redirect("job_completion:dashboard")
+
+    categories_by_id = {str(c.pk): c for c in FailureCategory.objects.all()}
+    saved = 0
+    for key, category_id in request.POST.items():
+        if not key.startswith("category_") or not category_id:
+            continue
+        job_pk = key.removeprefix("category_")
+        if not job_pk.isdigit():
+            continue
+        category = categories_by_id.get(category_id)
+        if not category:
+            continue
+        updated = CompletedJob.objects.filter(pk=job_pk).update(
+            failure_category=category, categorized_by=request.user, categorized_at=timezone.now()
+        )
+        saved += updated
+
+    if saved:
+        messages.success(request, f"Categorized {saved} job(s).")
+    else:
+        messages.error(request, "Nothing selected — choose a reason for at least one job.")
     return redirect("job_completion:dashboard")
 
 

@@ -360,50 +360,70 @@ class ViewsSmokeTests(TestCase):
         self.assertEqual(response.status_code, 302)
 
 
-class CategorizeJobViewTests(TestCase):
+class CategorizeJobsBulkViewTests(TestCase):
     def setUp(self):
         self.user = get_user_model().objects.create_user(
             username="office_admin", email="admin@wgtk.co.uk", password="x", is_staff=True
         )
         self.client.force_login(self.user)
-        self.job = CompletedJob.objects.create(
+        self.job1 = CompletedJob.objects.create(
             order_no="a", report_id="1", job_date=date(2026, 9, 1),
             status=CompletedJob.Status.FAILED,
         )
+        self.job2 = CompletedJob.objects.create(
+            order_no="b", report_id="2", job_date=date(2026, 9, 1),
+            status=CompletedJob.Status.FAILED,
+        )
         self.category = FailureCategory.objects.create(name="Customer not present")
+        self.other_category = FailureCategory.objects.create(name="Wrong parts")
 
-    def test_post_sets_category_and_audit_fields(self):
+    def test_post_sets_category_and_audit_fields_for_multiple_jobs_at_once(self):
         response = self.client.post(
-            reverse("job_completion:categorize_job", args=[self.job.pk]),
-            {"failure_category": self.category.pk},
+            reverse("job_completion:categorize_jobs"),
+            {f"category_{self.job1.pk}": self.category.pk, f"category_{self.job2.pk}": self.other_category.pk},
         )
         self.assertRedirects(response, reverse("job_completion:dashboard"))
-        self.job.refresh_from_db()
-        self.assertEqual(self.job.failure_category, self.category)
-        self.assertEqual(self.job.categorized_by, self.user)
-        self.assertIsNotNone(self.job.categorized_at)
+        self.job1.refresh_from_db()
+        self.job2.refresh_from_db()
+        self.assertEqual(self.job1.failure_category, self.category)
+        self.assertEqual(self.job2.failure_category, self.other_category)
+        self.assertEqual(self.job1.categorized_by, self.user)
+        self.assertIsNotNone(self.job1.categorized_at)
 
-    def test_post_without_category_leaves_job_unchanged(self):
-        self.client.post(reverse("job_completion:categorize_job", args=[self.job.pk]), {})
-        self.job.refresh_from_db()
-        self.assertIsNone(self.job.failure_category)
+    def test_rows_left_blank_are_skipped(self):
+        response = self.client.post(
+            reverse("job_completion:categorize_jobs"),
+            {f"category_{self.job1.pk}": self.category.pk, f"category_{self.job2.pk}": ""},
+        )
+        self.assertRedirects(response, reverse("job_completion:dashboard"))
+        self.job1.refresh_from_db()
+        self.job2.refresh_from_db()
+        self.assertEqual(self.job1.failure_category, self.category)
+        self.assertIsNone(self.job2.failure_category)
+
+    def test_nothing_selected_leaves_jobs_unchanged(self):
+        self.client.post(
+            reverse("job_completion:categorize_jobs"),
+            {f"category_{self.job1.pk}": "", f"category_{self.job2.pk}": ""},
+        )
+        self.job1.refresh_from_db()
+        self.assertIsNone(self.job1.failure_category)
 
     def test_login_required(self):
         self.client.logout()
         response = self.client.post(
-            reverse("job_completion:categorize_job", args=[self.job.pk]),
-            {"failure_category": self.category.pk},
+            reverse("job_completion:categorize_jobs"), {f"category_{self.job1.pk}": self.category.pk}
         )
         self.assertEqual(response.status_code, 302)
-        self.job.refresh_from_db()
-        self.assertIsNone(self.job.failure_category)
+        self.job1.refresh_from_db()
+        self.assertIsNone(self.job1.failure_category)
 
-    def test_dashboard_shows_dropdown_for_needs_categorization_job(self):
+    def test_dashboard_shows_dropdown_and_single_save_form(self):
         response = self.client.get(reverse("job_completion:dashboard"))
         self.assertContains(response, "Customer not present")
-        self.assertContains(
-            response, reverse("job_completion:categorize_job", args=[self.job.pk])
-        )
+        self.assertContains(response, reverse("job_completion:categorize_jobs"))
+        self.assertContains(response, f'name="category_{self.job1.pk}"')
+        self.assertContains(response, f'name="category_{self.job2.pk}"')
 
 
 class BackfillCompletedJobsCommandTests(TestCase):
