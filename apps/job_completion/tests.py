@@ -610,10 +610,11 @@ class LocksmithModelFailureBreakdownTests(TestCase):
         breakdown = locksmith_model_failure_breakdown()
         row = breakdown[0]
         self.assertEqual(row["failed"], 5)
-        reasons = {r["label"]: r for r in row["master_reasons"]}
-        self.assertEqual(reasons["Client"]["count"], 1)
-        self.assertAlmostEqual(reasons["Client"]["pct"], 20.0, places=1)
-        self.assertEqual(reasons["Uncategorized"]["count"], 4)
+        cells = {c["label"]: c for c in row["master_reason_cells"]}
+        self.assertEqual(cells["Client"]["count"], 1)
+        self.assertAlmostEqual(cells["Client"]["pct"], 20.0, places=1)
+        self.assertEqual(cells["Uncategorized"]["count"], 4)
+        self.assertEqual(cells["WGTK Office"]["count"], 0)
 
     def test_company_breakdown_aggregates_across_locksmiths(self):
         other = _make_locksmith(name="WGTK - Other", driver_serial="099")

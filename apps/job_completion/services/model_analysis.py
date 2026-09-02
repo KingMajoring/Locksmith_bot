@@ -16,21 +16,21 @@ from .model_normalization import normalize_model
 
 DEFAULT_WINDOW_DAYS = 90
 
+# Fixed column order for the master-reason breakdown — every row gets a
+# cell for every column (zero-filled where a row has none of that
+# reason), so the template can render one column per reason instead of
+# a single free-form summary cell.
+MASTER_REASON_COLUMNS = [*FailureCategory.MasterReason.choices, ("uncategorized", "Uncategorized")]
+MASTER_REASON_LABELS = [label for _key, label in MASTER_REASON_COLUMNS]
 
-def _master_reason_breakdown(reason_counts: dict[str, int]) -> list[dict]:
-    labels = dict(FailureCategory.MasterReason.choices)
-    total_failed = sum(reason_counts.values())
-    if not total_failed:
-        return []
-    breakdown = [
-        {
-            "label": labels.get(key, "Uncategorized"),
-            "count": count,
-            "pct": round(count / total_failed * 100, 1),
-        }
-        for key, count in reason_counts.items()
-    ]
-    return sorted(breakdown, key=lambda e: e["count"], reverse=True)
+
+def _master_reason_cells(reason_counts: dict[str, int], total_failed: int) -> list[dict]:
+    cells = []
+    for key, label in MASTER_REASON_COLUMNS:
+        count = reason_counts.get(key, 0)
+        pct = round(count / total_failed * 100, 1) if total_failed else 0.0
+        cells.append({"label": label, "count": count, "pct": pct})
+    return cells
 
 
 def _model_failure_stats(jobs, group_by_locksmith: bool) -> list[dict]:
@@ -65,7 +65,7 @@ def _model_failure_stats(jobs, group_by_locksmith: bool) -> list[dict]:
         if entry["failed"] == 0:
             continue
         entry["failure_rate_pct"] = round(entry["failed"] / entry["total"] * 100, 1)
-        entry["master_reasons"] = _master_reason_breakdown(entry.pop("_reason_counts"))
+        entry["master_reason_cells"] = _master_reason_cells(entry.pop("_reason_counts"), entry["failed"])
         results.append(entry)
 
     return sorted(results, key=lambda e: (e["failed"], e["failure_rate_pct"]), reverse=True)

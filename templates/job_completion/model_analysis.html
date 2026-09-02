@@ -20,7 +20,7 @@
       <th>Total jobs</th>
       <th>Failed</th>
       <th>Failure rate</th>
-      <th>Master reason breakdown</th>
+      {% for label in master_reason_labels %}<th>{{ label }}</th>{% endfor %}
     </tr>
     {% for row in breakdown %}
     <tr>
@@ -32,9 +32,9 @@
       <td>{{ row.total }}</td>
       <td class="flag">{{ row.failed }}</td>
       <td>{{ row.failure_rate_pct }}%</td>
-      <td>
-        {% for r in row.master_reasons %}{{ r.label }}: {{ r.count }}/{{ row.failed }} ({{ r.pct }}%){% if not forloop.last %}, {% endif %}{% endfor %}
-      </td>
+      {% for cell in row.master_reason_cells %}
+      <td>{% if cell.count %}{{ cell.count }}/{{ row.failed }} ({{ cell.pct }}%){% else %}—{% endif %}</td>
+      {% endfor %}
     </tr>
     {% endfor %}
   </table>

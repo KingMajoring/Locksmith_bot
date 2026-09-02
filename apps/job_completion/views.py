@@ -8,6 +8,7 @@ from apps.locksmiths.models import Locksmith
 from .models import CompletedJob, FailureCategory
 from .services.benchmarking import duration_benchmark
 from .services.model_analysis import (
+    MASTER_REASON_LABELS,
     company_model_failure_breakdown,
     locksmith_model_failure_breakdown,
 )
@@ -80,7 +81,9 @@ def model_analysis(request):
     else:
         breakdown = locksmith_model_failure_breakdown()
     return render(
-        request, "job_completion/model_analysis.html", {"breakdown": breakdown, "scope": scope}
+        request,
+        "job_completion/model_analysis.html",
+        {"breakdown": breakdown, "scope": scope, "master_reason_labels": MASTER_REASON_LABELS},
     )
 
 
