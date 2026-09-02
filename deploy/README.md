@@ -73,6 +73,22 @@ paste the password anywhere else.
 
 ## Redeploying after code changes
 
+Pushes to `claude/multi-area-management-tool-1cn4og` deploy automatically via
+`.github/workflows/deploy.yml` — it runs the test suite, and only deploys if
+that passes. One-time setup: add a repo secret named
+`AZURE_WEBAPP_PUBLISH_PROFILE` (Settings → Secrets and variables → Actions on
+GitHub) containing the output of:
+
+```bash
+az webapp deployment list-publishing-profiles \
+  --resource-group wgtk-ops-tool-rg --name wgtk-ops-tool --xml
+```
+
+Once that secret is set, `git push` is all that's needed — check the
+Actions tab on GitHub for progress/failures.
+
+To deploy manually instead (e.g. from a branch the workflow doesn't watch):
+
 ```bash
 git archive --format=zip -o /tmp/wgtk-ops-tool-deploy.zip HEAD
 az webapp deploy --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" \

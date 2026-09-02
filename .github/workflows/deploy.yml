@@ -1,0 +1,31 @@
+name: Deploy to Azure
+
+on:
+  push:
+    branches:
+      - claude/multi-area-management-tool-1cn4og
+  workflow_dispatch: {}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: python manage.py test
+        env:
+          DJANGO_SETTINGS_MODULE: config.settings.dev
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy to Azure Web App
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: wgtk-ops-tool
+          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
