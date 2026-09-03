@@ -12,6 +12,15 @@ Two things a locksmith can do:
    comes live from Optimo (list_orders_for_date), not the overnight
    CompletedJob pull, since a job assigned today won't be in that table
    until tomorrow's pull runs.
+
+Office/admin staff can also *preview* the portal as any locksmith (see
+start_preview/stop_preview below) without their own login becoming
+locksmith-linked — linking would hand them off to
+RestrictLocksmithsToPortalMiddleware and lock them out of office/admin
+pages until unlinked. Preview mode acts on that locksmith's real data
+(real stock checks, real Handl disposal writes), so it's meant for a
+deliberate, supervised test against a locksmith who knows it's
+happening — not a sandbox.
 """
 from __future__ import annotations
 
@@ -23,17 +32,38 @@ from django.utils import timezone
 from apps.integrations.handl import get_handl_client
 from apps.integrations.optimo import get_optimo_client
 from apps.job_completion.services.pulling import _report_id_from_order_no
+from apps.locksmiths.models import Locksmith
 from apps.stock_accuracy.models import WeeklyStockCheck
 
 from .models import PortalDisposal
 
-
-def _locksmith_or_none(request):
-    return getattr(request.user, "locksmith_profile", None)
+_PREVIEW_SESSION_KEY = "locksmith_portal_preview_id"
 
 
-def _not_a_locksmith(request):
-    messages.error(request, "That page is for locksmiths only.")
+def _locksmith_for_request(request):
+    """The Locksmith this request acts as: the signed-in user's own
+    linked profile, or — for office/admin staff previewing the portal
+    (see start_preview) — the one chosen via session, if any."""
+    profile = getattr(request.user, "locksmith_profile", None)
+    if profile is not None:
+        return profile
+    if request.user.is_staff:
+        preview_id = request.session.get(_PREVIEW_SESSION_KEY)
+        if preview_id:
+            return Locksmith.objects.filter(pk=preview_id, active=True).first()
+    return None
+
+
+def _is_preview(request) -> bool:
+    return getattr(request.user, "locksmith_profile", None) is None
+
+
+def _no_locksmith_access(request):
+    messages.error(
+        request,
+        "That page is for locksmiths only. Office staff can preview it from a "
+        "locksmith's page in the admin (\"Preview portal\").",
+    )
     return redirect("stock_accuracy:dashboard")
 
 
@@ -66,9 +96,9 @@ def _todays_jobs_for(locksmith):
 
 @login_required
 def dashboard(request):
-    locksmith = _locksmith_or_none(request)
+    locksmith = _locksmith_for_request(request)
     if locksmith is None:
-        return _not_a_locksmith(request)
+        return _no_locksmith_access(request)
 
     latest_check = locksmith.stock_checks.order_by("-week_starting").first()
     jobs = _todays_jobs_for(locksmith)
@@ -81,15 +111,16 @@ def dashboard(request):
             "latest_check": latest_check,
             "jobs": jobs,
             "today": timezone.localdate(),
+            "is_preview": _is_preview(request),
         },
     )
 
 
 @login_required
 def stock_check_entry(request, pk):
-    locksmith = _locksmith_or_none(request)
+    locksmith = _locksmith_for_request(request)
     if locksmith is None:
-        return _not_a_locksmith(request)
+        return _no_locksmith_access(request)
 
     weekly_check = get_object_or_404(WeeklyStockCheck, pk=pk, locksmith=locksmith)
     items = weekly_check.items.all()
@@ -121,15 +152,20 @@ def stock_check_entry(request, pk):
     return render(
         request,
         "locksmith_portal/stock_check.html",
-        {"weekly_check": weekly_check, "items": items},
+        {
+            "weekly_check": weekly_check,
+            "items": items,
+            "locksmith": locksmith,
+            "is_preview": _is_preview(request),
+        },
     )
 
 
 @login_required
 def job_detail(request, order_no):
-    locksmith = _locksmith_or_none(request)
+    locksmith = _locksmith_for_request(request)
     if locksmith is None:
-        return _not_a_locksmith(request)
+        return _no_locksmith_access(request)
 
     report_id = _report_id_from_order_no(order_no)
     if report_id is None:
@@ -205,5 +241,41 @@ def job_detail(request, order_no):
     return render(
         request,
         "locksmith_portal/job_detail.html",
-        {"order_no": order_no, "report_id": report_id, "stock_lines": stock_lines},
+        {
+            "order_no": order_no,
+            "report_id": report_id,
+            "stock_lines": stock_lines,
+            "locksmith": locksmith,
+            "is_preview": _is_preview(request),
+        },
     )
+
+
+@login_required
+def start_preview(request, locksmith_id):
+    """Lets office/admin staff view the portal as a chosen locksmith,
+    without their own login becoming locksmith-linked (which would hand
+    them off to RestrictLocksmithsToPortalMiddleware and lock them out
+    of office/admin pages). Linked from the locksmith's admin page.
+
+    Acts on that locksmith's real data — real stock checks, real Handl
+    disposal writes — so this is for a deliberate, supervised test, not
+    a sandbox."""
+    if not request.user.is_staff:
+        messages.error(request, "Only office/admin staff can preview the portal.")
+        return redirect("stock_accuracy:dashboard")
+
+    locksmith = get_object_or_404(Locksmith, pk=locksmith_id, active=True)
+    request.session[_PREVIEW_SESSION_KEY] = locksmith.pk
+    messages.warning(
+        request,
+        f"Previewing the portal as {locksmith.name} — stock counts and disposals "
+        "here affect their real data. Use \"Stop previewing\" when you're done.",
+    )
+    return redirect("locksmith_portal:dashboard")
+
+
+@login_required
+def stop_preview(request):
+    request.session.pop(_PREVIEW_SESSION_KEY, None)
+    return redirect("stock_accuracy:dashboard")

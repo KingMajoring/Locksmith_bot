@@ -252,3 +252,61 @@ class JobDetailTests(TestCase):
         self.client.logout()
         url = reverse("locksmith_portal:job_detail", args=[self.order_no])
         self.assertEqual(self.client.get(url).status_code, 302)
+
+
+class StaffPreviewTests(TestCase):
+    """Lets office/admin staff try the portal as a chosen locksmith
+    without their own login becoming locksmith-linked (which would
+    trigger RestrictLocksmithsToPortalMiddleware and lock them out of
+    office/admin pages) — see views.start_preview/stop_preview."""
+
+    def setUp(self):
+        self.locksmith, _real_user = _make_locksmith_user(
+            email="dean@wgtk.co.uk", soter_ids=("885",), driver_serials=("011",)
+        )
+        self.staff_user = User.objects.create_user(
+            username="office@wgtk.co.uk", email="office@wgtk.co.uk", password="x", is_staff=True
+        )
+        self.client.force_login(self.staff_user)
+
+    def test_non_staff_cannot_start_preview(self):
+        non_staff = User.objects.create_user(
+            username="nobody@wgtk.co.uk", email="nobody@wgtk.co.uk", password="x"
+        )
+        self.client.force_login(non_staff)
+        url = reverse("locksmith_portal:start_preview", args=[self.locksmith.pk])
+        response = self.client.get(url)
+        self.assertRedirects(response, reverse("stock_accuracy:dashboard"))
+        self.assertNotIn("locksmith_portal_preview_id", self.client.session)
+
+    def test_staff_start_preview_then_dashboard_shows_that_locksmith(self):
+        start_url = reverse("locksmith_portal:start_preview", args=[self.locksmith.pk])
+        response = self.client.get(start_url)
+        self.assertRedirects(response, reverse("locksmith_portal:dashboard"))
+
+        response = self.client.get(reverse("locksmith_portal:dashboard"))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["locksmith"], self.locksmith)
+        self.assertTrue(response.context["is_preview"])
+
+    def test_staff_stays_staff_while_previewing(self):
+        # Previewing must not make RestrictLocksmithsToPortalMiddleware
+        # treat this account as a real locksmith — it should still be
+        # able to reach office pages.
+        self.client.get(reverse("locksmith_portal:start_preview", args=[self.locksmith.pk]))
+        response = self.client.get(reverse("stock_accuracy:dashboard"))
+        self.assertEqual(response.status_code, 200)
+
+    def test_stop_preview_clears_session_and_blocks_portal_again(self):
+        self.client.get(reverse("locksmith_portal:start_preview", args=[self.locksmith.pk]))
+        response = self.client.get(reverse("locksmith_portal:stop_preview"))
+        self.assertRedirects(response, reverse("stock_accuracy:dashboard"))
+
+        response = self.client.get(reverse("locksmith_portal:dashboard"))
+        self.assertRedirects(response, reverse("stock_accuracy:dashboard"))
+
+    def test_preview_of_inactive_locksmith_404s(self):
+        self.locksmith.active = False
+        self.locksmith.save(update_fields=["active"])
+        url = reverse("locksmith_portal:start_preview", args=[self.locksmith.pk])
+        self.assertEqual(self.client.get(url).status_code, 404)

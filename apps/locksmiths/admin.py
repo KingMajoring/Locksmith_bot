@@ -1,6 +1,8 @@
 from collections import Counter
 
 from django.contrib import admin
+from django.urls import reverse
+from django.utils.html import format_html
 
 from .models import Locksmith, OptimoDriverId, SoterLocksmithId
 
@@ -46,7 +48,7 @@ def assign_stock_check_schedule(modeladmin, request, queryset):
 class LocksmithAdmin(admin.ModelAdmin):
     list_display = (
         "name", "soter_ids_display", "email", "has_schedule", "portal_linked",
-        "sees_all_jobs_for_testing", "active",
+        "sees_all_jobs_for_testing", "active", "preview_link",
     )
     list_filter = ("active", "sees_all_jobs_for_testing")
     search_fields = ("name", "email", "soter_ids__soter_locksmith_id")
@@ -70,3 +72,12 @@ class LocksmithAdmin(admin.ModelAdmin):
     @admin.display(description="Has schedule", boolean=True)
     def has_schedule(self, obj):
         return hasattr(obj, "stock_check_schedule")
+
+    @admin.display(description="Portal")
+    def preview_link(self, obj):
+        # Lets office/admin staff try the self-service portal as this
+        # locksmith without their own login becoming locksmith-linked
+        # (see apps.locksmith_portal.views.start_preview) — acts on
+        # their real data, so use with care.
+        url = reverse("locksmith_portal:start_preview", args=[obj.pk])
+        return format_html('<a href="{}">Preview portal →</a>', url)

@@ -26,14 +26,29 @@
     .empty { color: #666; font-style: italic; }
     .back-link { display: inline-block; margin-bottom: 0.75rem; color: #444; text-decoration: none; font-size: 0.9rem; }
     .sub { color: #888; font-size: 0.8rem; }
+    .preview-banner { background: #e8f0ff; border: 1px solid #99b8f5; border-radius: 8px; padding: 0.75rem 1rem; margin-bottom: 1rem; font-size: 0.9rem; }
+    .preview-banner a { color: #1a1a1a; }
   </style>
 </head>
 <body>
   <header>
     <a href="{% url 'locksmith_portal:dashboard' %}">WGTK Locksmith Portal</a>
-    <span class="signout"><a href="{% url 'account_logout' %}">Sign out</a></span>
+    <span class="signout">
+      {% if is_preview %}
+        <a href="{% url 'locksmith_portal:stop_preview' %}">Stop previewing</a>
+      {% else %}
+        <a href="{% url 'account_logout' %}">Sign out</a>
+      {% endif %}
+    </span>
   </header>
   <main>
+    {% if is_preview %}
+      <div class="preview-banner">
+        Previewing as <strong>{{ locksmith.name }}</strong> — stock counts and
+        disposals here affect their real data.
+        <a href="{% url 'locksmith_portal:stop_preview' %}">Stop previewing</a>
+      </div>
+    {% endif %}
     {% for message in messages %}
       <div class="msg">{{ message }}</div>
     {% endfor %}
