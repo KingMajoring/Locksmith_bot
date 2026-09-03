@@ -44,7 +44,8 @@ class Command(BaseCommand):
             total_updated += summary.updated
             self.stdout.write(
                 f"[{day_num}/{total_days}] {current}: {summary.created} created, "
-                f"{summary.updated} updated, {summary.skipped_not_completed} skipped."
+                f"{summary.updated} updated, {summary.skipped_not_completed} skipped, "
+                f"{summary.skipped_admin} admin entries skipped."
             )
             current += timedelta(days=1)
 

@@ -195,12 +195,16 @@ class PullingTests(TestCase):
         job.refresh_from_db()
         self.assertEqual(job.failure_category, category)
 
-    def test_non_numeric_report_id_is_not_sent_to_handl(self):
+    def test_non_numeric_report_id_is_not_sent_to_handl_or_stored(self):
         """Regression test: confirmed live that not every Optimo order
-        is a Handl claim — an ad-hoc job's orderNo was literally
-        "Sort flat tyre_2026-01-02", giving a non-numeric "report_id"
-        that broke Handl's integer ReportID column for the whole day's
-        batch, not just that one job."""
+        is a Handl claim — an ad-hoc/admin entry's orderNo was literally
+        "Sort flat tyre_2026-01-02" (also seen live: "**HALF DAY TODAY**
+        UP TO 20 MIN VAN & STOCK CHECK", "SEND KEY TO CHARLEY"), giving a
+        non-numeric "report_id" that (a) broke Handl's integer ReportID
+        column for the whole day's batch, not just that one job, and
+        (b) isn't a real locksmith job at all, so it must not be stored
+        as a CompletedJob — polluting job counts and cost/margin totals
+        with blank-detail rows."""
         for_date = date(2026, 1, 2)
         order_no = f"Sort flat tyre_{for_date.isoformat()}"
         summaries = [
@@ -236,10 +240,9 @@ class PullingTests(TestCase):
         ):
             summary = pull_completed_jobs_for_date(for_date)
 
-        self.assertEqual(summary.created, 1)
-        job = CompletedJob.objects.get(order_no=order_no)
-        self.assertEqual(job.report_id, "Sort flat tyre")
-        self.assertEqual(job.make, "")
+        self.assertEqual(summary.created, 0)
+        self.assertEqual(summary.skipped_admin, 1)
+        self.assertFalse(CompletedJob.objects.filter(order_no=order_no).exists())
 
 
 class BenchmarkingTests(TestCase):
@@ -587,6 +590,37 @@ class BackfillCompletedJobsCommandTests(TestCase):
                 "backfill_completed_jobs", "--start", "2026-02-01", "--end", "2026-01-01", stderr=err
             )
         mock_pull.assert_not_called()
+
+
+class CleanupAdminJobsCommandTests(TestCase):
+    def setUp(self):
+        self.locksmith = _make_locksmith()
+        self.real_job = CompletedJob.objects.create(
+            order_no=f"1001_{date(2026, 1, 2).isoformat()}", report_id="1001",
+            job_date=date(2026, 1, 2), locksmith=self.locksmith,
+            status=CompletedJob.Status.SUCCESS,
+        )
+        self.admin_job = CompletedJob.objects.create(
+            order_no=f"Sort flat tyre_{date(2026, 1, 2).isoformat()}", report_id="Sort flat tyre",
+            job_date=date(2026, 1, 2), locksmith=self.locksmith,
+            status=CompletedJob.Status.SUCCESS,
+        )
+
+    def test_deletes_only_non_numeric_report_id_jobs(self):
+        from django.core.management import call_command
+
+        call_command("cleanup_admin_jobs")
+
+        self.assertFalse(CompletedJob.objects.filter(pk=self.admin_job.pk).exists())
+        self.assertTrue(CompletedJob.objects.filter(pk=self.real_job.pk).exists())
+
+    def test_dry_run_deletes_nothing(self):
+        from django.core.management import call_command
+
+        call_command("cleanup_admin_jobs", "--dry-run")
+
+        self.assertTrue(CompletedJob.objects.filter(pk=self.admin_job.pk).exists())
+        self.assertTrue(CompletedJob.objects.filter(pk=self.real_job.pk).exists())
 
 
 class NormalizeModelTests(TestCase):

@@ -31,6 +31,7 @@ class PullSummary:
     created: int
     updated: int
     skipped_not_completed: int
+    skipped_admin: int = 0
 
 
 def _report_id_from_order_no(order_no: str) -> str:
@@ -56,19 +57,27 @@ def pull_completed_jobs_for_date(for_date: date) -> PullSummary:
         if (completion := completions.get(summary.order_no))
         and completion.status in _COMPLETED_STATUSES
     ]
-    all_report_ids = [_report_id_from_order_no(s.order_no) for s in completed_summaries]
-    # Not every Optimo order is a Handl claim — some are ad-hoc jobs
-    # (confirmed live: one had orderNo starting "Sort flat tyre_...")
-    # with a descriptive orderNo instead of "<ReportID>_<date>". Handl's
-    # ReportID column is an integer, so passing a non-numeric value into
-    # that query breaks the whole batch, not just that one job.
-    report_ids = [rid for rid in all_report_ids if rid.isdigit()]
+
+    # Not every completed Optimo order is a real locksmith job — some are
+    # internal/admin housekeeping entries (confirmed live: orderNo values
+    # like "**HALF DAY TODAY** UP TO 20 MIN VAN & STOCK CHECK" and "SEND
+    # KEY TO CHARLEY", not "<ReportID>_<date>"). These have no numeric
+    # ReportID at all, so they're not Handl claims and must never be
+    # stored as a CompletedJob — not just skipped for the Handl lookup,
+    # which used to leave them in with blank make/model/etc, polluting
+    # job counts and cost/margin totals.
+    job_summaries = [
+        s for s in completed_summaries if _report_id_from_order_no(s.order_no).isdigit()
+    ]
+    skipped_admin = len(completed_summaries) - len(job_summaries)
+
+    report_ids = [_report_id_from_order_no(s.order_no) for s in job_summaries]
     job_details = handl.get_job_details(report_ids)
     disposed_skus = handl.get_disposed_skus(report_ids)
 
     created = 0
     updated = 0
-    for summary in completed_summaries:
+    for summary in job_summaries:
         completion = completions[summary.order_no]
         report_id = _report_id_from_order_no(summary.order_no)
         details = job_details.get(report_id)
@@ -104,5 +113,8 @@ def pull_completed_jobs_for_date(for_date: date) -> PullSummary:
 
     skipped_not_completed = len(order_summaries) - len(completed_summaries)
     return PullSummary(
-        created=created, updated=updated, skipped_not_completed=skipped_not_completed
+        created=created,
+        updated=updated,
+        skipped_not_completed=skipped_not_completed,
+        skipped_admin=skipped_admin,
     )

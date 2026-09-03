@@ -29,5 +29,6 @@ class Command(BaseCommand):
         summary = pull_completed_jobs_for_date(for_date)
         self.stdout.write(
             f"{for_date}: {summary.created} created, {summary.updated} updated, "
-            f"{summary.skipped_not_completed} not yet completed (skipped)."
+            f"{summary.skipped_not_completed} not yet completed (skipped), "
+            f"{summary.skipped_admin} admin/housekeeping entries (skipped)."
         )
