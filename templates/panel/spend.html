@@ -6,10 +6,16 @@
    charged — quoted price plus WGTK's fee.</p>
 
 <ul class="tabs">
+  {% if is_ytd %}
+  <li><a href="?">&larr; Back to monthly view</a></li>
+  <li><a class="tab-active">{{ period_label }}</a></li>
+  {% else %}
   <li><a href="?months_ago={{ prev_months_ago }}">&larr; Previous month</a></li>
-  <li><a class="tab-active">{{ month_start|date:"F Y" }}</a></li>
+  <li><a class="tab-active">{{ period_label }}</a></li>
   {% if next_months_ago is not None %}
   <li><a href="?months_ago={{ next_months_ago }}">Next month &rarr;</a></li>
+  {% endif %}
+  <li><a href="?view=ytd">Year to date</a></li>
   {% endif %}
 </ul>
 
@@ -38,7 +44,7 @@
     {% endfor %}
   </table>
   {% else %}
-  <p class="empty">No panel jobs logged for {{ month_start|date:"F Y" }}.</p>
+  <p class="empty">No panel jobs logged for {{ period_label }}.</p>
   {% endif %}
 </div>
 {% endblock %}

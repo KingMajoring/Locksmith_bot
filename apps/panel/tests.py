@@ -7,7 +7,7 @@ from django.urls import reverse
 
 from apps.integrations.handl import PanelDailyFigures
 
-from .services.spend import month_bounds, panel_spend_for_month
+from .services.spend import month_bounds, panel_spend_for_month, panel_spend_year_to_date
 
 
 class FakePanelHandlClient:
@@ -159,6 +159,48 @@ class PanelSpendForMonthTests(TestCase):
         self.assertEqual(totals.selling_cost, 80.0)
 
 
+class PanelSpendYearToDateTests(TestCase):
+    def _run(self, figures, today=date(2026, 9, 15)):
+        with patch(
+            "apps.panel.services.spend.get_handl_client",
+            return_value=FakePanelHandlClient(figures),
+        ):
+            return panel_spend_year_to_date(today=today)
+
+    def test_includes_jobs_from_january_through_today(self):
+        figures = [
+            _figure("ABC Locksmiths", date(2026, 1, 1), 1, 10.0, 50.0),
+            _figure("ABC Locksmiths", date(2026, 9, 15), 1, 20.0, 80.0),
+        ]
+        rows, _totals, period_start = self._run(figures)
+        self.assertEqual(period_start, date(2026, 1, 1))
+        self.assertEqual(rows[0].job_count, 2)
+
+    def test_excludes_jobs_from_before_this_year_or_after_today(self):
+        figures = [
+            _figure("ABC Locksmiths", date(2025, 12, 31), 1, 10.0, 50.0),  # last year
+            _figure("ABC Locksmiths", date(2026, 9, 15), 1, 20.0, 80.0),  # today
+            _figure("ABC Locksmiths", date(2026, 9, 16), 1, 20.0, 80.0),  # tomorrow
+        ]
+        rows, _totals, _period_start = self._run(figures, today=date(2026, 9, 15))
+        self.assertEqual(rows[0].job_count, 1)
+
+    def test_totals_aggregate_same_as_monthly_view(self):
+        figures = [
+            _figure("ABC Locksmiths", date(2026, 3, 1), 1, 10.0, 50.0),
+            _figure("XYZ Locksmiths", date(2026, 7, 1), 1, 20.0, 80.0),
+        ]
+        _rows, totals, _period_start = self._run(figures)
+        self.assertEqual(totals.job_count, 2)
+        self.assertEqual(totals.total_quoted_price, 100.0)  # (50-10) + (80-20)
+        self.assertEqual(totals.selling_cost, 130.0)  # 50 + 80
+
+    def test_no_jobs_returns_empty_list(self):
+        rows, totals, _period_start = self._run([])
+        self.assertEqual(rows, [])
+        self.assertEqual(totals.job_count, 0)
+
+
 class PanelSpendViewTests(TestCase):
     def setUp(self):
         self.user = get_user_model().objects.create_user(
@@ -219,3 +261,34 @@ class PanelSpendViewTests(TestCase):
         self.client.logout()
         response = self.client.get(reverse("panel:spend"))
         self.assertEqual(response.status_code, 302)
+
+    def test_ytd_view_shows_jobs_from_earlier_in_the_year(self):
+        today = date.today()
+        earlier_this_year = date(today.year, 1, 2)
+        figures = [_figure("January Locksmiths", earlier_this_year, 1, 50.0, 150.0)]
+        with patch(
+            "apps.panel.services.spend.get_handl_client",
+            return_value=FakePanelHandlClient(figures),
+        ):
+            response = self.client.get(reverse("panel:spend"), {"view": "ytd"})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "January Locksmiths")
+        self.assertContains(response, "Year to date")
+        self.assertContains(response, "Back to monthly view")
+
+    def test_ytd_view_hides_month_navigation(self):
+        with patch(
+            "apps.panel.services.spend.get_handl_client",
+            return_value=FakePanelHandlClient([]),
+        ):
+            response = self.client.get(reverse("panel:spend"), {"view": "ytd"})
+        self.assertNotContains(response, "Previous month")
+        self.assertNotContains(response, "Next month")
+
+    def test_monthly_view_shows_year_to_date_link(self):
+        with patch(
+            "apps.panel.services.spend.get_handl_client",
+            return_value=FakePanelHandlClient([]),
+        ):
+            response = self.client.get(reverse("panel:spend"))
+        self.assertContains(response, "Year to date")
