@@ -19,7 +19,11 @@ from .services.model_analysis import (
     locksmith_model_failure_breakdown,
 )
 from .services.model_normalization import normalize_model
-from .services.pulling import _report_id_from_order_no, pull_completed_jobs_for_date
+from .services.pulling import (
+    _report_id_from_order_no,
+    pull_completed_jobs_for_date,
+    refresh_missing_financials,
+)
 from .services.reporting import (
     all_locksmith_summaries,
     failure_category_breakdown,
@@ -316,6 +320,111 @@ class ReportIdFromOrderNoTests(TestCase):
         self.assertIsNone(_report_id_from_order_no("SEND KEY TO CHARLEY"))
         self.assertIsNone(_report_id_from_order_no("**HALF DAY TODAY** UP TO 20 MIN VAN & STOCK CHECK"))
         self.assertIsNone(_report_id_from_order_no("1-2-1 with Josh"))
+
+
+class RefreshMissingFinancialsTests(TestCase):
+    """Handl's Policy_Financial rows are often entered days after a job
+    completes, after the one-time nightly pull already froze net_cost as
+    NULL — refresh_missing_financials re-checks recent jobs still
+    missing it and fills in whatever's landed in Handl since."""
+
+    def setUp(self):
+        self.locksmith = _make_locksmith()
+        self.today = date(2026, 9, 3)
+
+    def _job(self, order_no, report_id, job_date, net_cost=None):
+        return CompletedJob.objects.create(
+            order_no=order_no,
+            report_id=report_id,
+            job_date=job_date,
+            locksmith=self.locksmith,
+            status=CompletedJob.Status.SUCCESS,
+            net_cost=net_cost,
+        )
+
+    def test_fills_in_net_cost_once_available_in_handl(self):
+        self._job("A", "2001", self.today - timedelta(days=5))
+        details = {
+            "2001": JobDetails(
+                report_id="2001", make="Ford", model="Focus", year="2020",
+                vin="VIN2001", service_type="Car", loss_type="Lockout",
+                supplied_service="Non-Destructive Entry", net_cost=145.5,
+            ),
+        }
+        with patch(
+            "apps.job_completion.services.pulling.get_handl_client",
+            return_value=FakeHandlClient(details),
+        ), patch("apps.job_completion.services.pulling.date") as mock_date:
+            mock_date.today.return_value = self.today
+            refreshed = refresh_missing_financials()
+
+        self.assertEqual(refreshed, 1)
+        job = CompletedJob.objects.get(order_no="A")
+        self.assertEqual(job.net_cost, 145.5)
+        self.assertEqual(job.make, "Ford")
+
+    def test_leaves_job_alone_when_still_not_in_handl(self):
+        self._job("A", "2001", self.today - timedelta(days=5))
+
+        with patch(
+            "apps.job_completion.services.pulling.get_handl_client",
+            return_value=FakeHandlClient({}),
+        ), patch("apps.job_completion.services.pulling.date") as mock_date:
+            mock_date.today.return_value = self.today
+            refreshed = refresh_missing_financials()
+
+        self.assertEqual(refreshed, 0)
+        job = CompletedJob.objects.get(order_no="A")
+        self.assertIsNone(job.net_cost)
+
+    def test_ignores_jobs_that_already_have_net_cost(self):
+        self._job("A", "2001", self.today - timedelta(days=5), net_cost=50.0)
+
+        class StrictFakeHandlClient:
+            def get_job_details(self, report_ids):
+                raise AssertionError("should not query Handl when nothing is missing")
+
+        with patch(
+            "apps.job_completion.services.pulling.get_handl_client",
+            return_value=StrictFakeHandlClient(),
+        ), patch("apps.job_completion.services.pulling.date") as mock_date:
+            mock_date.today.return_value = self.today
+            refreshed = refresh_missing_financials()
+
+        self.assertEqual(refreshed, 0)
+
+    def test_ignores_jobs_older_than_the_window(self):
+        self._job("A", "2001", self.today - timedelta(days=90))
+        details = {
+            "2001": JobDetails(
+                report_id="2001", make="Ford", model="Focus", year="2020",
+                vin="VIN2001", service_type="Car", loss_type="Lockout",
+                supplied_service="Non-Destructive Entry", net_cost=145.5,
+            ),
+        }
+        with patch(
+            "apps.job_completion.services.pulling.get_handl_client",
+            return_value=FakeHandlClient(details),
+        ), patch("apps.job_completion.services.pulling.date") as mock_date:
+            mock_date.today.return_value = self.today
+            refreshed = refresh_missing_financials(window_days=60)
+
+        self.assertEqual(refreshed, 0)
+        job = CompletedJob.objects.get(order_no="A")
+        self.assertIsNone(job.net_cost)
+
+    def test_no_jobs_missing_net_cost_returns_zero_without_querying_handl(self):
+        class StrictFakeHandlClient:
+            def get_job_details(self, report_ids):
+                raise AssertionError("should not query Handl when nothing is missing")
+
+        with patch(
+            "apps.job_completion.services.pulling.get_handl_client",
+            return_value=StrictFakeHandlClient(),
+        ):
+            refreshed = refresh_missing_financials()
+
+        self.assertEqual(refreshed, 0)
 
 
 class BenchmarkingTests(TestCase):

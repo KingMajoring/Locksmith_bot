@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 
 from apps.integrations.handl import get_handl_client
 from apps.integrations.optimo import get_optimo_client
@@ -144,3 +144,47 @@ def pull_completed_jobs_for_date(for_date: date) -> PullSummary:
         skipped_not_completed=skipped_not_completed,
         skipped_admin=skipped_admin,
     )
+
+
+def refresh_missing_financials(window_days: int = 60) -> int:
+    """Re-fetch Handl job details for CompletedJob rows still missing
+    net_cost.
+
+    The nightly pull only ever looks at a job once, the morning after it
+    completes — but Policy_Financial rows are often entered by the office
+    days later, after invoicing, so net_cost is stored as NULL and never
+    revisited. This re-checks recent jobs still missing it and fills in
+    whatever's landed in Handl since. Older jobs are treated as a lost
+    cause — if the financial data hasn't turned up within window_days,
+    it's not coming. Returns the number of jobs refreshed.
+    """
+    cutoff = date.today() - timedelta(days=window_days)
+    jobs = list(CompletedJob.objects.filter(net_cost__isnull=True, job_date__gte=cutoff))
+    if not jobs:
+        return 0
+
+    handl = get_handl_client()
+    report_ids = list({job.report_id for job in jobs if job.report_id})
+    job_details = handl.get_job_details(report_ids)
+
+    refreshed = 0
+    for job in jobs:
+        details = job_details.get(job.report_id)
+        if details is None or details.net_cost is None:
+            continue
+        job.make = details.make
+        job.model = details.model
+        job.year = details.year
+        job.vin = details.vin
+        job.service_type = details.service_type
+        job.loss_type = details.loss_type
+        job.supplied_service = details.supplied_service
+        job.net_cost = details.net_cost
+        job.save(
+            update_fields=[
+                "make", "model", "year", "vin", "service_type",
+                "loss_type", "supplied_service", "net_cost",
+            ]
+        )
+        refreshed += 1
+    return refreshed
