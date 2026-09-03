@@ -37,6 +37,7 @@ INSTALLED_APPS = [
     "apps.stock_accuracy",
     "apps.job_completion",
     "apps.locksmith_portal",
+    "apps.panel",
 ]
 
 MIDDLEWARE = [

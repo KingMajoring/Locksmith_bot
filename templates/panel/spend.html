@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Panel Spend{% endblock %}
+{% block content %}
+<h1>Panel Spend</h1>
+<p>Month to date, by panel/subcontractor locksmith. WGTK margin is what the client was charged
+   (net cost) minus what the panel locksmith quoted WGTK for the job.</p>
+
+<div class="card">
+  {% if rows %}
+  <table>
+    <tr>
+      <th>Locksmith</th>
+      <th>Jobs</th>
+      <th>Total quoted price</th>
+      <th>Total client charge</th>
+      <th>WGTK margin</th>
+    </tr>
+    {% for row in rows %}
+    <tr>
+      <td>{{ row.locksmith_name }}</td>
+      <td>{{ row.job_count }}</td>
+      <td>{% if row.total_quoted_price is not None %}£{{ row.total_quoted_price }}{% else %}—{% endif %}</td>
+      <td>{% if row.total_net_cost is not None %}£{{ row.total_net_cost }}{% else %}—{% endif %}</td>
+      <td class="{% if row.margin is not None and row.margin < 0 %}flag{% endif %}">{% if row.margin is not None %}£{{ row.margin }}{% else %}—{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="empty">No panel jobs logged so far this month.</p>
+  {% endif %}
+</div>
+{% endblock %}

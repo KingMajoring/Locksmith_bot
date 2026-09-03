@@ -61,6 +61,15 @@ class JobDetails:
     net_cost: float | None
 
 
+@dataclass(frozen=True)
+class PanelJobSpend:
+    report_id: str
+    locksmith_name: str
+    logged_date: date | None
+    quoted_price: float | None
+    net_cost: float | None
+
+
 class HandlClient(ABC):
     @abstractmethod
     def get_stock_usage(
@@ -98,6 +107,18 @@ class HandlClient(ABC):
         Area 2 (Job Completion), same disposal data as Area 1's stock
         usage but looked up by ReportID directly rather than
         LookupLocksmithId."""
+
+    @abstractmethod
+    def get_panel_jobs(self, start_date: date, end_date: date) -> list[PanelJobSpend]:
+        """Every claim logged to a non-WGTK (panel/subcontractor)
+        locksmith with a LoggedDate in [start_date, end_date) — for the
+        Panel Spend report (Area 4). One row per Handl ReportID: the
+        panel locksmith's name (Lookup_Locksmiths, WGTKLocksmith=0), the
+        price they quoted WGTK for the job (Policy_LocksmithDetails
+        .QuotedPrice, on the Selected=1 row), and what WGTK invoiced the
+        client for it (Policy_Financial.NetCost, summed) — WGTK's margin
+        on a panel job is net_cost - quoted_price, computed by the
+        caller since either side can be None (not yet invoiced/quoted)."""
 
     @abstractmethod
     def get_part_costs(self, skus: list[str]) -> dict[str, float]:
@@ -278,6 +299,34 @@ class MockHandlClient(HandlClient):
         for sku in skus:
             rng = random.Random(int(hashlib.sha256(sku.encode()).hexdigest(), 16) % (2**32))
             result[sku] = round(rng.uniform(3, 85), 2)
+        return result
+
+    _PANEL_LOCKSMITHS = ["ABC Locksmiths", "Fast Key Solutions", "North London Locks"]
+
+    def get_panel_jobs(self, start_date: date, end_date: date) -> list[PanelJobSpend]:
+        rng = random.Random(int(hashlib.sha256(f"{start_date}:{end_date}".encode()).hexdigest(), 16) % (2**32))
+        result = []
+        report_id = 500000
+        current = start_date
+        while current < end_date:
+            for name in self._PANEL_LOCKSMITHS:
+                if rng.random() < 0.6:
+                    quoted = round(rng.uniform(80, 220), 2)
+                    result.append(
+                        PanelJobSpend(
+                            report_id=str(report_id),
+                            locksmith_name=name,
+                            logged_date=current,
+                            quoted_price=quoted,
+                            net_cost=(
+                                round(quoted * rng.uniform(1.1, 1.4), 2)
+                                if rng.random() < 0.85
+                                else None
+                            ),
+                        )
+                    )
+                    report_id += 1
+            current = current + timedelta(days=1)
         return result
 
     def list_current_stock(self, soter_locksmith_ids: list[str]) -> list[CurrentStockLine]:
@@ -626,6 +675,65 @@ class SQLHandlClient(HandlClient):
             report_id = str(row["ReportID"])
             result.setdefault(report_id, []).append(row["SKU"])
         return result
+
+    def get_panel_jobs(self, start_date: date, end_date: date) -> list[PanelJobSpend]:
+        # Policy_Details.LoggedDate is stored as free-text, not a real
+        # date column, in a mix of formats — coalesced through the same
+        # TRY_CONVERT styles as the business's own reporting query.
+        # WGTKLocksmith=0 identifies panel/subcontractor firms (the
+        # inverse of list_locksmiths' WGTK-only filter); only the
+        # Selected=1 Policy_LocksmithDetails row is the live one for a
+        # claim, and Policy_Financial is summed since a ReportID can
+        # have more than one row (e.g. amendments).
+        query = """
+            WITH Base AS (
+                SELECT
+                    p.ReportID,
+                    COALESCE(
+                        TRY_CONVERT(date, p.LoggedDate, 103),
+                        TRY_CONVERT(date, p.LoggedDate, 23),
+                        TRY_CONVERT(date, p.LoggedDate)
+                    ) AS Date_Logged
+                FROM Policy_Details p
+            ),
+            LocksmithRanked AS (
+                SELECT
+                    pld.ReportID,
+                    pld.LocksmithID,
+                    pld.QuotedPrice,
+                    ROW_NUMBER() OVER (PARTITION BY pld.ReportID ORDER BY pld.ID DESC) AS rn
+                FROM Policy_LocksmithDetails pld
+                WHERE pld.Selected = 1
+            ),
+            Finance AS (
+                SELECT pf.ReportID, SUM(pf.NetCost) AS NetCost
+                FROM Policy_Financial pf
+                GROUP BY pf.ReportID
+            )
+            SELECT
+                b.ReportID, ll.LocksmithName, b.Date_Logged, lr.QuotedPrice, f.NetCost
+            FROM Base b
+            JOIN LocksmithRanked lr ON b.ReportID = lr.ReportID AND lr.rn = 1
+            JOIN Lookup_Locksmiths ll ON lr.LocksmithID = ll.ID
+            LEFT JOIN Finance f ON b.ReportID = f.ReportID
+            WHERE b.Date_Logged >= %(start)s AND b.Date_Logged < %(end)s
+              AND ll.WGTKLocksmith = 0 AND ll.isDeleted = 0
+            ORDER BY ll.LocksmithName, b.Date_Logged
+        """
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, {"start": start_date, "end": end_date})
+            rows = cursor.fetchall()
+        return [
+            PanelJobSpend(
+                report_id=str(row["ReportID"]),
+                locksmith_name=row["LocksmithName"] or "",
+                logged_date=row["Date_Logged"],
+                quoted_price=float(row["QuotedPrice"]) if row["QuotedPrice"] is not None else None,
+                net_cost=float(row["NetCost"]) if row["NetCost"] is not None else None,
+            )
+            for row in rows
+        ]
 
     def get_part_costs(self, skus: list[str]) -> dict[str, float]:
         if not skus:

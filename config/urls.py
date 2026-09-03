@@ -15,4 +15,5 @@ urlpatterns = [
     path("job-completion/", include("apps.job_completion.urls")),
     path("locksmiths/", include("apps.locksmiths.urls")),
     path("locksmith/", include("apps.locksmith_portal.urls")),
+    path("panel/", include("apps.panel.urls")),
 ]

@@ -68,6 +68,23 @@ class MockHandlClientTests(TestCase):
             for sku in skus:
                 self.assertIn(sku, valid_codes)
 
+    def test_get_panel_jobs_is_deterministic_for_same_range(self):
+        start, end = date(2026, 9, 1), date(2026, 9, 8)
+        first = self.client.get_panel_jobs(start, end)
+        second = self.client.get_panel_jobs(start, end)
+        self.assertEqual(first, second)
+
+    def test_get_panel_jobs_only_within_range(self):
+        start, end = date(2026, 9, 1), date(2026, 9, 8)
+        jobs = self.client.get_panel_jobs(start, end)
+        for job in jobs:
+            self.assertGreaterEqual(job.logged_date, start)
+            self.assertLess(job.logged_date, end)
+
+    def test_get_panel_jobs_empty_range_returns_empty(self):
+        same_day = date(2026, 9, 1)
+        self.assertEqual(self.client.get_panel_jobs(same_day, same_day), [])
+
     def test_get_part_costs_returns_all_requested_skus_and_is_deterministic(self):
         skus = ["TK-100", "TK-101"]
         first = self.client.get_part_costs(skus)
@@ -352,6 +369,45 @@ class SQLHandlClientTests(TestCase):
     def test_get_disposed_skus_empty_input_returns_empty_without_querying(self):
         client = SQLHandlClient()
         self.assertEqual(client.get_disposed_skus([]), {})
+
+    def test_get_panel_jobs_maps_rows_and_filters_to_panel_locksmiths(self):
+        rows = [
+            {
+                "ReportID": "600001",
+                "LocksmithName": "ABC Locksmiths",
+                "Date_Logged": date(2026, 9, 3),
+                "QuotedPrice": 120.0,
+                "NetCost": 180.0,
+            },
+            {
+                "ReportID": "600002",
+                "LocksmithName": "ABC Locksmiths",
+                "Date_Logged": date(2026, 9, 4),
+                "QuotedPrice": None,
+                "NetCost": None,
+            },
+        ]
+        fake_conn = _fake_connection(rows)
+        client = SQLHandlClient()
+        with patch.object(client, "_connection", return_value=fake_conn):
+            jobs = client.get_panel_jobs(date(2026, 9, 1), date(2026, 9, 8))
+
+        cursor = fake_conn.cursor.return_value
+        query = cursor.execute.call_args[0][0]
+        self.assertIn("Policy_LocksmithDetails", query)
+        self.assertIn("Lookup_Locksmiths", query)
+        self.assertIn("Policy_Financial", query)
+        self.assertIn("WGTKLocksmith = 0", query)
+
+        params = cursor.execute.call_args[0][1]
+        self.assertEqual(params, {"start": date(2026, 9, 1), "end": date(2026, 9, 8)})
+
+        self.assertEqual(len(jobs), 2)
+        self.assertEqual(jobs[0].locksmith_name, "ABC Locksmiths")
+        self.assertEqual(jobs[0].quoted_price, 120.0)
+        self.assertEqual(jobs[0].net_cost, 180.0)
+        self.assertIsNone(jobs[1].quoted_price)
+        self.assertIsNone(jobs[1].net_cost)
 
     def test_get_part_costs_maps_rows_and_uses_same_cost_basis_as_expected_stock(self):
         rows = [
