@@ -94,14 +94,12 @@ HANDL_SQL_PASSWORD = env("HANDL_SQL_PASSWORD", default="")
 HANDL_SQL_WRITE_USER = env("HANDL_SQL_WRITE_USER", default="")
 HANDL_SQL_WRITE_PASSWORD = env("HANDL_SQL_WRITE_PASSWORD", default="")
 
-# Soter's own Inventory_Disposals.CreatedByUserId is NOT NULL and,
-# looking at real data, always a genuine staff user id (whoever was
-# logged into Soter's own UI when they recorded the disposal). Rather
-# than misattribute every portal disposal to a random staff member,
-# this should be a dedicated "Locksmith Portal" (or similar) account
-# added to whatever Soter's own Users table is — left unset (0) until
-# one exists, at which point record_disposal refuses to write rather
-# than guess.
+# Fallback only: real portal disposals attribute to the specific
+# locksmith's own Soter login id (Locksmith.soter_user_id, synced from
+# wiki.LocksmithLogin — confirmed live that's how Soter already
+# attributes real disposals, not a shared account). This is only used
+# if a locksmith hasn't been through a Soter sync since soter_user_id
+# was added, so their own id isn't known yet.
 HANDL_PORTAL_CREATED_BY_USER_ID = env.int("HANDL_PORTAL_CREATED_BY_USER_ID", default=0)
 
 AUTH_PASSWORD_VALIDATORS = [

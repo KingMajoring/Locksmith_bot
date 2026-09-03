@@ -208,7 +208,15 @@ class JobDetailTests(TestCase):
         )
 
         self.assertRedirects(response, url)
-        mock_handl.record_disposal.assert_called_once_with("885", "496390", "TK-100", 2)
+        mock_handl.record_disposal.assert_called_once_with(
+            "885",
+            "496390",
+            "TK-100",
+            "Transponder key blank",
+            2,
+            actioned_by_user_id=0,
+            locksmith_display_name="Dean S",
+        )
 
         disposal = PortalDisposal.objects.get()
         self.assertEqual(disposal.quantity, 2)
@@ -258,7 +266,15 @@ class JobDetailTests(TestCase):
             {"part_code": ["TK-100", "TK-100"], "quantity": ["1", "2"]},
         )
 
-        mock_handl.record_disposal.assert_called_once_with("885", "496390", "TK-100", 3)
+        mock_handl.record_disposal.assert_called_once_with(
+            "885",
+            "496390",
+            "TK-100",
+            "Transponder key blank",
+            3,
+            actioned_by_user_id=0,
+            locksmith_display_name="Dean S",
+        )
         self.assertEqual(PortalDisposal.objects.count(), 1)
         self.assertEqual(PortalDisposal.objects.get().quantity, 3)
 

@@ -24,6 +24,7 @@ happening — not a sandbox.
 """
 from __future__ import annotations
 
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.shortcuts import get_object_or_404, redirect, render
@@ -251,7 +252,22 @@ def job_detail(request, order_no):
                 quantity=qty,
             )
             try:
-                handl.record_disposal(soter_id, report_id, line.part_code, qty)
+                handl.record_disposal(
+                    soter_id,
+                    report_id,
+                    line.part_code,
+                    line.part_name,
+                    qty,
+                    # Real disposals attribute to the specific locksmith's
+                    # own Soter login (confirmed live), not a shared
+                    # account — falls back to the placeholder setting only
+                    # if this locksmith hasn't been through a Soter sync
+                    # since soter_user_id was added.
+                    actioned_by_user_id=(
+                        locksmith.soter_user_id or settings.HANDL_PORTAL_CREATED_BY_USER_ID
+                    ),
+                    locksmith_display_name=locksmith.van_soter_display_name,
+                )
             except Exception as exc:
                 disposal.handl_error = str(exc)
                 disposal.save(update_fields=["handl_error"])

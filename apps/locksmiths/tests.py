@@ -12,6 +12,7 @@ from apps.integrations.optimo import OptimoDriverInfo
 from .management.commands.import_soter_locksmiths import parse_rows
 from .models import Locksmith, OptimoDriverId, SoterLocksmithId
 from .services import (
+    apply_soter_user_ids,
     commit_optimo_driver_matches,
     group_locksmiths,
     match_optimo_drivers,
@@ -99,6 +100,36 @@ class VanSoterIdTests(TestCase):
     def test_none_when_no_soter_ids_at_all(self):
         locksmith = Locksmith.objects.create(name="WGTK - No IDs")
         self.assertIsNone(locksmith.van_soter_id)
+
+    def test_display_name_appends_van_suffix(self):
+        locksmith = Locksmith.objects.create(name="WGTK - Blain H")
+        locksmith.soter_ids.create(soter_locksmith_id="932", location=SoterLocksmithId.Location.ADMIN)
+        locksmith.soter_ids.create(soter_locksmith_id="941", location=SoterLocksmithId.Location.VAN)
+        self.assertEqual(locksmith.van_soter_display_name, "WGTK - Blain H (V)")
+
+    def test_display_name_falls_back_to_bare_name_without_location(self):
+        locksmith = Locksmith.objects.create(name="WGTK - Blain H")
+        locksmith.soter_ids.create(soter_locksmith_id="941")
+        self.assertEqual(locksmith.van_soter_display_name, "WGTK - Blain H")
+
+
+class ApplySoterUserIdsTests(TestCase):
+    def test_updates_matching_locksmith_by_name(self):
+        Locksmith.objects.create(name="WGTK - Blain H")
+        updated = apply_soter_user_ids({"WGTK - Blain H": 517})
+        self.assertEqual(updated, 1)
+        self.assertEqual(Locksmith.objects.get(name="WGTK - Blain H").soter_user_id, 517)
+
+    def test_no_match_updates_nothing(self):
+        Locksmith.objects.create(name="WGTK - Blain H")
+        updated = apply_soter_user_ids({"WGTK - Nobody Here": 999})
+        self.assertEqual(updated, 0)
+        self.assertIsNone(Locksmith.objects.get(name="WGTK - Blain H").soter_user_id)
+
+    def test_already_correct_is_not_recounted(self):
+        Locksmith.objects.create(name="WGTK - Blain H", soter_user_id=517)
+        updated = apply_soter_user_ids({"WGTK - Blain H": 517})
+        self.assertEqual(updated, 0)
 
 
 class ParseRowsTests(TestCase):

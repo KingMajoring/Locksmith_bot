@@ -86,7 +86,18 @@ class MockHandlClientTests(TestCase):
             self.assertGreater(line.qty, 0)
 
     def test_record_disposal_does_not_raise(self):
-        self.client.record_disposal("885", "496390", "TK-100", 2)
+        self.client.record_disposal(
+            "885",
+            "496390",
+            "TK-100",
+            "Transponder key blank",
+            2,
+            actioned_by_user_id=522,
+            locksmith_display_name="WGTK - Dean S (V)",
+        )
+
+    def test_list_locksmith_user_ids_returns_empty_dict(self):
+        self.assertEqual(self.client.list_locksmith_user_ids(), {})
 
 
 def _fake_connection(rows):
@@ -391,7 +402,17 @@ class SQLHandlClientTests(TestCase):
         client = SQLHandlClient()
         self.assertEqual(client.list_current_stock([]), [])
 
-    @override_settings(HANDL_PORTAL_CREATED_BY_USER_ID=999)
+    def _record_disposal(self, client, quantity, part_code="TK-100"):
+        client.record_disposal(
+            "885",
+            "496390",
+            part_code,
+            "Transponder key blank",
+            quantity,
+            actioned_by_user_id=517,
+            locksmith_display_name="WGTK - Blain H (V)",
+        )
+
     def test_record_disposal_inserts_and_decrements_stock_then_commits(self):
         fake_conn = MagicMock()
         fake_conn.__enter__.return_value = fake_conn
@@ -402,7 +423,7 @@ class SQLHandlClientTests(TestCase):
 
         client = SQLHandlClient()
         with patch.object(client, "_write_connection", return_value=fake_conn):
-            client.record_disposal("885", "496390", "TK-100", 2)
+            self._record_disposal(client, 2)
 
         calls = cursor.execute.call_args_list
 
@@ -428,11 +449,20 @@ class SQLHandlClientTests(TestCase):
         self.assertEqual(insert_params["stock_id"], 555)
         self.assertEqual(insert_params["locksmith_stock_id"], "loc-stock-1")
         self.assertEqual(insert_params["qty"], 2)
-        self.assertEqual(insert_params["created_by"], 999)
+        self.assertEqual(insert_params["created_by"], 517)
+
+        history_query, history_params = calls[4][0]
+        self.assertIn("INSERT INTO Policy_History", history_query)
+        self.assertEqual(history_params["report_id"], "496390")
+        self.assertEqual(history_params["actioned_by"], 517)
+        self.assertEqual(
+            history_params["notes"],
+            "'WGTK - Blain H (V)' has disposed of 2 "
+            "'Transponder key blank(s) (TK-100)'.",
+        )
 
         fake_conn.commit.assert_called_once()
 
-    @override_settings(HANDL_PORTAL_CREATED_BY_USER_ID=999)
     def test_record_disposal_decrements_across_multiple_rows_largest_first(self):
         fake_conn = MagicMock()
         fake_conn.__enter__.return_value = fake_conn
@@ -446,14 +476,13 @@ class SQLHandlClientTests(TestCase):
 
         client = SQLHandlClient()
         with patch.object(client, "_write_connection", return_value=fake_conn):
-            client.record_disposal("885", "496390", "TK-100", 4)
+            self._record_disposal(client, 4)
 
         update_calls = [c for c in cursor.execute.call_args_list if "UPDATE" in c[0][0]]
         self.assertEqual(len(update_calls), 2)
         self.assertEqual(update_calls[0][0][1], {"take": 3, "id": "row-big"})
         self.assertEqual(update_calls[1][0][1], {"take": 1, "id": "row-small"})
 
-    @override_settings(HANDL_PORTAL_CREATED_BY_USER_ID=999)
     def test_record_disposal_raises_when_no_stock_batch_found(self):
         fake_conn = MagicMock()
         fake_conn.__enter__.return_value = fake_conn
@@ -462,10 +491,9 @@ class SQLHandlClientTests(TestCase):
         client = SQLHandlClient()
         with patch.object(client, "_write_connection", return_value=fake_conn):
             with self.assertRaises(ValueError):
-                client.record_disposal("885", "496390", "TK-999", 1)
+                self._record_disposal(client, 1, part_code="TK-999")
         fake_conn.commit.assert_not_called()
 
-    @override_settings(HANDL_PORTAL_CREATED_BY_USER_ID=999)
     def test_record_disposal_raises_when_no_locksmith_stock_found(self):
         fake_conn = MagicMock()
         fake_conn.__enter__.return_value = fake_conn
@@ -476,10 +504,9 @@ class SQLHandlClientTests(TestCase):
         client = SQLHandlClient()
         with patch.object(client, "_write_connection", return_value=fake_conn):
             with self.assertRaises(ValueError):
-                client.record_disposal("885", "496390", "TK-100", 1)
+                self._record_disposal(client, 1)
         fake_conn.commit.assert_not_called()
 
-    @override_settings(HANDL_PORTAL_CREATED_BY_USER_ID=999)
     def test_record_disposal_raises_when_stock_rows_insufficient(self):
         fake_conn = MagicMock()
         fake_conn.__enter__.return_value = fake_conn
@@ -490,14 +517,24 @@ class SQLHandlClientTests(TestCase):
         client = SQLHandlClient()
         with patch.object(client, "_write_connection", return_value=fake_conn):
             with self.assertRaises(ValueError):
-                client.record_disposal("885", "496390", "TK-100", 5)
+                self._record_disposal(client, 5)
         fake_conn.commit.assert_not_called()
 
-    @override_settings(HANDL_PORTAL_CREATED_BY_USER_ID=0)
-    def test_record_disposal_raises_when_created_by_user_id_not_configured(self):
+    def test_list_locksmith_user_ids_maps_receipt_name_to_user_id(self):
+        rows = [
+            {"UserId": 517, "ReceiptName": "WGTK - Blain H"},
+            {"UserId": 522, "ReceiptName": "WGTK - Daryl B"},
+        ]
+        fake_conn = _fake_connection(rows)
         client = SQLHandlClient()
-        with self.assertRaises(ValueError):
-            client.record_disposal("885", "496390", "TK-100", 1)
+        with patch.object(client, "_connection", return_value=fake_conn):
+            result = client.list_locksmith_user_ids()
+
+        self.assertEqual(result, {"WGTK - Blain H": 517, "WGTK - Daryl B": 522})
+        cursor = fake_conn.cursor.return_value
+        query = cursor.execute.call_args[0][0]
+        self.assertIn("wiki.LocksmithLogin", query)
+        self.assertNotIn("password", query.lower())
 
 
 class GetHandlClientTests(TestCase):

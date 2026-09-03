@@ -114,19 +114,40 @@ class HandlClient(ABC):
         part codes to ask about."""
 
     @abstractmethod
+    def list_locksmith_user_ids(self) -> dict[str, int]:
+        """{ReceiptName: UserId} from wiki.LocksmithLogin — each
+        locksmith's own personal Soter login id (confirmed live: this is
+        what real disposals attribute CreatedByUserId/ActionedBy to,
+        NOT a shared office/system account). ReceiptName exactly matches
+        Locksmith.name's format ("WGTK - Blain H"), confirmed against
+        real data — used to populate Locksmith.soter_user_id during the
+        Soter sync."""
+
+    @abstractmethod
     def record_disposal(
-        self, soter_locksmith_id: str, report_id: str, part_code: str, quantity: int
+        self,
+        soter_locksmith_id: str,
+        report_id: str,
+        part_code: str,
+        part_name: str,
+        quantity: int,
+        *,
+        actioned_by_user_id: int,
+        locksmith_display_name: str,
     ) -> None:
-        """Record a part disposed against a job, for the locksmith portal,
-        and decrement that locksmith's recorded van stock accordingly.
+        """Record a part disposed against a job, for the locksmith portal:
+        decrements that locksmith's recorded van stock, and adds the same
+        Policy_History note real Soter disposals get ("'{locksmith_display_name}'
+        has disposed of {quantity} '{part_name}(s) ({part_code})'.",
+        StatusID=23, PersonID=NULL — confirmed live against hundreds of
+        real disposal notes) so it shows up in Handl's own claim activity
+        feed. actioned_by_user_id should be that specific locksmith's own
+        Soter user id (Locksmith.soter_user_id) — real disposals are
+        attributed to the individual locksmith, not a shared account.
         WRITES to Handl — uses a separate write-capable connection (see
         HANDL_SQL_WRITE_USER/PASSWORD) since the main HANDL_SQL_* creds
-        are deliberately read-only. Full Inventory_Disposals schema and
-        the Inventory_Locksmith_Stock decrement behaviour were confirmed
-        via a supervised manual test — see SQLHandlClient's
-        implementation for the details. Raises if
-        HANDL_PORTAL_CREATED_BY_USER_ID isn't configured, or if there
-        isn't enough recorded stock to satisfy the disposal."""
+        are deliberately read-only. Raises if there isn't enough recorded
+        stock to satisfy the disposal."""
 
 
 class MockHandlClient(HandlClient):
@@ -267,8 +288,19 @@ class MockHandlClient(HandlClient):
             for code, name in sample
         ]
 
+    def list_locksmith_user_ids(self) -> dict[str, int]:
+        return {}
+
     def record_disposal(
-        self, soter_locksmith_id: str, report_id: str, part_code: str, quantity: int
+        self,
+        soter_locksmith_id: str,
+        report_id: str,
+        part_code: str,
+        part_name: str,
+        quantity: int,
+        *,
+        actioned_by_user_id: int,
+        locksmith_display_name: str,
     ) -> None:
         pass
 
@@ -629,7 +661,15 @@ class SQLHandlClient(HandlClient):
         ]
 
     def record_disposal(
-        self, soter_locksmith_id: str, report_id: str, part_code: str, quantity: int
+        self,
+        soter_locksmith_id: str,
+        report_id: str,
+        part_code: str,
+        part_name: str,
+        quantity: int,
+        *,
+        actioned_by_user_id: int,
+        locksmith_display_name: str,
     ) -> None:
         # soter_locksmith_id is deliberately the locksmith's "(V)" (van)
         # id (see Locksmith.van_soter_id) — a disposal is consumed from
@@ -650,8 +690,7 @@ class SQLHandlClient(HandlClient):
         #     INFORMATION_SCHEMA reports — supplied explicitly via
         #     NEWID() rather than relying on whatever's really going on
         #     there), StockId, LookupLocksmithId, ReportId, Quantity,
-        #     DateCreated, CreatedByUserId (NOT NULL — see
-        #     HANDL_PORTAL_CREATED_BY_USER_ID), LocksmithStockId
+        #     DateCreated, CreatedByUserId (NOT NULL), LocksmithStockId
         #     (nullable — but populated here; see below).
         # No trigger on this table (confirmed via sys.triggers) — Soter
         # does NOT automatically decrement Inventory_Locksmith_Stock
@@ -662,14 +701,15 @@ class SQLHandlClient(HandlClient):
         # matching Inventory_Locksmith_Stock row(s) itself, in the same
         # transaction, so a locksmith can't be shown stock (and dispose
         # against it again) that they've already disposed of today.
-        if not settings.HANDL_PORTAL_CREATED_BY_USER_ID:
-            raise ValueError(
-                "HANDL_PORTAL_CREATED_BY_USER_ID isn't configured — set it to a "
-                "real Soter user id (ideally a dedicated 'Locksmith Portal' "
-                "account, not a real staff member's) before disposals can be "
-                "recorded."
-            )
-
+        #
+        # Also inserts the same Policy_History note real disposals get
+        # (confirmed against hundreds of real rows: StatusID=23,
+        # PersonID=NULL renders as "System" in Handl's own UI) so it
+        # shows up in the claim's activity feed like any other disposal.
+        # CreatedByUserId/ActionedBy is the specific locksmith's own
+        # Soter user id (see Locksmith.soter_user_id, wiki.LocksmithLogin)
+        # — confirmed live that real disposals attribute to the
+        # individual locksmith, not a shared account.
         from datetime import datetime as _datetime
 
         with self._write_connection() as conn:
@@ -738,6 +778,7 @@ class SQLHandlClient(HandlClient):
                     f"in Inventory_Locksmith_Stock for locksmith {soter_locksmith_id!r}."
                 )
 
+            now = _datetime.utcnow()
             cursor.execute(
                 """
                 INSERT INTO Inventory_Disposals
@@ -753,11 +794,42 @@ class SQLHandlClient(HandlClient):
                     "stock_id": stock_row["Id"],
                     "locksmith_stock_id": primary_locksmith_stock_id,
                     "qty": quantity,
-                    "now": _datetime.utcnow(),
-                    "created_by": settings.HANDL_PORTAL_CREATED_BY_USER_ID,
+                    "now": now,
+                    "created_by": actioned_by_user_id,
+                },
+            )
+
+            notes = (
+                f"'{locksmith_display_name}' has disposed of {quantity} "
+                f"'{part_name}(s) ({part_code})'."
+            )
+            cursor.execute(
+                """
+                INSERT INTO Policy_History
+                    (ReportID, StatusID, PersonID, Notes, ActionedBy, ActionedDate, Pinned)
+                VALUES
+                    (%(report_id)s, 23, NULL, %(notes)s, %(actioned_by)s, %(now)s, 0)
+                """,
+                {
+                    "report_id": report_id,
+                    "notes": notes,
+                    "actioned_by": actioned_by_user_id,
+                    "now": now,
                 },
             )
             conn.commit()
+
+    def list_locksmith_user_ids(self) -> dict[str, int]:
+        # wiki.LocksmithLogin — each locksmith's own personal Soter
+        # login id, confirmed by name against real ActionedBy/
+        # CreatedByUserId values on real disposal history rows.
+        # Deliberately selects only UserId/ReceiptName, never `password`
+        # (plaintext in this table).
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT UserId, ReceiptName FROM wiki.LocksmithLogin")
+            rows = cursor.fetchall()
+        return {row["ReceiptName"]: row["UserId"] for row in rows if row["ReceiptName"]}
 
 
 def get_handl_client() -> HandlClient:

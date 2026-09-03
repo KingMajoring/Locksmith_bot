@@ -35,6 +35,13 @@ class Locksmith(models.Model):
         "office/admin test account exercising the portal, never a real "
         "field locksmith.",
     )
+    soter_user_id = models.PositiveIntegerField(
+        null=True, blank=True,
+        help_text="This locksmith's own personal Soter login id "
+        "(wiki.LocksmithLogin.UserId, matched by name during sync) — used to "
+        "attribute portal disposals to them individually, matching how "
+        "Soter already attributes real disposals (not a shared account).",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -61,6 +68,17 @@ class Locksmith(models.Model):
             return van.soter_locksmith_id
         first = self.soter_ids.first()
         return first.soter_locksmith_id if first else None
+
+    @property
+    def van_soter_display_name(self) -> str:
+        """"WGTK - Blain H (V)" (matching the Soter id van_soter_id
+        resolves to) — for the exact wording Soter's own disposal
+        history notes use. Falls back to the bare name if no "(V)"
+        location was captured."""
+        van = self.soter_ids.filter(location=SoterLocksmithId.Location.VAN).first()
+        if van:
+            return f"{self.name} ({van.location})"
+        return self.name
 
 
 class SoterLocksmithId(models.Model):

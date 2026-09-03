@@ -132,6 +132,21 @@ def commit_groups(groups: dict[str, dict]) -> tuple[int, int, int]:
     return created_locksmiths, created_ids, emails_updated
 
 
+def apply_soter_user_ids(user_id_map: dict[str, int]) -> int:
+    """Backfills Locksmith.soter_user_id from
+    HandlClient.list_locksmith_user_ids()'s {ReceiptName: UserId} —
+    ReceiptName matches Locksmith.name exactly (confirmed on real
+    data). Returns how many locksmiths were updated."""
+    updated = 0
+    for name, user_id in user_id_map.items():
+        updated += (
+            Locksmith.objects.filter(name=name)
+            .exclude(soter_user_id=user_id)
+            .update(soter_user_id=user_id)
+        )
+    return updated
+
+
 def _normalize_person_name(name: str) -> str:
     """"WGTK - John Mason" / "John Mason" / "JohnMason" all normalize to
     "JOHN MASON" (roughly) so Optimo driver names/serials can be matched

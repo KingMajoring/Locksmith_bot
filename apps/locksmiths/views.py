@@ -7,6 +7,7 @@ from apps.integrations.optimo import get_optimo_client
 
 from .models import Locksmith
 from .services import (
+    apply_soter_user_ids,
     commit_groups,
     commit_optimo_driver_matches,
     group_locksmiths,
@@ -55,10 +56,12 @@ def sync_from_soter(request):
 
     if request.method == "POST":
         created_locksmiths, created_ids, emails_updated = commit_groups(groups)
+        user_ids_updated = apply_soter_user_ids(handl.list_locksmith_user_ids())
         messages.success(
             request,
             f"Synced from Soter: {created_locksmiths} new locksmith(s), "
-            f"{created_ids} new Soter ID row(s), {emails_updated} email(s) updated.",
+            f"{created_ids} new Soter ID row(s), {emails_updated} email(s) updated, "
+            f"{user_ids_updated} Soter user ID(s) updated.",
         )
         return redirect("admin:locksmiths_locksmith_changelist")
 
