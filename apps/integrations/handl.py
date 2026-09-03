@@ -62,11 +62,11 @@ class JobDetails:
 
 
 @dataclass(frozen=True)
-class PanelJobSpend:
-    report_id: str
-    locksmith_name: str
-    logged_date: date | None
-    quoted_price: float | None
+class PanelDailyFigures:
+    panel_name: str
+    figure_date: date
+    job_count: int
+    wgtk_fee: float | None
     net_cost: float | None
 
 
@@ -109,16 +109,20 @@ class HandlClient(ABC):
         LookupLocksmithId."""
 
     @abstractmethod
-    def get_panel_jobs(self, start_date: date, end_date: date) -> list[PanelJobSpend]:
-        """Every claim logged to a non-WGTK (panel/subcontractor)
-        locksmith with a LoggedDate in [start_date, end_date) — for the
-        Panel Spend report (Area 4). One row per Handl ReportID: the
-        panel locksmith's name (Lookup_Locksmiths, WGTKLocksmith=0), the
-        price they quoted WGTK for the job (Policy_LocksmithDetails
-        .QuotedPrice, on the Selected=1 row), and what WGTK invoiced the
-        client for it (Policy_Financial.NetCost, summed) — WGTK's margin
-        on a panel job is net_cost - quoted_price, computed by the
-        caller since either side can be None (not yet invoiced/quoted)."""
+    def get_panel_daily_figures(self, start_date: date, end_date: date) -> list[PanelDailyFigures]:
+        """Per panel/subcontractor locksmith, per day, for the Panel
+        Spend report (Area 4) — sourced from Tableau_PanelFigures, a
+        table Handl's own reporting already relies on, rather than
+        reconstructed from the raw claim tables (Policy_Financial in
+        particular lags days behind a job being logged, since it's only
+        populated once the office invoices it — confirmed live, this
+        made a naive Policy_Financial join show wildly wrong margins
+        for jobs logged in the last few days). One row per
+        (panel locksmith, date) with a date in [start_date, end_date):
+        job count, WGTK's fee (its margin on those jobs), and net cost
+        (what the client was charged, i.e. quoted_price + wgtk_fee) —
+        either money figure can be None if Tableau_PanelFigures hasn't
+        got a value for that day yet."""
 
     @abstractmethod
     def get_part_costs(self, skus: list[str]) -> dict[str, float]:
@@ -303,29 +307,28 @@ class MockHandlClient(HandlClient):
 
     _PANEL_LOCKSMITHS = ["ABC Locksmiths", "Fast Key Solutions", "North London Locks"]
 
-    def get_panel_jobs(self, start_date: date, end_date: date) -> list[PanelJobSpend]:
+    def get_panel_daily_figures(self, start_date: date, end_date: date) -> list[PanelDailyFigures]:
         rng = random.Random(int(hashlib.sha256(f"{start_date}:{end_date}".encode()).hexdigest(), 16) % (2**32))
         result = []
-        report_id = 500000
         current = start_date
         while current < end_date:
             for name in self._PANEL_LOCKSMITHS:
                 if rng.random() < 0.6:
-                    quoted = round(rng.uniform(80, 220), 2)
+                    job_count = rng.randint(1, 3)
+                    fee = round(rng.uniform(20, 90), 2)
                     result.append(
-                        PanelJobSpend(
-                            report_id=str(report_id),
-                            locksmith_name=name,
-                            logged_date=current,
-                            quoted_price=quoted,
+                        PanelDailyFigures(
+                            panel_name=name,
+                            figure_date=current,
+                            job_count=job_count,
+                            wgtk_fee=fee,
                             net_cost=(
-                                round(quoted * rng.uniform(1.1, 1.4), 2)
+                                round(fee + rng.uniform(80, 220) * job_count, 2)
                                 if rng.random() < 0.85
                                 else None
                             ),
                         )
                     )
-                    report_id += 1
             current = current + timedelta(days=1)
         return result
 
@@ -676,60 +679,32 @@ class SQLHandlClient(HandlClient):
             result.setdefault(report_id, []).append(row["SKU"])
         return result
 
-    def get_panel_jobs(self, start_date: date, end_date: date) -> list[PanelJobSpend]:
-        # Policy_Details.LoggedDate is stored as free-text, not a real
-        # date column, in a mix of formats — coalesced through the same
-        # TRY_CONVERT styles as the business's own reporting query.
-        # WGTKLocksmith=0 identifies panel/subcontractor firms (the
-        # inverse of list_locksmiths' WGTK-only filter); only the
-        # Selected=1 Policy_LocksmithDetails row is the live one for a
-        # claim, and Policy_Financial is summed since a ReportID can
-        # have more than one row (e.g. amendments).
+    def get_panel_daily_figures(self, start_date: date, end_date: date) -> list[PanelDailyFigures]:
+        # Confirmed live: reconstructing this from the raw claim tables
+        # (Policy_Financial in particular) gave wildly wrong margins for
+        # anything logged in the last few days, since Policy_Financial
+        # only gets a row once the office invoices the job — days behind
+        # a job being logged. Tableau_PanelFigures is a table the
+        # business's own reporting already relies on, keyed by
+        # (Panel Name, Date), with WGTK Fee and NetCost populated
+        # without that lag. Bracket-quoted identifiers below have spaces
+        # in their real column names.
         query = """
-            WITH Base AS (
-                SELECT
-                    p.ReportID,
-                    COALESCE(
-                        TRY_CONVERT(date, p.LoggedDate, 103),
-                        TRY_CONVERT(date, p.LoggedDate, 23),
-                        TRY_CONVERT(date, p.LoggedDate)
-                    ) AS Date_Logged
-                FROM Policy_Details p
-            ),
-            LocksmithRanked AS (
-                SELECT
-                    pld.ReportID,
-                    pld.LocksmithID,
-                    pld.QuotedPrice,
-                    ROW_NUMBER() OVER (PARTITION BY pld.ReportID ORDER BY pld.ID DESC) AS rn
-                FROM Policy_LocksmithDetails pld
-                WHERE pld.Selected = 1
-            ),
-            Finance AS (
-                SELECT pf.ReportID, SUM(pf.NetCost) AS NetCost
-                FROM Policy_Financial pf
-                GROUP BY pf.ReportID
-            )
-            SELECT
-                b.ReportID, ll.LocksmithName, b.Date_Logged, lr.QuotedPrice, f.NetCost
-            FROM Base b
-            JOIN LocksmithRanked lr ON b.ReportID = lr.ReportID AND lr.rn = 1
-            JOIN Lookup_Locksmiths ll ON lr.LocksmithID = ll.ID
-            LEFT JOIN Finance f ON b.ReportID = f.ReportID
-            WHERE b.Date_Logged >= %(start)s AND b.Date_Logged < %(end)s
-              AND ll.WGTKLocksmith = 0 AND ll.isDeleted = 0
-            ORDER BY ll.LocksmithName, b.Date_Logged
+            SELECT [Date], [Panel Name], [Jobs Completed], [WGTK Fee], NetCost
+            FROM Tableau_PanelFigures
+            WHERE [Date] >= %(start)s AND [Date] < %(end)s
+            ORDER BY [Panel Name], [Date]
         """
         with self._connection() as conn:
             cursor = conn.cursor()
             cursor.execute(query, {"start": start_date, "end": end_date})
             rows = cursor.fetchall()
         return [
-            PanelJobSpend(
-                report_id=str(row["ReportID"]),
-                locksmith_name=row["LocksmithName"] or "",
-                logged_date=row["Date_Logged"],
-                quoted_price=float(row["QuotedPrice"]) if row["QuotedPrice"] is not None else None,
+            PanelDailyFigures(
+                panel_name=row["Panel Name"] or "",
+                figure_date=row["Date"],
+                job_count=row["Jobs Completed"] or 0,
+                wgtk_fee=float(row["WGTK Fee"]) if row["WGTK Fee"] is not None else None,
                 net_cost=float(row["NetCost"]) if row["NetCost"] is not None else None,
             )
             for row in rows

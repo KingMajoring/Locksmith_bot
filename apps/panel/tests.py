@@ -5,85 +5,98 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
 
-from apps.integrations.handl import PanelJobSpend
+from apps.integrations.handl import PanelDailyFigures
 
 from .services.spend import mtd_spend_by_locksmith
 
 
 class FakePanelHandlClient:
-    def __init__(self, jobs):
-        self._jobs = jobs
+    def __init__(self, figures):
+        self._figures = figures
 
-    def get_panel_jobs(self, start_date, end_date):
-        return [j for j in self._jobs if start_date <= j.logged_date < end_date]
+    def get_panel_daily_figures(self, start_date, end_date):
+        return [f for f in self._figures if start_date <= f.figure_date < end_date]
 
 
-def _job(report_id, locksmith_name, logged_date, quoted_price, net_cost):
-    return PanelJobSpend(
-        report_id=report_id, locksmith_name=locksmith_name, logged_date=logged_date,
-        quoted_price=quoted_price, net_cost=net_cost,
+def _figure(locksmith_name, figure_date, job_count, wgtk_fee, net_cost):
+    return PanelDailyFigures(
+        panel_name=locksmith_name, figure_date=figure_date, job_count=job_count,
+        wgtk_fee=wgtk_fee, net_cost=net_cost,
     )
 
 
 class MtdSpendByLocksmithTests(TestCase):
-    def _run(self, jobs, today=date(2026, 9, 15)):
+    def _run(self, figures, today=date(2026, 9, 15)):
         with patch(
             "apps.panel.services.spend.get_handl_client",
-            return_value=FakePanelHandlClient(jobs),
+            return_value=FakePanelHandlClient(figures),
         ):
             return mtd_spend_by_locksmith(today=today)
 
     def test_aggregates_job_count_and_totals_per_locksmith(self):
-        jobs = [
-            _job("1", "ABC Locksmiths", date(2026, 9, 3), 100.0, 150.0),
-            _job("2", "ABC Locksmiths", date(2026, 9, 5), 120.0, 170.0),
+        figures = [
+            _figure("ABC Locksmiths", date(2026, 9, 3), 1, 50.0, 150.0),
+            _figure("ABC Locksmiths", date(2026, 9, 5), 2, 70.0, 190.0),
         ]
-        rows = self._run(jobs)
+        rows = self._run(figures)
         self.assertEqual(len(rows), 1)
         row = rows[0]
         self.assertEqual(row.locksmith_name, "ABC Locksmiths")
-        self.assertEqual(row.job_count, 2)
+        self.assertEqual(row.job_count, 3)
+        # quoted = net_cost - wgtk_fee per day: (150-50)+(190-70) = 100+120 = 220
         self.assertEqual(row.total_quoted_price, 220.0)
-        self.assertEqual(row.total_net_cost, 320.0)
-        self.assertEqual(row.margin, 100.0)
+        # selling cost = quoted + fee per day = net_cost, summed: 150+190 = 340
+        self.assertEqual(row.selling_cost, 340.0)
 
-    def test_margin_is_net_cost_minus_quoted_price(self):
-        jobs = [_job("1", "ABC Locksmiths", date(2026, 9, 3), 100.0, 150.0)]
-        rows = self._run(jobs)
-        self.assertEqual(rows[0].margin, 50.0)
-
-    def test_job_missing_net_cost_still_counted_but_margin_is_none(self):
-        jobs = [_job("1", "ABC Locksmiths", date(2026, 9, 3), 100.0, None)]
-        rows = self._run(jobs)
-        self.assertEqual(rows[0].job_count, 1)
+    def test_selling_cost_is_quoted_price_plus_wgtk_fee(self):
+        figures = [_figure("ABC Locksmiths", date(2026, 9, 3), 1, 50.0, 150.0)]
+        rows = self._run(figures)
         self.assertEqual(rows[0].total_quoted_price, 100.0)
-        self.assertIsNone(rows[0].total_net_cost)
-        self.assertIsNone(rows[0].margin)
+        self.assertEqual(rows[0].selling_cost, 150.0)
 
-    def test_job_missing_quoted_price_still_counted_but_margin_is_none(self):
-        jobs = [_job("1", "ABC Locksmiths", date(2026, 9, 3), None, 150.0)]
-        rows = self._run(jobs)
+    def test_day_missing_net_cost_still_counted_in_jobs_but_excluded_from_money(self):
+        figures = [_figure("ABC Locksmiths", date(2026, 9, 3), 1, 50.0, None)]
+        rows = self._run(figures)
         self.assertEqual(rows[0].job_count, 1)
         self.assertIsNone(rows[0].total_quoted_price)
-        self.assertEqual(rows[0].total_net_cost, 150.0)
-        self.assertIsNone(rows[0].margin)
+        self.assertIsNone(rows[0].selling_cost)
+
+    def test_day_missing_wgtk_fee_still_counted_in_jobs_but_excluded_from_money(self):
+        figures = [_figure("ABC Locksmiths", date(2026, 9, 3), 1, None, 150.0)]
+        rows = self._run(figures)
+        self.assertEqual(rows[0].job_count, 1)
+        self.assertIsNone(rows[0].total_quoted_price)
+        self.assertIsNone(rows[0].selling_cost)
+
+    def test_partial_days_only_sum_the_days_with_both_figures(self):
+        """One day has both figures, another is missing wgtk_fee — the
+        money totals should reflect only the complete day, not silently
+        mix net_cost from one day with fee from another."""
+        figures = [
+            _figure("ABC Locksmiths", date(2026, 9, 3), 1, 50.0, 150.0),
+            _figure("ABC Locksmiths", date(2026, 9, 4), 1, None, 200.0),
+        ]
+        rows = self._run(figures)
+        self.assertEqual(rows[0].job_count, 2)
+        self.assertEqual(rows[0].total_quoted_price, 100.0)
+        self.assertEqual(rows[0].selling_cost, 150.0)
 
     def test_sorted_by_total_quoted_price_descending(self):
-        jobs = [
-            _job("1", "Small Spend Locksmiths", date(2026, 9, 3), 50.0, 60.0),
-            _job("2", "Big Spend Locksmiths", date(2026, 9, 3), 500.0, 600.0),
+        figures = [
+            _figure("Small Spend Locksmiths", date(2026, 9, 3), 1, 10.0, 60.0),
+            _figure("Big Spend Locksmiths", date(2026, 9, 3), 1, 100.0, 600.0),
         ]
-        rows = self._run(jobs)
+        rows = self._run(figures)
         self.assertEqual([r.locksmith_name for r in rows], ["Big Spend Locksmiths", "Small Spend Locksmiths"])
 
     def test_only_includes_this_month_up_to_today(self):
-        jobs = [
-            _job("1", "ABC Locksmiths", date(2026, 8, 31), 100.0, 150.0),  # last month
-            _job("2", "ABC Locksmiths", date(2026, 9, 1), 100.0, 150.0),  # 1st of month
-            _job("3", "ABC Locksmiths", date(2026, 9, 15), 100.0, 150.0),  # today
-            _job("4", "ABC Locksmiths", date(2026, 9, 16), 100.0, 150.0),  # tomorrow
+        figures = [
+            _figure("ABC Locksmiths", date(2026, 8, 31), 1, 50.0, 150.0),  # last month
+            _figure("ABC Locksmiths", date(2026, 9, 1), 1, 50.0, 150.0),  # 1st of month
+            _figure("ABC Locksmiths", date(2026, 9, 15), 1, 50.0, 150.0),  # today
+            _figure("ABC Locksmiths", date(2026, 9, 16), 1, 50.0, 150.0),  # tomorrow
         ]
-        rows = self._run(jobs, today=date(2026, 9, 15))
+        rows = self._run(figures, today=date(2026, 9, 15))
         self.assertEqual(rows[0].job_count, 2)
 
     def test_no_panel_jobs_returns_empty_list(self):
@@ -98,16 +111,17 @@ class PanelSpendViewTests(TestCase):
         self.client.force_login(self.user)
 
     def test_spend_renders_locksmith_rows(self):
-        jobs = [_job("1", "ABC Locksmiths", date.today(), 100.0, 150.0)]
+        figures = [_figure("ABC Locksmiths", date.today(), 1, 50.0, 150.0)]
         with patch(
             "apps.panel.services.spend.get_handl_client",
-            return_value=FakePanelHandlClient(jobs),
+            return_value=FakePanelHandlClient(figures),
         ):
             response = self.client.get(reverse("panel:spend"))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "ABC Locksmiths")
         self.assertContains(response, "£100.0")
-        self.assertContains(response, "£50.0")
+        self.assertContains(response, "£150.0")
+        self.assertNotContains(response, "WGTK margin")
 
     def test_login_required(self):
         self.client.logout()
