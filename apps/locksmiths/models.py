@@ -28,6 +28,13 @@ class Locksmith(models.Model):
         "with a Microsoft account matching their email — grants access to the "
         "self-service portal at /locksmith/ instead of office/admin access.",
     )
+    sees_all_jobs_for_testing = models.BooleanField(
+        default=False,
+        help_text="Portal shows every job scheduled today instead of only "
+        "jobs assigned to this locksmith's own Optimo driver ID(s) — for an "
+        "office/admin test account exercising the portal, never a real "
+        "field locksmith.",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

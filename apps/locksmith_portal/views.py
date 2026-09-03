@@ -39,17 +39,24 @@ def _not_a_locksmith(request):
 
 def _todays_jobs_for(locksmith):
     """(order_no, report_id) pairs for jobs assigned to this locksmith
-    today, via Optimo directly — see module docstring for why."""
-    driver_serials = set(
-        locksmith.optimo_driver_ids.values_list("optimo_driver_serial", flat=True)
-    )
-    if not driver_serials:
-        return []
-    optimo = get_optimo_client()
+    today, via Optimo directly — see module docstring for why.
+
+    A locksmith flagged sees_all_jobs_for_testing (an office/admin test
+    account exercising the portal, not a real field locksmith) instead
+    gets every job scheduled today, unfiltered by driver — they have no
+    real Optimo driverSerial of their own to filter by."""
+    summaries = get_optimo_client().list_orders_for_date(timezone.localdate())
+
+    if not locksmith.sees_all_jobs_for_testing:
+        driver_serials = set(
+            locksmith.optimo_driver_ids.values_list("optimo_driver_serial", flat=True)
+        )
+        if not driver_serials:
+            return []
+        summaries = [s for s in summaries if s.driver_serial in driver_serials]
+
     jobs = []
-    for summary in optimo.list_orders_for_date(timezone.localdate()):
-        if summary.driver_serial not in driver_serials:
-            continue
+    for summary in summaries:
         report_id = _report_id_from_order_no(summary.order_no)
         if report_id is None:
             continue

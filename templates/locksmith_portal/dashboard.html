@@ -20,6 +20,9 @@
 
 <div class="card">
   <h2>Today's jobs — {{ today }}</h2>
+  {% if locksmith.sees_all_jobs_for_testing %}
+    <p class="sub">Test account — showing every job scheduled today, not just your own.</p>
+  {% endif %}
   {% if jobs %}
     {% for job in jobs %}
       <a class="job" href="{% url 'locksmith_portal:job_detail' order_no=job.order_no %}">

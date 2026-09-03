@@ -78,6 +78,37 @@ class DashboardTests(TestCase):
         self.assertEqual(len(jobs), 1)
         self.assertEqual(jobs[0]["report_id"], "1001")
 
+    @patch("apps.locksmith_portal.views.get_optimo_client")
+    def test_sees_all_jobs_for_testing_bypasses_driver_filter(self, mock_get_optimo):
+        # A test/admin account has no real Optimo driverSerial of its own
+        # to filter by, so the flag shows every job scheduled today
+        # regardless of which driver it's assigned to.
+        self.locksmith.sees_all_jobs_for_testing = True
+        self.locksmith.save(update_fields=["sees_all_jobs_for_testing"])
+        self.locksmith.optimo_driver_ids.all().delete()
+
+        today = timezone.localdate()
+        mock_client = MagicMock()
+        mock_client.list_orders_for_date.return_value = [
+            OptimoOrderSummary(
+                order_no=f"1001_{today.isoformat()}",
+                driver_serial="011",
+                distance_metres=0,
+                travel_time_seconds=0,
+            ),
+            OptimoOrderSummary(
+                order_no=f"2002_{today.isoformat()}",
+                driver_serial="999",
+                distance_metres=0,
+                travel_time_seconds=0,
+            ),
+        ]
+        mock_get_optimo.return_value = mock_client
+
+        response = self.client.get(reverse("locksmith_portal:dashboard"))
+        jobs = response.context["jobs"]
+        self.assertEqual({job["report_id"] for job in jobs}, {"1001", "2002"})
+
     def test_login_required(self):
         self.client.logout()
         response = self.client.get(reverse("locksmith_portal:dashboard"))
