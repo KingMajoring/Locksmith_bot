@@ -3,7 +3,7 @@
 {% block content %}
 <a class="back-link" href="{% url 'job_completion:timing_models' make %}{% if selected_service %}?service={{ selected_service|urlencode }}{% endif %}">&larr; {{ make }} models</a>
 <h1>Timing — {{ make }} {{ model_family }}</h1>
-<p>By year of manufacture.</p>
+<p>By year of manufacture. Jobs under 5 minutes are excluded from the average (except Gain access).</p>
 
 <ul class="tabs">
   <li><a href="?" class="{% if not selected_service %}tab-active{% endif %}">All services</a></li>

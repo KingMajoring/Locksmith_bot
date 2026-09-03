@@ -1277,6 +1277,34 @@ class JobInformationTests(TestCase):
         rows = makes_summary(service=None)
         self.assertEqual(len(rows), 2)
 
+    def test_sub_five_minute_job_excluded_from_timing_average_unless_gain_access(self):
+        """Locksmiths sometimes start and immediately end the Optimo job
+        instead of starting it on arrival, leaving a bogus near-zero
+        duration — must not drag the timing average down, but a
+        genuinely quick Gain access job should still count."""
+        self._job("a", "Ford", "Focus", "2019", 100.0, 30, loss_type="LOST")
+        self._job("bogus", "Ford", "Focus", "2019", 100.0, 2, loss_type="LOST")
+        rows = makes_summary()
+        self.assertEqual(rows[0]["job_count"], 2)  # still counted for margin
+        self.assertEqual(rows[0]["avg_duration_minutes"], 30.0)  # bogus one excluded
+
+    def test_gain_access_job_under_five_minutes_still_counts(self):
+        self._job("a", "Ford", "Focus", "2019", 100.0, 2, loss_type="LOCKED IN PROPERTY")
+        rows = makes_summary()
+        self.assertEqual(rows[0]["avg_duration_minutes"], 2.0)
+
+    def test_job_exactly_five_minutes_counts_regardless_of_service(self):
+        self._job("a", "Ford", "Focus", "2019", 100.0, 5, loss_type="LOST")
+        rows = makes_summary()
+        self.assertEqual(rows[0]["avg_duration_minutes"], 5.0)
+
+    def test_all_sub_five_minute_jobs_gives_no_average_but_keeps_job_count(self):
+        self._job("a", "Ford", "Focus", "2019", 100.0, 1, loss_type="LOST")
+        self._job("b", "Ford", "Fiesta", "2019", 100.0, 3, loss_type="AKL")
+        rows = makes_summary()
+        self.assertEqual(rows[0]["job_count"], 2)
+        self.assertIsNone(rows[0]["avg_duration_minutes"])
+
 
 class JobInformationViewsTests(TestCase):
     def setUp(self):

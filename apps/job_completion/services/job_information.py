@@ -46,6 +46,33 @@ def available_services() -> list[str]:
     return sorted({display_loss_type(v) for v in raw_values})
 
 
+# Locksmiths sometimes start the job in Optimo and immediately end it
+# again instead of starting it on arrival, leaving a near-zero duration
+# that isn't a real "time to complete" — confirmed by the office as a
+# workflow habit, not a genuinely fast job. Excluded from the timing
+# average (but not from job_count/earning, which aren't affected by a
+# bad clock). Gain access jobs are exempt: a lock-out can genuinely be
+# opened in under 5 minutes, so a short duration there is real.
+MIN_TIMED_DURATION_MINUTES = 5
+_GAIN_ACCESS_RAW_VALUES = {v.upper() for v in raw_values_for_display_label("Gain access")}
+
+
+def _is_gain_access(job) -> bool:
+    return (job.loss_type or "").strip().upper() in _GAIN_ACCESS_RAW_VALUES
+
+
+def _timed_durations(jobs: list) -> list[int]:
+    durations = []
+    for job in jobs:
+        duration = job.duration_minutes
+        if duration is None:
+            continue
+        if duration < MIN_TIMED_DURATION_MINUTES and not _is_gain_access(job):
+            continue
+        durations.append(duration)
+    return durations
+
+
 def _avg(values: list[float]) -> float | None:
     values = [v for v in values if v is not None]
     if not values:
@@ -70,7 +97,7 @@ def _summarize(jobs: list, parts_costs: dict[str, float]) -> dict:
         "avg_margin_pct": (
             round(avg_margin / avg_earning * 100, 1) if avg_earning else None
         ),
-        "avg_duration_minutes": _avg([job.duration_minutes for job in jobs]),
+        "avg_duration_minutes": _avg(_timed_durations(jobs)),
     }
 
 

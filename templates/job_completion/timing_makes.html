@@ -3,7 +3,9 @@
 {% block content %}
 <h1>Timing</h1>
 <p>Average on-site duration per successful job, by make — all jobs on file, not a recent window.
-   Click a make to drill into its models, then years.</p>
+   Click a make to drill into its models, then years.
+   Jobs under 5 minutes are excluded from the average (except Gain access) since these are usually
+   a job started and immediately ended in Optimo rather than a genuine fast job.</p>
 
 <ul class="tabs">
   <li><a href="?" class="{% if not selected_service %}tab-active{% endif %}">All services</a></li>
