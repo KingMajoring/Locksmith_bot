@@ -175,17 +175,35 @@ def refresh_missing_financials(window_days: int | None = None) -> int:
     if not jobs:
         return 0
 
+    # Some rows still carry a report_id written by an older, buggier
+    # order_no parser (see _report_id_from_order_no's regression tests
+    # for the messy separators it used to choke on) — e.g. the stored
+    # value is the raw "458155\-2026-01-12" instead of "458155". Handl's
+    # ReportID column is an int, so sending that straight through blows
+    # up the whole batch. Re-derive from order_no with the current
+    # parser instead of trusting the stored field (same lesson
+    # cleanup_admin_jobs already learned).
+    report_id_by_pk = {}
+    for job in jobs:
+        parsed = _report_id_from_order_no(job.order_no)
+        if parsed is not None:
+            report_id_by_pk[job.pk] = parsed
+
     handl = get_handl_client()
-    report_ids = sorted({job.report_id for job in jobs if job.report_id})
+    report_ids = sorted(set(report_id_by_pk.values()))
     job_details = {}
     for i in range(0, len(report_ids), _REFRESH_CHUNK_SIZE):
         job_details.update(handl.get_job_details(report_ids[i : i + _REFRESH_CHUNK_SIZE]))
 
     refreshed = 0
     for job in jobs:
-        details = job_details.get(job.report_id)
+        report_id = report_id_by_pk.get(job.pk)
+        if report_id is None:
+            continue
+        details = job_details.get(report_id)
         if details is None or details.net_cost is None:
             continue
+        job.report_id = report_id
         job.make = details.make
         job.model = details.model
         job.year = details.year
@@ -196,7 +214,7 @@ def refresh_missing_financials(window_days: int | None = None) -> int:
         job.net_cost = details.net_cost
         job.save(
             update_fields=[
-                "make", "model", "year", "vin", "service_type",
+                "report_id", "make", "model", "year", "vin", "service_type",
                 "loss_type", "supplied_service", "net_cost",
             ]
         )

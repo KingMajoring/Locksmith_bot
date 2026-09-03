@@ -332,9 +332,12 @@ class RefreshMissingFinancialsTests(TestCase):
         self.locksmith = _make_locksmith()
         self.today = date(2026, 9, 3)
 
-    def _job(self, order_no, report_id, job_date, net_cost=None):
+    def _job(self, report_id, job_date, net_cost=None, order_no=None):
+        """order_no defaults to the canonical "<ReportID>_<date>" shape
+        so _report_id_from_order_no can round-trip it back to
+        report_id — pass order_no explicitly to test a mismatch."""
         return CompletedJob.objects.create(
-            order_no=order_no,
+            order_no=order_no or f"{report_id}_{job_date.isoformat()}",
             report_id=report_id,
             job_date=job_date,
             locksmith=self.locksmith,
@@ -343,7 +346,7 @@ class RefreshMissingFinancialsTests(TestCase):
         )
 
     def test_fills_in_net_cost_once_available_in_handl(self):
-        self._job("A", "2001", self.today - timedelta(days=5))
+        self._job("2001", self.today - timedelta(days=5))
         details = {
             "2001": JobDetails(
                 report_id="2001", make="Ford", model="Focus", year="2020",
@@ -359,12 +362,12 @@ class RefreshMissingFinancialsTests(TestCase):
             refreshed = refresh_missing_financials()
 
         self.assertEqual(refreshed, 1)
-        job = CompletedJob.objects.get(order_no="A")
+        job = CompletedJob.objects.get(report_id="2001")
         self.assertEqual(job.net_cost, 145.5)
         self.assertEqual(job.make, "Ford")
 
     def test_leaves_job_alone_when_still_not_in_handl(self):
-        self._job("A", "2001", self.today - timedelta(days=5))
+        self._job("2001", self.today - timedelta(days=5))
 
         with patch(
             "apps.job_completion.services.pulling.get_handl_client",
@@ -374,11 +377,11 @@ class RefreshMissingFinancialsTests(TestCase):
             refreshed = refresh_missing_financials()
 
         self.assertEqual(refreshed, 0)
-        job = CompletedJob.objects.get(order_no="A")
+        job = CompletedJob.objects.get(report_id="2001")
         self.assertIsNone(job.net_cost)
 
     def test_ignores_jobs_that_already_have_net_cost(self):
-        self._job("A", "2001", self.today - timedelta(days=5), net_cost=50.0)
+        self._job("2001", self.today - timedelta(days=5), net_cost=50.0)
 
         class StrictFakeHandlClient:
             def get_job_details(self, report_ids):
@@ -394,7 +397,7 @@ class RefreshMissingFinancialsTests(TestCase):
         self.assertEqual(refreshed, 0)
 
     def test_ignores_jobs_older_than_the_window(self):
-        self._job("A", "2001", self.today - timedelta(days=90))
+        self._job("2001", self.today - timedelta(days=90))
         details = {
             "2001": JobDetails(
                 report_id="2001", make="Ford", model="Focus", year="2020",
@@ -410,7 +413,7 @@ class RefreshMissingFinancialsTests(TestCase):
             refreshed = refresh_missing_financials(window_days=60)
 
         self.assertEqual(refreshed, 0)
-        job = CompletedJob.objects.get(order_no="A")
+        job = CompletedJob.objects.get(report_id="2001")
         self.assertIsNone(job.net_cost)
 
     def test_no_jobs_missing_net_cost_returns_zero_without_querying_handl(self):
@@ -430,7 +433,7 @@ class RefreshMissingFinancialsTests(TestCase):
         """The Margin/Timing reports this feeds are all-time history, so
         a years-old job missing net_cost must still get retried unless a
         window is explicitly requested."""
-        self._job("A", "2001", date(2014, 3, 1))
+        self._job("2001", date(2014, 3, 1))
         details = {
             "2001": JobDetails(
                 report_id="2001", make="Vauxhall", model="Astra", year="2014",
@@ -445,12 +448,12 @@ class RefreshMissingFinancialsTests(TestCase):
             refreshed = refresh_missing_financials()
 
         self.assertEqual(refreshed, 1)
-        job = CompletedJob.objects.get(order_no="A")
+        job = CompletedJob.objects.get(report_id="2001")
         self.assertEqual(job.net_cost, 220.0)
 
     def test_large_backlog_is_batched_to_stay_under_the_sql_param_limit(self):
         for i in range(1200):
-            self._job(f"A{i}", str(3000 + i), date(2020, 1, 1))
+            self._job(str(3000 + i), date(2020, 1, 1))
 
         seen_chunk_sizes = []
 
@@ -475,6 +478,57 @@ class RefreshMissingFinancialsTests(TestCase):
         self.assertEqual(refreshed, 1200)
         self.assertTrue(all(size <= 500 for size in seen_chunk_sizes))
         self.assertEqual(sum(seen_chunk_sizes), 1200)
+
+    def test_corrupted_stored_report_id_is_repaired_from_order_no(self):
+        """Regression test: confirmed live via SSH — a legacy row's
+        stored report_id was itself the raw messily-separated order_no
+        ("458155\\-2026-01-12") rather than the clean "458155" a newer
+        parser fix would have produced, because it was pulled before
+        that fix shipped and never re-pulled since. Sending that
+        straight to Handl's int-typed ReportID column blew up the whole
+        batch ("Conversion failed... to data type int"). Must re-derive
+        from order_no instead of trusting the stored field."""
+        order_no = "458155\\-2026-01-12"
+        job = self._job(order_no, date(2026, 1, 12), order_no=order_no)
+
+        details = {
+            "458155": JobDetails(
+                report_id="458155", make="Ford", model="Focus", year="2020",
+                vin="", service_type="Car", loss_type="Lockout",
+                supplied_service="Non-Destructive Entry", net_cost=180.0,
+            ),
+        }
+
+        class AssertingHandlClient:
+            def get_job_details(self, report_ids):
+                assert all(rid.isdigit() for rid in report_ids), report_ids
+                return {rid: details[rid] for rid in report_ids if rid in details}
+
+        with patch(
+            "apps.job_completion.services.pulling.get_handl_client",
+            return_value=AssertingHandlClient(),
+        ):
+            refreshed = refresh_missing_financials()
+
+        self.assertEqual(refreshed, 1)
+        job.refresh_from_db()
+        self.assertEqual(job.report_id, "458155")
+        self.assertEqual(job.net_cost, 180.0)
+
+    def test_job_with_unparseable_order_no_is_skipped_not_crashed(self):
+        self._job("1", date(2026, 1, 12), order_no="SEND KEY TO CHARLEY")
+
+        class StrictFakeHandlClient:
+            def get_job_details(self, report_ids):
+                raise AssertionError("should not query Handl for an unparseable order_no")
+
+        with patch(
+            "apps.job_completion.services.pulling.get_handl_client",
+            return_value=StrictFakeHandlClient(),
+        ):
+            refreshed = refresh_missing_financials()
+
+        self.assertEqual(refreshed, 0)
 
 
 class BenchmarkingTests(TestCase):
