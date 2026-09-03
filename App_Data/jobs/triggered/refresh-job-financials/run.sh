@@ -1,8 +1,9 @@
 #!/bin/bash
 # Azure WebJob (triggered, CRON-scheduled — see settings.job in this same
-# folder). Re-checks recent CompletedJob rows still missing net_cost
-# against Handl, since Policy_Financial is often entered days after a
-# job completes (see refresh_job_financials management command).
+# folder). Re-checks CompletedJob rows still missing net_cost against
+# Handl, since Policy_Financial is often entered days after a job
+# completes (see refresh_job_financials management command). No age
+# limit — the Margin/Timing reports this feeds are all-time history.
 #
 # Mirrors pull-completed-jobs/run.sh: the app is deployed via Oryx's
 # compressed build, extracted at container startup to a per-instance

@@ -426,6 +426,56 @@ class RefreshMissingFinancialsTests(TestCase):
 
         self.assertEqual(refreshed, 0)
 
+    def test_no_window_by_default_catches_years_old_jobs(self):
+        """The Margin/Timing reports this feeds are all-time history, so
+        a years-old job missing net_cost must still get retried unless a
+        window is explicitly requested."""
+        self._job("A", "2001", date(2014, 3, 1))
+        details = {
+            "2001": JobDetails(
+                report_id="2001", make="Vauxhall", model="Astra", year="2014",
+                vin="VIN2001", service_type="Car", loss_type="Lockout",
+                supplied_service="Non-Destructive Entry", net_cost=220.0,
+            ),
+        }
+        with patch(
+            "apps.job_completion.services.pulling.get_handl_client",
+            return_value=FakeHandlClient(details),
+        ):
+            refreshed = refresh_missing_financials()
+
+        self.assertEqual(refreshed, 1)
+        job = CompletedJob.objects.get(order_no="A")
+        self.assertEqual(job.net_cost, 220.0)
+
+    def test_large_backlog_is_batched_to_stay_under_the_sql_param_limit(self):
+        for i in range(1200):
+            self._job(f"A{i}", str(3000 + i), date(2020, 1, 1))
+
+        seen_chunk_sizes = []
+
+        class ChunkTrackingHandlClient:
+            def get_job_details(self, report_ids):
+                seen_chunk_sizes.append(len(report_ids))
+                return {
+                    rid: JobDetails(
+                        report_id=rid, make="Ford", model="Focus", year="2020",
+                        vin="", service_type="Car", loss_type="Lockout",
+                        supplied_service="Non-Destructive Entry", net_cost=100.0,
+                    )
+                    for rid in report_ids
+                }
+
+        with patch(
+            "apps.job_completion.services.pulling.get_handl_client",
+            return_value=ChunkTrackingHandlClient(),
+        ):
+            refreshed = refresh_missing_financials()
+
+        self.assertEqual(refreshed, 1200)
+        self.assertTrue(all(size <= 500 for size in seen_chunk_sizes))
+        self.assertEqual(sum(seen_chunk_sizes), 1200)
+
 
 class BenchmarkingTests(TestCase):
     def setUp(self):

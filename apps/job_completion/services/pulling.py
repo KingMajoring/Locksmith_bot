@@ -146,26 +146,40 @@ def pull_completed_jobs_for_date(for_date: date) -> PullSummary:
     )
 
 
-def refresh_missing_financials(window_days: int = 60) -> int:
+# SQL Server caps a query at ~2100 parameters; get_job_details sends one
+# named parameter per report_id, so a large backlog needs batching.
+_REFRESH_CHUNK_SIZE = 500
+
+
+def refresh_missing_financials(window_days: int | None = None) -> int:
     """Re-fetch Handl job details for CompletedJob rows still missing
     net_cost.
 
     The nightly pull only ever looks at a job once, the morning after it
     completes — but Policy_Financial rows are often entered by the office
     days later, after invoicing, so net_cost is stored as NULL and never
-    revisited. This re-checks recent jobs still missing it and fills in
-    whatever's landed in Handl since. Older jobs are treated as a lost
-    cause — if the financial data hasn't turned up within window_days,
-    it's not coming. Returns the number of jobs refreshed.
+    revisited. This re-checks jobs still missing it and fills in
+    whatever's landed in Handl since.
+
+    No age limit by default: the Margin/Timing reports this feeds are
+    explicitly all-time history, so a job missing net_cost from years
+    ago is just as worth retrying as one from last week — only pass
+    window_days to deliberately scope a run down. Returns the number of
+    jobs refreshed.
     """
-    cutoff = date.today() - timedelta(days=window_days)
-    jobs = list(CompletedJob.objects.filter(net_cost__isnull=True, job_date__gte=cutoff))
+    queryset = CompletedJob.objects.filter(net_cost__isnull=True)
+    if window_days is not None:
+        cutoff = date.today() - timedelta(days=window_days)
+        queryset = queryset.filter(job_date__gte=cutoff)
+    jobs = list(queryset)
     if not jobs:
         return 0
 
     handl = get_handl_client()
-    report_ids = list({job.report_id for job in jobs if job.report_id})
-    job_details = handl.get_job_details(report_ids)
+    report_ids = sorted({job.report_id for job in jobs if job.report_id})
+    job_details = {}
+    for i in range(0, len(report_ids), _REFRESH_CHUNK_SIZE):
+        job_details.update(handl.get_job_details(report_ids[i : i + _REFRESH_CHUNK_SIZE]))
 
     refreshed = 0
     for job in jobs:

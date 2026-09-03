@@ -1,8 +1,9 @@
 """Run daily (e.g. Azure scheduled WebJob, shortly after
-pull_completed_jobs) to re-check recent CompletedJob rows still missing
+pull_completed_jobs) to re-check CompletedJob rows still missing
 net_cost — Handl's Policy_Financial rows are often entered days after a
 job completes, after the one-time nightly pull already froze net_cost
-as NULL.
+as NULL. No age limit by default, since the Margin/Timing reports this
+feeds are explicitly all-time history.
 """
 from django.core.management.base import BaseCommand
 
@@ -16,8 +17,8 @@ class Command(BaseCommand):
         parser.add_argument(
             "--window-days",
             type=int,
-            default=60,
-            help="Only look at jobs from the last N days (default: 60).",
+            default=None,
+            help="Only look at jobs from the last N days (default: no limit).",
         )
 
     def handle(self, *args, **options):
