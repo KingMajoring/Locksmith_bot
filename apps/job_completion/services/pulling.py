@@ -42,11 +42,17 @@ class PullSummary:
 # either — real jobs' dates are hand-typed into Optimo and come with
 # all kinds of typos (confirmed live: "_202-08-25", "_1016-08-18",
 # "_18/0/2026", "_202+-04-08", "-026-01-09" — missing/extra/wrong
-# digits, reordered fields). The one thing that reliably distinguishes
-# a real "<ReportID><separator><date>" order from an admin note is that
-# nothing *after* the leading ID is ever a letter — a mistyped date is
-# still only digits and separators, whereas a note is prose.
-_REPORT_ID_PATTERN = re.compile(r"^\s*(\d+)[\d\-_/\\~ +]*$")
+# digits, reordered fields). Two signals, either one enough:
+#   (a) an underscore right after the ID (the canonical
+#       "<ReportID>_<date>" separator) — trusted even when what follows
+#       isn't a date at all, e.g. a driver overwrote it with a note
+#       ("479311_cut blades and post", confirmed real by the office);
+#   (b) no underscore, but everything after the ID is still just
+#       digits/separators (a mistyped date, never prose) — covers the
+#       hyphen-only style ("498528-2026-08-22") and bare IDs.
+# A plain admin note fails both: it has neither an underscore nor an
+# all-digits-and-separators tail.
+_REPORT_ID_PATTERN = re.compile(r"^\s*(\d+)(?:\s*_.*|[\d\-_/\\~ +]*)$")
 
 
 def _report_id_from_order_no(order_no: str) -> str | None:

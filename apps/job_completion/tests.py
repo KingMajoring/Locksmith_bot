@@ -289,6 +289,15 @@ class ReportIdFromOrderNoTests(TestCase):
         self.assertEqual(_report_id_from_order_no("474052_202+-04-08"), "474052")
         self.assertEqual(_report_id_from_order_no("459420_18/0/2026"), "459420")
 
+    def test_underscore_separated_note_instead_of_date_is_still_real(self):
+        """Confirmed real by the office: a driver sometimes overwrites
+        the date part with a free-text note instead, but the
+        "<ID>_..." shape (leading ID, then straight into an underscore)
+        is still trusted as the real Handl claim it is — unlike a note
+        that merely mentions a job number elsewhere in the string."""
+        self.assertEqual(_report_id_from_order_no("479311_cut blades and post"), "479311")
+        self.assertEqual(_report_id_from_order_no("479946_met call out"), "479946")
+
     def test_admin_note_starting_with_a_number_is_not_a_report_id(self):
         """"20 MIN FLEET & STOCK CHECK" and "17 Little Venice Country
         Park & Marina" both start with digits, but the rest is prose,
@@ -297,6 +306,8 @@ class ReportIdFromOrderNoTests(TestCase):
         self.assertIsNone(_report_id_from_order_no("17 Little Venice Country Park & Marina"))
 
     def test_note_with_embedded_report_id_is_not_extracted(self):
+        """No underscore right after the leading number, so these read
+        as a note mentioning a job — not the job's own order entry."""
         self.assertIsNone(_report_id_from_order_no("(MET CALL OUT) 480400_2026-05-11"))
         self.assertIsNone(_report_id_from_order_no("456838 POST KEY"))
 
