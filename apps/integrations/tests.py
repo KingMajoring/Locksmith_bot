@@ -77,6 +77,17 @@ class MockHandlClientTests(TestCase):
         for cost in first.values():
             self.assertGreater(cost, 0)
 
+    def test_list_current_stock_is_deterministic_and_positive_qty(self):
+        first = self.client.list_current_stock(["ENG-001"])
+        second = self.client.list_current_stock(["ENG-001"])
+        self.assertEqual(first, second)
+        self.assertTrue(first)
+        for line in first:
+            self.assertGreater(line.qty, 0)
+
+    def test_record_disposal_does_not_raise(self):
+        self.client.record_disposal("885", "496390", "TK-100", 2)
+
 
 def _fake_connection(rows):
     """A MagicMock usable as `with client._connection() as conn:`, with
@@ -354,6 +365,66 @@ class SQLHandlClientTests(TestCase):
     def test_get_part_costs_empty_input_returns_empty_without_querying(self):
         client = SQLHandlClient()
         self.assertEqual(client.get_part_costs([]), {})
+
+    def test_list_current_stock_maps_rows_and_uses_positive_qty_having(self):
+        rows = [
+            {"part_code": "TK-100", "part_name": "Transponder key blank", "qty": 4},
+            {"part_code": "TK-107", "part_name": "Van lock cylinder", "qty": 1},
+        ]
+        fake_conn = _fake_connection(rows)
+        client = SQLHandlClient()
+        with patch.object(client, "_connection", return_value=fake_conn):
+            lines = client.list_current_stock(["42", "43"])
+
+        self.assertEqual(len(lines), 2)
+        self.assertEqual(lines[0].part_code, "TK-100")
+        self.assertEqual(lines[0].qty, 4)
+
+        cursor = fake_conn.cursor.return_value
+        query, params = cursor.execute.call_args[0]
+        self.assertIn("Inventory_Locksmith_Stock", query)
+        self.assertIn("HAVING SUM(ils.Quantity) > 0", query)
+        self.assertEqual(params["lid0"], 42)
+        self.assertEqual(params["lid1"], 43)
+
+    def test_list_current_stock_empty_ids_returns_empty_without_querying(self):
+        client = SQLHandlClient()
+        self.assertEqual(client.list_current_stock([]), [])
+
+    def test_record_disposal_inserts_against_most_recent_batch_and_commits(self):
+        fake_conn = MagicMock()
+        fake_conn.__enter__.return_value = fake_conn
+        fake_conn.__exit__.return_value = False
+        fake_conn.cursor.return_value.fetchone.return_value = {"Id": 555}
+        client = SQLHandlClient()
+        with patch.object(client, "_write_connection", return_value=fake_conn):
+            client.record_disposal("885", "496390", "TK-100", 2)
+
+        cursor = fake_conn.cursor.return_value
+        select_query, select_params = cursor.execute.call_args_list[0][0]
+        self.assertIn("Inventory_Stock", select_query)
+        self.assertIn("ORDER BY ist.DateCreated DESC", select_query)
+        self.assertEqual(select_params["sku"], "TK-100")
+
+        insert_query, insert_params = cursor.execute.call_args_list[1][0]
+        self.assertIn("INSERT INTO Inventory_Disposals", insert_query)
+        self.assertEqual(insert_params["lid"], 885)
+        self.assertEqual(insert_params["report_id"], "496390")
+        self.assertEqual(insert_params["stock_id"], 555)
+        self.assertEqual(insert_params["qty"], 2)
+
+        fake_conn.commit.assert_called_once()
+
+    def test_record_disposal_raises_when_no_stock_batch_found(self):
+        fake_conn = MagicMock()
+        fake_conn.__enter__.return_value = fake_conn
+        fake_conn.__exit__.return_value = False
+        fake_conn.cursor.return_value.fetchone.return_value = None
+        client = SQLHandlClient()
+        with patch.object(client, "_write_connection", return_value=fake_conn):
+            with self.assertRaises(ValueError):
+                client.record_disposal("885", "496390", "TK-999", 1)
+        fake_conn.commit.assert_not_called()
 
 
 class GetHandlClientTests(TestCase):

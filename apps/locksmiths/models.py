@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.db import models
 
 
@@ -20,6 +21,13 @@ class Locksmith(models.Model):
     name = models.CharField(max_length=200)
     email = models.EmailField(blank=True)
     active = models.BooleanField(default=True)
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="locksmith_profile",
+        help_text="Linked automatically the first time this locksmith signs in "
+        "with a Microsoft account matching their email — grants access to the "
+        "self-service portal at /locksmith/ instead of office/admin access.",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

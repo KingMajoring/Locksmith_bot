@@ -1,0 +1,23 @@
+{% extends "locksmith_portal/base.html" %}
+{% block title %}Stock check — WGTK Locksmith Portal{% endblock %}
+{% block content %}
+<a class="back-link" href="{% url 'locksmith_portal:dashboard' %}">&larr; Back</a>
+<h1>Stock check — week of {{ weekly_check.week_starting }}</h1>
+<p>Count how many of each part you actually have on your van and enter it below.</p>
+<form method="post" class="card">
+  {% csrf_token %}
+  <table>
+    <tr><th>Part</th><th>Count</th></tr>
+    {% for item in items %}
+    <tr>
+      <td>{{ item.part_name }}<br><span class="sub">{{ item.part_code }}</span></td>
+      <td>
+        <input type="number" min="0" inputmode="numeric" name="qty_{{ item.id }}"
+               value="{% if item.actual_qty is not None %}{{ item.actual_qty }}{% endif %}">
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  <p style="margin-top:1rem;"><button class="btn" type="submit">Save counts</button></p>
+</form>
+{% endblock %}

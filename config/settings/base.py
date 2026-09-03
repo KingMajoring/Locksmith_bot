@@ -36,6 +36,7 @@ INSTALLED_APPS = [
     "apps.integrations",
     "apps.stock_accuracy",
     "apps.job_completion",
+    "apps.locksmith_portal",
 ]
 
 MIDDLEWARE = [
@@ -48,6 +49,7 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "allauth.account.middleware.AccountMiddleware",
+    "apps.accounts.middleware.RestrictLocksmithsToPortalMiddleware",
 ]
 
 ROOT_URLCONF = "config.urls"
@@ -84,6 +86,13 @@ HANDL_SQL_PORT = env.int("HANDL_SQL_PORT", default=1433)
 HANDL_SQL_DATABASE = env("HANDL_SQL_DATABASE", default="")
 HANDL_SQL_USER = env("HANDL_SQL_USER", default="")
 HANDL_SQL_PASSWORD = env("HANDL_SQL_PASSWORD", default="")
+
+# Separate write-capable credential (locksmith portal disposals only —
+# apps/integrations/handl.py's record_disposal). The main HANDL_SQL_USER
+# above is read-only by design; this is a second, write-capable account
+# ("n8n"-style service user) on the same server/port/database.
+HANDL_SQL_WRITE_USER = env("HANDL_SQL_WRITE_USER", default="")
+HANDL_SQL_WRITE_PASSWORD = env("HANDL_SQL_WRITE_PASSWORD", default="")
 
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},

@@ -44,14 +44,23 @@ def assign_stock_check_schedule(modeladmin, request, queryset):
 
 @admin.register(Locksmith)
 class LocksmithAdmin(admin.ModelAdmin):
-    list_display = ("name", "soter_ids_display", "email", "has_schedule", "active")
+    list_display = (
+        "name", "soter_ids_display", "email", "has_schedule", "portal_linked", "active",
+    )
     list_filter = ("active",)
     search_fields = ("name", "email", "soter_ids__soter_locksmith_id")
     inlines = [SoterLocksmithIdInline, OptimoDriverIdInline]
     actions = [assign_stock_check_schedule]
+    readonly_fields = ("user",)
 
     def get_queryset(self, request):
-        return super().get_queryset(request).select_related("stock_check_schedule")
+        return super().get_queryset(request).select_related("stock_check_schedule", "user")
+
+    @admin.display(description="Portal linked", boolean=True)
+    def portal_linked(self, obj):
+        # Whether this locksmith has signed in yet and been auto-linked
+        # to a self-service portal account (see apps/accounts/adapter.py).
+        return obj.user_id is not None
 
     @admin.display(description="Soter IDs")
     def soter_ids_display(self, obj):

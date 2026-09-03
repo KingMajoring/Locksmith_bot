@@ -42,6 +42,13 @@ class ExpectedStock:
 
 
 @dataclass(frozen=True)
+class CurrentStockLine:
+    part_code: str
+    part_name: str
+    qty: int
+
+
+@dataclass(frozen=True)
 class JobDetails:
     report_id: str
     make: str
@@ -98,6 +105,27 @@ class HandlClient(ABC):
         get_expected_stock (Inventory_Stock's PartValue/Quantity for the
         most recently priced batch), but not scoped to a locksmith, for
         costing up a job's disposed_skus in Area 2."""
+
+    @abstractmethod
+    def list_current_stock(self, soter_locksmith_ids: list[str]) -> list[CurrentStockLine]:
+        """Every part this locksmith currently has van stock of (qty > 0),
+        for the locksmith portal's "what can I dispose" picker — unlike
+        get_expected_stock, doesn't need the caller to already know which
+        part codes to ask about."""
+
+    @abstractmethod
+    def record_disposal(
+        self, soter_locksmith_id: str, report_id: str, part_code: str, quantity: int
+    ) -> None:
+        """Record a part disposed against a job, for the locksmith portal.
+        WRITES to Handl — uses a separate write-capable connection (see
+        HANDL_SQL_WRITE_USER/PASSWORD) since the main HANDL_SQL_* creds
+        are deliberately read-only. NOT YET VERIFIED against Handl's full
+        Inventory_Disposals schema — only the columns confirmed via
+        existing SELECT queries elsewhere in this file are populated;
+        run one supervised test disposal before relying on this for real
+        locksmiths, in case there's a required column this doesn't know
+        about."""
 
 
 class MockHandlClient(HandlClient):
@@ -230,6 +258,19 @@ class MockHandlClient(HandlClient):
             result[sku] = round(rng.uniform(3, 85), 2)
         return result
 
+    def list_current_stock(self, soter_locksmith_ids: list[str]) -> list[CurrentStockLine]:
+        rng = self._rng_for(soter_locksmith_ids)
+        sample = rng.sample(self._CATALOGUE, k=min(len(self._CATALOGUE), 12))
+        return [
+            CurrentStockLine(part_code=code, part_name=name, qty=rng.randint(1, 8))
+            for code, name in sample
+        ]
+
+    def record_disposal(
+        self, soter_locksmith_id: str, report_id: str, part_code: str, quantity: int
+    ) -> None:
+        pass
+
 
 class SQLHandlClient(HandlClient):
     """Real Soter (Handl) DB-backed implementation, over pymssql.
@@ -256,6 +297,28 @@ class SQLHandlClient(HandlClient):
             database=settings.HANDL_SQL_DATABASE,
             user=settings.HANDL_SQL_USER,
             password=settings.HANDL_SQL_PASSWORD,
+            as_dict=True,
+        )
+        try:
+            yield conn
+        finally:
+            conn.close()
+
+    @contextmanager
+    def _write_connection(self):
+        # The main HANDL_SQL_* credentials are deliberately read-only
+        # (confirmed with the business — see this module's docstring).
+        # record_disposal() is the one place this app writes to Handl,
+        # so it uses a separate write-capable credential instead of
+        # widening the main connection's permissions.
+        import pymssql
+
+        conn = pymssql.connect(
+            server=settings.HANDL_SQL_SERVER,
+            port=settings.HANDL_SQL_PORT,
+            database=settings.HANDL_SQL_DATABASE,
+            user=settings.HANDL_SQL_WRITE_USER,
+            password=settings.HANDL_SQL_WRITE_PASSWORD,
             as_dict=True,
         )
         try:
@@ -537,6 +600,80 @@ class SQLHandlClient(HandlClient):
         with self._connection() as conn:
             cursor = conn.cursor()
             return self._fetch_unit_costs(cursor, skus)
+
+    def list_current_stock(self, soter_locksmith_ids: list[str]) -> list[CurrentStockLine]:
+        if not soter_locksmith_ids:
+            return []
+        id_placeholders = ", ".join(f"%(lid{i})s" for i in range(len(soter_locksmith_ids)))
+        params = {f"lid{i}": int(lid) for i, lid in enumerate(soter_locksmith_ids)}
+        # Same table/grouping as get_expected_stock's qty_query, but with
+        # no SKU filter — the locksmith portal needs "everything they
+        # currently have", not stock for a pre-known list of parts.
+        query = f"""
+            SELECT ipa.SKU AS part_code, ipa.Name AS part_name, SUM(ils.Quantity) AS qty
+            FROM Inventory_Locksmith_Stock ils
+            JOIN Inventory_Parts ipa ON ils.PartId = ipa.Id
+            WHERE ils.LookupLocksmithId IN ({id_placeholders})
+            GROUP BY ipa.SKU, ipa.Name
+            HAVING SUM(ils.Quantity) > 0
+            ORDER BY ipa.Name
+        """
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+        return [
+            CurrentStockLine(part_code=row["part_code"], part_name=row["part_name"] or "", qty=row["qty"])
+            for row in rows
+        ]
+
+    def record_disposal(
+        self, soter_locksmith_id: str, report_id: str, part_code: str, quantity: int
+    ) -> None:
+        # NOT YET VERIFIED against Handl's full Inventory_Disposals
+        # schema — see the ABC docstring. Columns here are only the ones
+        # confirmed live via the existing SELECT queries in this class
+        # (get_stock_usage, get_disposed_skus): Id, LookupLocksmithId,
+        # ReportID, StockId, Quantity, DateCreated. StockId picks the
+        # most recently created batch for the part, mirroring the
+        # "most recent batch" ranking already proven correct for cost
+        # lookups elsewhere in this file — unconfirmed whether that's
+        # actually how Soter's own app chooses which batch to dispose
+        # against.
+        from datetime import datetime as _datetime
+
+        with self._write_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT TOP 1 ist.Id
+                FROM Inventory_Stock ist
+                JOIN Inventory_Parts ipa ON ist.PartId = ipa.Id
+                WHERE ipa.SKU = %(sku)s
+                ORDER BY ist.DateCreated DESC
+                """,
+                {"sku": part_code},
+            )
+            stock_row = cursor.fetchone()
+            if not stock_row:
+                raise ValueError(f"No Inventory_Stock batch found for SKU {part_code!r}.")
+
+            cursor.execute(
+                """
+                INSERT INTO Inventory_Disposals
+                    (LookupLocksmithId, ReportID, StockId, Quantity, DateCreated)
+                VALUES
+                    (%(lid)s, %(report_id)s, %(stock_id)s, %(qty)s, %(now)s)
+                """,
+                {
+                    "lid": int(soter_locksmith_id),
+                    "report_id": report_id,
+                    "stock_id": stock_row["Id"],
+                    "qty": quantity,
+                    "now": _datetime.utcnow(),
+                },
+            )
+            conn.commit()
 
 
 def get_handl_client() -> HandlClient:

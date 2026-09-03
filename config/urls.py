@@ -14,4 +14,5 @@ urlpatterns = [
     path("stock-accuracy/", include("apps.stock_accuracy.urls")),
     path("job-completion/", include("apps.job_completion.urls")),
     path("locksmiths/", include("apps.locksmiths.urls")),
+    path("locksmith/", include("apps.locksmith_portal.urls")),
 ]
