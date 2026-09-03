@@ -18,7 +18,7 @@ from .services.model_analysis import (
     locksmith_model_failure_breakdown,
 )
 from .services.model_normalization import normalize_model
-from .services.pulling import pull_completed_jobs_for_date
+from .services.pulling import _report_id_from_order_no, pull_completed_jobs_for_date
 from .services.reporting import (
     all_locksmith_summaries,
     failure_category_breakdown,
@@ -243,6 +243,50 @@ class PullingTests(TestCase):
         self.assertEqual(summary.created, 0)
         self.assertEqual(summary.skipped_admin, 1)
         self.assertFalse(CompletedJob.objects.filter(order_no=order_no).exists())
+
+
+class ReportIdFromOrderNoTests(TestCase):
+    """Regression tests built from real order_no values seen live —
+    the first cut of this parser (isdigit() on a plain rsplit("_", 1))
+    misclassified plenty of genuine, messily-formatted real jobs as
+    admin/housekeeping entries, which would have deleted real data via
+    cleanup_admin_jobs."""
+
+    def test_clean_hyphenated_date(self):
+        self.assertEqual(_report_id_from_order_no("498528-2026-08-22"), "498528")
+
+    def test_underscore_separated_date(self):
+        self.assertEqual(_report_id_from_order_no("485801_2026_06_08"), "485801")
+
+    def test_stray_space_before_underscore(self):
+        self.assertEqual(_report_id_from_order_no("498074 _2026-08-19"), "498074")
+
+    def test_stray_tilde_separator(self):
+        self.assertEqual(_report_id_from_order_no("463565~_2026-02-09"), "463565")
+
+    def test_stray_backslash_separator(self):
+        self.assertEqual(_report_id_from_order_no("458155\\-2026-01-12"), "458155")
+
+    def test_slash_separator(self):
+        self.assertEqual(_report_id_from_order_no("481836/_2026-05-19"), "481836")
+
+    def test_report_id_alone_with_no_date_suffix(self):
+        self.assertEqual(_report_id_from_order_no("498528"), "498528")
+
+    def test_admin_note_starting_with_a_number_is_not_a_report_id(self):
+        """"20 MIN FLEET & STOCK CHECK" and "17 Little Venice Country
+        Park & Marina" both start with digits, but aren't followed by a
+        date — a leading digit run alone isn't enough."""
+        self.assertIsNone(_report_id_from_order_no("20 MIN FLEET & STOCK CHECK"))
+        self.assertIsNone(_report_id_from_order_no("17 Little Venice Country Park & Marina"))
+
+    def test_note_with_embedded_report_id_is_not_extracted(self):
+        self.assertIsNone(_report_id_from_order_no("(MET CALL OUT) 480400_2026-05-11"))
+
+    def test_plain_text_note_is_not_a_report_id(self):
+        self.assertIsNone(_report_id_from_order_no("SEND KEY TO CHARLEY"))
+        self.assertIsNone(_report_id_from_order_no("**HALF DAY TODAY** UP TO 20 MIN VAN & STOCK CHECK"))
+        self.assertIsNone(_report_id_from_order_no("1-2-1 with Josh"))
 
 
 class BenchmarkingTests(TestCase):
@@ -605,6 +649,15 @@ class CleanupAdminJobsCommandTests(TestCase):
             job_date=date(2026, 1, 2), locksmith=self.locksmith,
             status=CompletedJob.Status.SUCCESS,
         )
+        # Stored under the old, cruder parser: a real job with a messily
+        # formatted order_no whose report_id got mangled to something
+        # that fails isdigit() ("498074 " has a trailing space) even
+        # though it's genuinely real — must survive cleanup.
+        self.messy_real_job = CompletedJob.objects.create(
+            order_no="498074 _2026-08-19", report_id="498074 ",
+            job_date=date(2026, 8, 19), locksmith=self.locksmith,
+            status=CompletedJob.Status.SUCCESS,
+        )
 
     def test_deletes_only_non_numeric_report_id_jobs(self):
         from django.core.management import call_command
@@ -613,6 +666,7 @@ class CleanupAdminJobsCommandTests(TestCase):
 
         self.assertFalse(CompletedJob.objects.filter(pk=self.admin_job.pk).exists())
         self.assertTrue(CompletedJob.objects.filter(pk=self.real_job.pk).exists())
+        self.assertTrue(CompletedJob.objects.filter(pk=self.messy_real_job.pk).exists())
 
     def test_dry_run_deletes_nothing(self):
         from django.core.management import call_command
@@ -621,6 +675,7 @@ class CleanupAdminJobsCommandTests(TestCase):
 
         self.assertTrue(CompletedJob.objects.filter(pk=self.admin_job.pk).exists())
         self.assertTrue(CompletedJob.objects.filter(pk=self.real_job.pk).exists())
+        self.assertTrue(CompletedJob.objects.filter(pk=self.messy_real_job.pk).exists())
 
 
 class NormalizeModelTests(TestCase):

@@ -14,6 +14,7 @@ manual office decision) is never overwritten by a repull.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import date
 
@@ -34,8 +35,26 @@ class PullSummary:
     skipped_admin: int = 0
 
 
-def _report_id_from_order_no(order_no: str) -> str:
-    return order_no.rsplit("_", 1)[0]
+# A leading digit run alone isn't a reliable enough signal that an
+# orderNo is a real Handl claim — plenty of admin notes start with
+# digits too ("20 MIN FLEET & STOCK CHECK", "17 Little Venice..."). A
+# real order is "<ReportID><separator><date>" (or just "<ReportID>"
+# alone) with a "20YY" year appearing right after the ID, however
+# messily separated — confirmed live: "_2026-08-19", "_2026_06_08",
+# " _2026-08-19" (stray space), "~_2026-02-09", "\-2026-01-12" all seen
+# for genuine jobs, not just the clean "<id>_<date>" the format was
+# assumed to always be.
+_REPORT_ID_PATTERN = re.compile(r"^\s*(\d+)[-_/\\~ ]*(?:20\d{2}|$)")
+
+
+def _report_id_from_order_no(order_no: str) -> str | None:
+    """The numeric Handl ReportID this Optimo orderNo corresponds to, or
+    None if it's an internal/admin entry with no real ReportID at all
+    (confirmed live: hundreds of entries like "SEND KEY TO CHARLEY" and
+    "**HALF DAY TODAY** UP TO 20 MIN VAN & STOCK CHECK" — free-text
+    notes drivers add to their Optimo route, not Handl claims)."""
+    match = _REPORT_ID_PATTERN.match(order_no)
+    return match.group(1) if match else None
 
 
 def pull_completed_jobs_for_date(for_date: date) -> PullSummary:
@@ -59,27 +78,26 @@ def pull_completed_jobs_for_date(for_date: date) -> PullSummary:
     ]
 
     # Not every completed Optimo order is a real locksmith job — some are
-    # internal/admin housekeeping entries (confirmed live: orderNo values
-    # like "**HALF DAY TODAY** UP TO 20 MIN VAN & STOCK CHECK" and "SEND
-    # KEY TO CHARLEY", not "<ReportID>_<date>"). These have no numeric
-    # ReportID at all, so they're not Handl claims and must never be
-    # stored as a CompletedJob — not just skipped for the Handl lookup,
-    # which used to leave them in with blank make/model/etc, polluting
-    # job counts and cost/margin totals.
-    job_summaries = [
-        s for s in completed_summaries if _report_id_from_order_no(s.order_no).isdigit()
+    # internal/admin housekeeping entries with no real ReportID at all,
+    # so they're not Handl claims and must never be stored as a
+    # CompletedJob — not just skipped for the Handl lookup, which used
+    # to leave them in with blank make/model/etc, polluting job counts
+    # and cost/margin totals.
+    job_entries = [
+        (s, rid)
+        for s in completed_summaries
+        if (rid := _report_id_from_order_no(s.order_no)) is not None
     ]
-    skipped_admin = len(completed_summaries) - len(job_summaries)
+    skipped_admin = len(completed_summaries) - len(job_entries)
 
-    report_ids = [_report_id_from_order_no(s.order_no) for s in job_summaries]
+    report_ids = [rid for _s, rid in job_entries]
     job_details = handl.get_job_details(report_ids)
     disposed_skus = handl.get_disposed_skus(report_ids)
 
     created = 0
     updated = 0
-    for summary in job_summaries:
+    for summary, report_id in job_entries:
         completion = completions[summary.order_no]
-        report_id = _report_id_from_order_no(summary.order_no)
         details = job_details.get(report_id)
 
         defaults = {
