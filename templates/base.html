@@ -19,9 +19,11 @@
         <div class="section">
           <a class="section-title" href="{% url 'job_completion:dashboard' %}">Job Completion</a>
           <a class="sub-link" href="{% url 'job_completion:dashboard' %}">Dashboard</a>
-          <a class="sub-link" href="{% url 'job_completion:job_failures' %}">Job Failures{% if needs_categorization_count %} <span class="badge">{{ needs_categorization_count }}</span>{% endif %}</a>
-          <a class="sub-link" href="{% url 'job_completion:model_analysis' %}">Model Analysis</a>
           <a class="sub-link" href="{% url 'job_completion:jobs_by_day' %}">By Day</a>
+        </div>
+        <div class="section">
+          <a class="section-title" href="{% url 'job_completion:job_failures' %}">Job Failures{% if needs_categorization_count %} <span class="badge">{{ needs_categorization_count }}</span>{% endif %}</a>
+          <a class="sub-link" href="{% url 'job_completion:model_analysis' %}">Model Analysis</a>
         </div>
         <div class="section">
           <a class="section-title" href="{% url 'admin:index' %}">Admin</a>
