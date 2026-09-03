@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Margin — {{ make }}{% endblock %}
+{% block content %}
+<a class="back-link" href="{% url 'job_completion:margin_makes' %}">&larr; All makes</a>
+<h1>Margin — {{ make }}</h1>
+<p>By model family (trim/spec variants grouped together). Click a model to drill into years.</p>
+
+<div class="card">
+  {% if rows %}
+  <table>
+    <tr>
+      <th>Model family</th>
+      <th>Jobs</th>
+      <th>Avg earning</th>
+      <th>Avg parts cost</th>
+      <th>Avg margin</th>
+      <th>Margin %</th>
+    </tr>
+    {% for row in rows %}
+    <tr>
+      <td><a href="{% url 'job_completion:margin_years' make row.model_family %}">{{ row.model_family }}</a></td>
+      <td>{{ row.job_count }}</td>
+      <td>{% if row.avg_earning is not None %}£{{ row.avg_earning }}{% else %}—{% endif %}</td>
+      <td>{% if row.avg_cost is not None %}£{{ row.avg_cost }}{% else %}—{% endif %}</td>
+      <td class="{% if row.avg_margin is not None and row.avg_margin < 0 %}flag{% endif %}">{% if row.avg_margin is not None %}£{{ row.avg_margin }}{% else %}—{% endif %}</td>
+      <td>{% if row.avg_margin_pct is not None %}{{ row.avg_margin_pct }}%{% else %}—{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="empty">No successful jobs on file for {{ make }}.</p>
+  {% endif %}
+</div>
+{% endblock %}

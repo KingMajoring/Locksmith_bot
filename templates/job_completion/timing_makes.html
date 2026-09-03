@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Timing — Job Information{% endblock %}
+{% block content %}
+<h1>Timing</h1>
+<p>Average on-site duration per successful job, by make — all jobs on file, not a recent window.
+   Click a make to drill into its models, then years.</p>
+
+<div class="card">
+  {% if rows %}
+  <table>
+    <tr>
+      <th>Make</th>
+      <th>Jobs</th>
+      <th>Avg time to complete</th>
+    </tr>
+    {% for row in rows %}
+    <tr>
+      <td><a href="{% url 'job_completion:timing_models' row.make %}">{{ row.make }}</a></td>
+      <td>{{ row.job_count }}</td>
+      <td>{% if row.avg_duration_minutes is not None %}{{ row.avg_duration_minutes }} min{% else %}—{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="empty">No successful jobs with a make on file yet.</p>
+  {% endif %}
+</div>
+{% endblock %}

@@ -11,6 +11,7 @@ from .models import CompletedJob, FailureCategory
 from .services.benchmarking import duration_benchmark
 from .services.costing import parts_cost_for_jobs
 from .services.daily import day_pills, jobs_for_day, next_offset, prev_offset, summarize_day
+from .services import job_information
 from .services.model_analysis import (
     MASTER_REASON_LABELS,
     company_model_failure_breakdown,
@@ -160,3 +161,61 @@ def locksmith_report(request, pk):
         "job_completion/locksmith_report.html",
         {"locksmith": locksmith, "benchmarks": benchmarks, "jobs": jobs},
     )
+
+
+# --- Job Information: Margin / Timing, both a Make -> Model family ->
+# Year drill-down over the same underlying summary data (see
+# services/job_information.py) — the two report kinds just render
+# different columns from it, and share these three helpers.
+
+
+def _job_info_makes(request, template):
+    return render(request, template, {"rows": job_information.makes_summary()})
+
+
+def _job_info_models(request, template, make):
+    return render(
+        request, template, {"make": make, "rows": job_information.models_summary(make)}
+    )
+
+
+def _job_info_years(request, template, make, model_family):
+    return render(
+        request,
+        template,
+        {
+            "make": make,
+            "model_family": model_family,
+            "rows": job_information.years_summary(make, model_family),
+        },
+    )
+
+
+@login_required
+def margin_makes(request):
+    return _job_info_makes(request, "job_completion/margin_makes.html")
+
+
+@login_required
+def margin_models(request, make):
+    return _job_info_models(request, "job_completion/margin_models.html", make)
+
+
+@login_required
+def margin_years(request, make, model_family):
+    return _job_info_years(request, "job_completion/margin_years.html", make, model_family)
+
+
+@login_required
+def timing_makes(request):
+    return _job_info_makes(request, "job_completion/timing_makes.html")
+
+
+@login_required
+def timing_models(request, make):
+    return _job_info_models(request, "job_completion/timing_models.html", make)
+
+
+@login_required
+def timing_years(request, make, model_family):
+    return _job_info_years(request, "job_completion/timing_years.html", make, model_family)

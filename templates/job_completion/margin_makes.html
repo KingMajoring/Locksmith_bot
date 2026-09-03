@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Margin — Job Information{% endblock %}
+{% block content %}
+<h1>Margin</h1>
+<p>Average earning and parts cost per successful job, by make — all jobs on file, not a recent window.
+   Click a make to drill into its models, then years.</p>
+
+<div class="card">
+  {% if rows %}
+  <table>
+    <tr>
+      <th>Make</th>
+      <th>Jobs</th>
+      <th>Avg earning</th>
+      <th>Avg parts cost</th>
+      <th>Avg margin</th>
+      <th>Margin %</th>
+    </tr>
+    {% for row in rows %}
+    <tr>
+      <td><a href="{% url 'job_completion:margin_models' row.make %}">{{ row.make }}</a></td>
+      <td>{{ row.job_count }}</td>
+      <td>{% if row.avg_earning is not None %}£{{ row.avg_earning }}{% else %}—{% endif %}</td>
+      <td>{% if row.avg_cost is not None %}£{{ row.avg_cost }}{% else %}—{% endif %}</td>
+      <td class="{% if row.avg_margin is not None and row.avg_margin < 0 %}flag{% endif %}">{% if row.avg_margin is not None %}£{{ row.avg_margin }}{% else %}—{% endif %}</td>
+      <td>{% if row.avg_margin_pct is not None %}{{ row.avg_margin_pct }}%{% else %}—{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="empty">No successful jobs with a make on file yet.</p>
+  {% endif %}
+</div>
+{% endblock %}

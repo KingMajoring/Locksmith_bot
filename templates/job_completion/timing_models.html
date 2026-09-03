@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Timing — {{ make }}{% endblock %}
+{% block content %}
+<a class="back-link" href="{% url 'job_completion:timing_makes' %}">&larr; All makes</a>
+<h1>Timing — {{ make }}</h1>
+<p>By model family (trim/spec variants grouped together). Click a model to drill into years.</p>
+
+<div class="card">
+  {% if rows %}
+  <table>
+    <tr>
+      <th>Model family</th>
+      <th>Jobs</th>
+      <th>Avg time to complete</th>
+    </tr>
+    {% for row in rows %}
+    <tr>
+      <td><a href="{% url 'job_completion:timing_years' make row.model_family %}">{{ row.model_family }}</a></td>
+      <td>{{ row.job_count }}</td>
+      <td>{% if row.avg_duration_minutes is not None %}{{ row.avg_duration_minutes }} min{% else %}—{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="empty">No successful jobs on file for {{ make }}.</p>
+  {% endif %}
+</div>
+{% endblock %}

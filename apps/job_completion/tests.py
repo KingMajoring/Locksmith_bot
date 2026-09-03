@@ -13,6 +13,7 @@ from .models import CompletedJob, FailureCategory, SLATarget
 from .services.benchmarking import duration_benchmark
 from .services.costing import parts_cost_for_jobs
 from .services.daily import day_pills, jobs_for_day, next_offset, prev_offset, summarize_day
+from .services.job_information import makes_summary, models_summary, years_summary
 from .services.model_analysis import (
     company_model_failure_breakdown,
     locksmith_model_failure_breakdown,
@@ -939,3 +940,145 @@ class PartsCostForJobsTests(TestCase):
         ):
             costs = parts_cost_for_jobs([job])
         self.assertEqual(costs["a"], 2.5)
+
+
+class JobInformationTests(TestCase):
+    """Margin/timing drill-down (Make -> model family -> Year), all
+    scoped to successful jobs with a make, across the full history on
+    file (see services/job_information.py)."""
+
+    def setUp(self):
+        self.locksmith = _make_locksmith()
+        self.handl_patch = patch(
+            "apps.job_completion.services.costing.get_handl_client",
+            return_value=FakeCostHandlClient({"TK-100": 20.0}),
+        )
+        self.handl_patch.start()
+        self.addCleanup(self.handl_patch.stop)
+
+    def _job(self, order_no, make, model, year, net_cost, minutes, disposed_skus="", status=CompletedJob.Status.SUCCESS):
+        start = datetime(2026, 9, 1, 9, 0, tzinfo=dt_timezone.utc)
+        end = start.replace(minute=minutes % 60, hour=9 + minutes // 60)
+        return CompletedJob.objects.create(
+            order_no=order_no, report_id=order_no, job_date=date(2026, 9, 1),
+            locksmith=self.locksmith, status=status,
+            make=make, model=model, year=year, net_cost=net_cost,
+            disposed_skus=disposed_skus, start_time=start, end_time=end,
+        )
+
+    def _make_ford_data(self):
+        # Focus Titanium and Focus ST both normalize to "Focus" (first word).
+        self._job("a", "Ford", "Focus Titanium", "2019", 100.0, 30, "TK-100")
+        self._job("b", "Ford", "Focus ST", "2019", 200.0, 60, "")
+        self._job("c", "Ford", "Fiesta", "2020", 150.0, 45, "TK-100")
+
+    def test_makes_summary_averages_across_every_job_for_the_make(self):
+        self._make_ford_data()
+        rows = makes_summary()
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(row["make"], "Ford")
+        self.assertEqual(row["job_count"], 3)
+        self.assertEqual(row["avg_earning"], 150.0)
+        self.assertAlmostEqual(row["avg_cost"], 13.33, places=2)
+        self.assertAlmostEqual(row["avg_margin"], 136.67, places=2)
+        self.assertEqual(row["avg_duration_minutes"], 45.0)
+
+    def test_makes_summary_excludes_failed_and_makeless_jobs(self):
+        self._job("failed", "Ford", "Focus", "2019", 999.0, 10, status=CompletedJob.Status.FAILED)
+        self._job("no-make", "", "", "", 999.0, 10)
+        self._make_ford_data()
+        rows = makes_summary()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["job_count"], 3)
+
+    def test_models_summary_groups_by_normalized_family(self):
+        self._make_ford_data()
+        rows = models_summary("Ford")
+        families = {r["model_family"] for r in rows}
+        self.assertEqual(families, {"FOCUS", "FIESTA"})
+        focus = next(r for r in rows if r["model_family"] == "FOCUS")
+        self.assertEqual(focus["job_count"], 2)
+        self.assertEqual(focus["avg_earning"], 150.0)
+        self.assertEqual(focus["avg_cost"], 10.0)
+        self.assertEqual(focus["avg_margin"], 140.0)
+        self.assertEqual(focus["avg_duration_minutes"], 45.0)
+
+    def test_years_summary_groups_by_year_within_make_and_family(self):
+        self._make_ford_data()
+        rows = years_summary("Ford", "FOCUS")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["year"], "2019")
+        self.assertEqual(rows[0]["job_count"], 2)
+
+    def test_avg_margin_pct_computed_from_earning_and_margin(self):
+        self._job("a", "Ford", "Focus", "2019", 100.0, 30, "TK-100")
+        rows = makes_summary()
+        # earning 100, cost 20, margin 80 -> 80%
+        self.assertEqual(rows[0]["avg_margin_pct"], 80.0)
+
+    def test_no_jobs_returns_empty_list(self):
+        self.assertEqual(makes_summary(), [])
+        self.assertEqual(models_summary("Ford"), [])
+        self.assertEqual(years_summary("Ford", "FOCUS"), [])
+
+
+class JobInformationViewsTests(TestCase):
+    def setUp(self):
+        self.locksmith = _make_locksmith()
+        self.user = get_user_model().objects.create_user(
+            username="office", email="admin@wgtk.co.uk", password="x", is_staff=True
+        )
+        self.client.force_login(self.user)
+        self.handl_patch = patch(
+            "apps.job_completion.services.costing.get_handl_client",
+            return_value=FakeCostHandlClient({}),
+        )
+        self.handl_patch.start()
+        self.addCleanup(self.handl_patch.stop)
+        CompletedJob.objects.create(
+            order_no="a", report_id="a", job_date=date(2026, 9, 1),
+            locksmith=self.locksmith, status=CompletedJob.Status.SUCCESS,
+            make="Ford", model="Focus Titanium", year="2019", net_cost=100.0,
+            start_time=datetime(2026, 9, 1, 9, 0, tzinfo=dt_timezone.utc),
+            end_time=datetime(2026, 9, 1, 9, 30, tzinfo=dt_timezone.utc),
+        )
+
+    def test_margin_makes_renders_and_links_to_models(self):
+        response = self.client.get(reverse("job_completion:margin_makes"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Ford")
+
+    def test_margin_models_renders_and_links_to_years(self):
+        response = self.client.get(reverse("job_completion:margin_models", args=["Ford"]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "FOCUS")
+
+    def test_margin_years_renders(self):
+        response = self.client.get(
+            reverse("job_completion:margin_years", args=["Ford", "FOCUS"])
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "2019")
+
+    def test_timing_makes_renders(self):
+        response = self.client.get(reverse("job_completion:timing_makes"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Ford")
+
+    def test_timing_models_renders(self):
+        response = self.client.get(reverse("job_completion:timing_models", args=["Ford"]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "FOCUS")
+
+    def test_timing_years_renders(self):
+        response = self.client.get(
+            reverse("job_completion:timing_years", args=["Ford", "FOCUS"])
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "30.0 min")
+
+    def test_login_required(self):
+        self.client.logout()
+        response = self.client.get(reverse("job_completion:margin_makes"))
+        self.assertEqual(response.status_code, 302)
