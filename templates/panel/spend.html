@@ -2,8 +2,22 @@
 {% block title %}Panel Spend{% endblock %}
 {% block content %}
 <h1>Panel Spend</h1>
-<p>Month to date, by panel/subcontractor locksmith. Selling cost is what the client was
+<p>By panel/subcontractor locksmith. Selling cost is what the client was
    charged — quoted price plus WGTK's fee.</p>
+
+<ul class="tabs">
+  <li><a href="?months_ago={{ prev_months_ago }}">&larr; Previous month</a></li>
+  <li><a class="tab-active">{{ month_start|date:"F Y" }}</a></li>
+  {% if next_months_ago is not None %}
+  <li><a href="?months_ago={{ next_months_ago }}">Next month &rarr;</a></li>
+  {% endif %}
+</ul>
+
+<div class="stat-row">
+  <div class="stat-tile"><div class="stat-label">Jobs panelled</div><div class="stat-value">{{ totals.job_count }}</div></div>
+  <div class="stat-tile"><div class="stat-label">Total quoted price</div><div class="stat-value">{% if totals.total_quoted_price is not None %}£{{ totals.total_quoted_price }}{% else %}—{% endif %}</div></div>
+  <div class="stat-tile"><div class="stat-label">Total selling price</div><div class="stat-value">{% if totals.selling_cost is not None %}£{{ totals.selling_cost }}{% else %}—{% endif %}</div></div>
+</div>
 
 <div class="card">
   {% if rows %}
@@ -24,7 +38,7 @@
     {% endfor %}
   </table>
   {% else %}
-  <p class="empty">No panel jobs logged so far this month.</p>
+  <p class="empty">No panel jobs logged for {{ month_start|date:"F Y" }}.</p>
   {% endif %}
 </div>
 {% endblock %}

@@ -1,5 +1,5 @@
 """Panel Spend report (Area 4): how much WGTK is spending with each
-non-WGTK (panel/subcontractor) locksmith this month.
+non-WGTK (panel/subcontractor) locksmith, one calendar month at a time.
 
 Live-queried from Handl on every page load — panel jobs never go
 through Optimo (they're not WGTK's own locksmiths), so there's no
@@ -15,7 +15,7 @@ Tableau_PanelFigures already carries WGTK's fee without that lag.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date
 
 from apps.integrations.handl import get_handl_client
 
@@ -28,13 +28,38 @@ class PanelLocksmithSpend:
     selling_cost: float | None  # quoted price + WGTK's fee: what the client was charged
 
 
-def mtd_spend_by_locksmith(today: date | None = None) -> list[PanelLocksmithSpend]:
-    """One row per panel locksmith with a job logged so far this month
-    (1st of the month through today inclusive), sorted by total quoted
-    price descending — biggest spend first."""
+@dataclass(frozen=True)
+class PanelSpendTotals:
+    job_count: int
+    total_quoted_price: float | None
+    selling_cost: float | None
+
+
+def month_bounds(months_ago: int = 0, today: date | None = None) -> tuple[date, date]:
+    """[start, end) for the calendar month `months_ago` months before
+    today's month — 0 is the current month, 1 is last month, and so on."""
     today = today or date.today()
-    start = today.replace(day=1)
-    end = today + timedelta(days=1)  # exclusive upper bound: through today
+    year, month = today.year, today.month
+    for _ in range(months_ago):
+        month -= 1
+        if month == 0:
+            month = 12
+            year -= 1
+    start = date(year, month, 1)
+    end = date(year + 1, 1, 1) if month == 12 else date(year, month + 1, 1)
+    return start, end
+
+
+def panel_spend_for_month(
+    months_ago: int = 0, today: date | None = None
+) -> tuple[list[PanelLocksmithSpend], PanelSpendTotals, date]:
+    """Per-locksmith rows (sorted by total quoted price descending —
+    biggest spend first) and the month's totals, for the given month
+    (months_ago=0 is the current month, still in progress; no separate
+    "month to date" cap is needed since a day that hasn't happened yet
+    simply has no Tableau_PanelFigures row). Also returns the month's
+    start date, for the page heading."""
+    start, end = month_bounds(months_ago, today)
     figures = get_handl_client().get_panel_daily_figures(start, end)
 
     by_locksmith: dict[str, list] = {}
@@ -65,4 +90,13 @@ def mtd_spend_by_locksmith(today: date | None = None) -> list[PanelLocksmithSpen
                 selling_cost=round(sum(selling_values), 2) if selling_values else None,
             )
         )
-    return sorted(rows, key=lambda r: r.total_quoted_price or 0, reverse=True)
+    rows.sort(key=lambda r: r.total_quoted_price or 0, reverse=True)
+
+    quoted_totals = [r.total_quoted_price for r in rows if r.total_quoted_price is not None]
+    selling_totals = [r.selling_cost for r in rows if r.selling_cost is not None]
+    totals = PanelSpendTotals(
+        job_count=sum(r.job_count for r in rows),
+        total_quoted_price=round(sum(quoted_totals), 2) if quoted_totals else None,
+        selling_cost=round(sum(selling_totals), 2) if selling_totals else None,
+    )
+    return rows, totals, start
