@@ -246,11 +246,18 @@ class PullingTests(TestCase):
 
 
 class ReportIdFromOrderNoTests(TestCase):
-    """Regression tests built from real order_no values seen live —
-    the first cut of this parser (isdigit() on a plain rsplit("_", 1))
-    misclassified plenty of genuine, messily-formatted real jobs as
-    admin/housekeeping entries, which would have deleted real data via
-    cleanup_admin_jobs."""
+    """Regression tests built from real order_no values seen live.
+
+    Two cuts of this parser were already wrong: the first (isdigit()
+    on a plain rsplit("_", 1)) misclassified messily-separated real
+    jobs ("498074 _2026-08-19") as admin entries; the second (requiring
+    a well-formed "20YY" year after the ID) still misclassified real
+    jobs whose hand-typed date had a typo ("499063_202-08-25",
+    "497795_1016-08-18" — a digit missing or wrong, not a letter in
+    sight). Both would have deleted real data via cleanup_admin_jobs.
+    The rule that actually holds: nothing after the leading ID is ever
+    a letter in a real order, however mangled the date is otherwise.
+    """
 
     def test_clean_hyphenated_date(self):
         self.assertEqual(_report_id_from_order_no("498528-2026-08-22"), "498528")
@@ -273,15 +280,25 @@ class ReportIdFromOrderNoTests(TestCase):
     def test_report_id_alone_with_no_date_suffix(self):
         self.assertEqual(_report_id_from_order_no("498528"), "498528")
 
+    def test_typo_in_year_still_a_real_report_id(self):
+        self.assertEqual(_report_id_from_order_no("499063_202-08-25"), "499063")
+        self.assertEqual(_report_id_from_order_no("497795_1016-08-18"), "497795")
+        self.assertEqual(_report_id_from_order_no("457688-026-01-09"), "457688")
+
+    def test_stray_plus_and_slash_in_date(self):
+        self.assertEqual(_report_id_from_order_no("474052_202+-04-08"), "474052")
+        self.assertEqual(_report_id_from_order_no("459420_18/0/2026"), "459420")
+
     def test_admin_note_starting_with_a_number_is_not_a_report_id(self):
         """"20 MIN FLEET & STOCK CHECK" and "17 Little Venice Country
-        Park & Marina" both start with digits, but aren't followed by a
-        date — a leading digit run alone isn't enough."""
+        Park & Marina" both start with digits, but the rest is prose,
+        not a mangled date — a leading digit run alone isn't enough."""
         self.assertIsNone(_report_id_from_order_no("20 MIN FLEET & STOCK CHECK"))
         self.assertIsNone(_report_id_from_order_no("17 Little Venice Country Park & Marina"))
 
     def test_note_with_embedded_report_id_is_not_extracted(self):
         self.assertIsNone(_report_id_from_order_no("(MET CALL OUT) 480400_2026-05-11"))
+        self.assertIsNone(_report_id_from_order_no("456838 POST KEY"))
 
     def test_plain_text_note_is_not_a_report_id(self):
         self.assertIsNone(_report_id_from_order_no("SEND KEY TO CHARLEY"))

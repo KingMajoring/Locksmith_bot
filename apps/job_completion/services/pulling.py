@@ -37,14 +37,16 @@ class PullSummary:
 
 # A leading digit run alone isn't a reliable enough signal that an
 # orderNo is a real Handl claim — plenty of admin notes start with
-# digits too ("20 MIN FLEET & STOCK CHECK", "17 Little Venice..."). A
-# real order is "<ReportID><separator><date>" (or just "<ReportID>"
-# alone) with a "20YY" year appearing right after the ID, however
-# messily separated — confirmed live: "_2026-08-19", "_2026_06_08",
-# " _2026-08-19" (stray space), "~_2026-02-09", "\-2026-01-12" all seen
-# for genuine jobs, not just the clean "<id>_<date>" the format was
-# assumed to always be.
-_REPORT_ID_PATTERN = re.compile(r"^\s*(\d+)[-_/\\~ ]*(?:20\d{2}|$)")
+# digits too ("20 MIN FLEET & STOCK CHECK", "17 Little Venice...").
+# Requiring a well-formed "20YY" year after the ID isn't reliable
+# either — real jobs' dates are hand-typed into Optimo and come with
+# all kinds of typos (confirmed live: "_202-08-25", "_1016-08-18",
+# "_18/0/2026", "_202+-04-08", "-026-01-09" — missing/extra/wrong
+# digits, reordered fields). The one thing that reliably distinguishes
+# a real "<ReportID><separator><date>" order from an admin note is that
+# nothing *after* the leading ID is ever a letter — a mistyped date is
+# still only digits and separators, whereas a note is prose.
+_REPORT_ID_PATTERN = re.compile(r"^\s*(\d+)[\d\-_/\\~ +]*$")
 
 
 def _report_id_from_order_no(order_no: str) -> str | None:
