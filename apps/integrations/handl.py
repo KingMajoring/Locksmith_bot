@@ -117,15 +117,16 @@ class HandlClient(ABC):
     def record_disposal(
         self, soter_locksmith_id: str, report_id: str, part_code: str, quantity: int
     ) -> None:
-        """Record a part disposed against a job, for the locksmith portal.
+        """Record a part disposed against a job, for the locksmith portal,
+        and decrement that locksmith's recorded van stock accordingly.
         WRITES to Handl — uses a separate write-capable connection (see
         HANDL_SQL_WRITE_USER/PASSWORD) since the main HANDL_SQL_* creds
-        are deliberately read-only. NOT YET VERIFIED against Handl's full
-        Inventory_Disposals schema — only the columns confirmed via
-        existing SELECT queries elsewhere in this file are populated;
-        run one supervised test disposal before relying on this for real
-        locksmiths, in case there's a required column this doesn't know
-        about."""
+        are deliberately read-only. Full Inventory_Disposals schema and
+        the Inventory_Locksmith_Stock decrement behaviour were confirmed
+        via a supervised manual test — see SQLHandlClient's
+        implementation for the details. Raises if
+        HANDL_PORTAL_CREATED_BY_USER_ID isn't configured, or if there
+        isn't enough recorded stock to satisfy the disposal."""
 
 
 class MockHandlClient(HandlClient):
@@ -630,20 +631,55 @@ class SQLHandlClient(HandlClient):
     def record_disposal(
         self, soter_locksmith_id: str, report_id: str, part_code: str, quantity: int
     ) -> None:
-        # NOT YET VERIFIED against Handl's full Inventory_Disposals
-        # schema — see the ABC docstring. Columns here are only the ones
-        # confirmed live via the existing SELECT queries in this class
-        # (get_stock_usage, get_disposed_skus): Id, LookupLocksmithId,
-        # ReportID, StockId, Quantity, DateCreated. StockId picks the
-        # most recently created batch for the part, mirroring the
-        # "most recent batch" ranking already proven correct for cost
-        # lookups elsewhere in this file — unconfirmed whether that's
-        # actually how Soter's own app chooses which batch to dispose
-        # against.
+        # soter_locksmith_id is deliberately the locksmith's "(V)" (van)
+        # id (see Locksmith.van_soter_id) — a disposal is consumed from
+        # physical van stock. Known gap: list_current_stock sums a
+        # locksmith's stock across BOTH their "(V)" and "(A)" ids for
+        # the portal's picker, but this only looks for
+        # Inventory_Locksmith_Stock rows under the single id passed in
+        # — if a part's real stock happens to sit under "(A)" instead,
+        # this will raise "no stock found" even though the picker showed
+        # it as available. Not yet hit in testing (all real stock seen
+        # so far has been under "(V)"), but worth watching for.
+        #
+        # Full Inventory_Disposals schema, confirmed live via a
+        # supervised manual test insert (INFORMATION_SCHEMA.COLUMNS +
+        # trial and error — nothing previously wrote to this table so
+        # none of this was knowable from existing SELECT queries):
+        #   Id (uniqueidentifier, NOT NULL, no default despite what
+        #     INFORMATION_SCHEMA reports — supplied explicitly via
+        #     NEWID() rather than relying on whatever's really going on
+        #     there), StockId, LookupLocksmithId, ReportId, Quantity,
+        #     DateCreated, CreatedByUserId (NOT NULL — see
+        #     HANDL_PORTAL_CREATED_BY_USER_ID), LocksmithStockId
+        #     (nullable — but populated here; see below).
+        # No trigger on this table (confirmed via sys.triggers) — Soter
+        # does NOT automatically decrement Inventory_Locksmith_Stock
+        # when a disposal is inserted, matching the office's existing
+        # manual-entry workflow. That's very likely *why* WGTK's stock
+        # figures drift and Area 1 (weekly physical recounts) exists at
+        # all. The portal deliberately does better: it decrements the
+        # matching Inventory_Locksmith_Stock row(s) itself, in the same
+        # transaction, so a locksmith can't be shown stock (and dispose
+        # against it again) that they've already disposed of today.
+        if not settings.HANDL_PORTAL_CREATED_BY_USER_ID:
+            raise ValueError(
+                "HANDL_PORTAL_CREATED_BY_USER_ID isn't configured — set it to a "
+                "real Soter user id (ideally a dedicated 'Locksmith Portal' "
+                "account, not a real staff member's) before disposals can be "
+                "recorded."
+            )
+
         from datetime import datetime as _datetime
 
         with self._write_connection() as conn:
             cursor = conn.cursor()
+
+            # Most recently created Inventory_Stock batch for the SKU —
+            # mirrors the "most recent batch" ranking already proven
+            # correct for cost lookups elsewhere in this file.
+            # Unconfirmed whether that's actually how Soter's own app
+            # chooses which batch to dispose against.
             cursor.execute(
                 """
                 SELECT TOP 1 ist.Id
@@ -658,19 +694,67 @@ class SQLHandlClient(HandlClient):
             if not stock_row:
                 raise ValueError(f"No Inventory_Stock batch found for SKU {part_code!r}.")
 
+            # This locksmith's own van-stock rows for the part —
+            # confirmed on real data there can be several (mostly
+            # emptied historical ones sitting at 0 alongside one "live"
+            # row with the real quantity). Decrement greedily,
+            # largest-first, so a disposal this app already validated
+            # against the *summed* stock (see list_current_stock)
+            # still succeeds even if it happens to span more than one
+            # row — and never lets any single row go negative.
+            cursor.execute(
+                """
+                SELECT ils.Id, ils.Quantity
+                FROM Inventory_Locksmith_Stock ils
+                JOIN Inventory_Parts ipa ON ils.PartId = ipa.Id
+                WHERE ils.LookupLocksmithId = %(lid)s AND ipa.SKU = %(sku)s
+                  AND ils.Quantity > 0
+                ORDER BY ils.Quantity DESC
+                """,
+                {"lid": int(soter_locksmith_id), "sku": part_code},
+            )
+            locksmith_stock_rows = cursor.fetchall()
+            if not locksmith_stock_rows:
+                raise ValueError(
+                    f"No Inventory_Locksmith_Stock found for locksmith "
+                    f"{soter_locksmith_id!r}, SKU {part_code!r}."
+                )
+
+            remaining = quantity
+            primary_locksmith_stock_id = locksmith_stock_rows[0]["Id"]
+            for row in locksmith_stock_rows:
+                if remaining <= 0:
+                    break
+                take = min(remaining, row["Quantity"])
+                cursor.execute(
+                    "UPDATE Inventory_Locksmith_Stock SET Quantity = Quantity - %(take)s "
+                    "WHERE Id = %(id)s",
+                    {"take": take, "id": row["Id"]},
+                )
+                remaining -= take
+            if remaining > 0:
+                raise ValueError(
+                    f"Only {quantity - remaining} of {quantity} {part_code} available "
+                    f"in Inventory_Locksmith_Stock for locksmith {soter_locksmith_id!r}."
+                )
+
             cursor.execute(
                 """
                 INSERT INTO Inventory_Disposals
-                    (LookupLocksmithId, ReportID, StockId, Quantity, DateCreated)
+                    (Id, LookupLocksmithId, ReportId, StockId, LocksmithStockId,
+                     Quantity, DateCreated, CreatedByUserId)
                 VALUES
-                    (%(lid)s, %(report_id)s, %(stock_id)s, %(qty)s, %(now)s)
+                    (NEWID(), %(lid)s, %(report_id)s, %(stock_id)s, %(locksmith_stock_id)s,
+                     %(qty)s, %(now)s, %(created_by)s)
                 """,
                 {
                     "lid": int(soter_locksmith_id),
                     "report_id": report_id,
                     "stock_id": stock_row["Id"],
+                    "locksmith_stock_id": primary_locksmith_stock_id,
                     "qty": quantity,
                     "now": _datetime.utcnow(),
+                    "created_by": settings.HANDL_PORTAL_CREATED_BY_USER_ID,
                 },
             )
             conn.commit()

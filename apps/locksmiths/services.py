@@ -36,7 +36,7 @@ DEFAULT_EXCLUDE_SUBSTRINGS = [
     "CLIENT",
 ]
 
-_SUFFIX_RE = re.compile(r"\s*\(\s*[AV]\s*\)\s*$", re.IGNORECASE)
+_SUFFIX_RE = re.compile(r"\s*\(\s*([AV])\s*\)\s*$", re.IGNORECASE)
 _WHITESPACE_RE = re.compile(r"\s+")
 
 
@@ -44,6 +44,13 @@ def normalize_base_name(name: str) -> str:
     name = name.strip()
     name = _SUFFIX_RE.sub("", name)
     return _WHITESPACE_RE.sub(" ", name).strip()
+
+
+def _extract_location(name: str) -> str:
+    """"WGTK - Blain H (V)" -> "V", "WGTK - Blain H (A)" -> "A",
+    no suffix -> ""."""
+    match = _SUFFIX_RE.search(name.strip())
+    return match.group(1).upper() if match else ""
 
 
 def group_locksmiths(
@@ -58,7 +65,7 @@ def group_locksmiths(
     query already did WHERE WGTKLocksmith = 1 AND isDeleted = 0).
 
     Returns (groups, stats):
-    - groups: {normalized_upper_name: {"display": str, "ids": [str], "email": str}}
+    - groups: {normalized_upper_name: {"display": str, "ids": [str], "locations": {id: "V"|"A"|""}, "email": str}}
     - stats: {"excluded": int, "xwgtk": int}
     """
     exclude_substrings = [s.strip().upper() for s in extra_excludes if s.strip()]
@@ -84,8 +91,11 @@ def group_locksmiths(
             stats["excluded"] += 1
             continue
 
-        group = groups.setdefault(base_upper, {"display": base, "ids": [], "email": ""})
+        group = groups.setdefault(
+            base_upper, {"display": base, "ids": [], "locations": {}, "email": ""}
+        )
         group["ids"].append(soter_id)
+        group["locations"][soter_id] = _extract_location(name)
         if email and not group["email"]:
             group["email"] = email
 
@@ -109,10 +119,16 @@ def commit_groups(groups: dict[str, dict]) -> tuple[int, int, int]:
             locksmith.save(update_fields=["email"])
             emails_updated += 1
         for soter_id in group["ids"]:
-            _, id_created = SoterLocksmithId.objects.get_or_create(
-                locksmith=locksmith, soter_locksmith_id=soter_id
+            location = group.get("locations", {}).get(soter_id, "")
+            obj, id_created = SoterLocksmithId.objects.get_or_create(
+                locksmith=locksmith, soter_locksmith_id=soter_id,
+                defaults={"location": location},
             )
             created_ids += int(id_created)
+            # Backfills location on rows synced before this field existed.
+            if not id_created and location and obj.location != location:
+                obj.location = location
+                obj.save(update_fields=["location"])
     return created_locksmiths, created_ids, emails_updated
 
 

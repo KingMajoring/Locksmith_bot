@@ -48,6 +48,20 @@ class Locksmith(models.Model):
     def soter_id_list(self) -> list[str]:
         return list(self.soter_ids.values_list("soter_locksmith_id", flat=True))
 
+    @property
+    def van_soter_id(self) -> str | None:
+        """The "(V)" (van) Soter id, for the locksmith portal's disposal
+        writes — a locksmith disposes parts from their physical van
+        stock, so this is deliberately preferred over "(A)". Falls back
+        to whichever id is configured first if the location wasn't
+        captured (e.g. a SoterLocksmithId row synced before this field
+        existed — re-run "Sync from Soter" to backfill it)."""
+        van = self.soter_ids.filter(location=SoterLocksmithId.Location.VAN).first()
+        if van:
+            return van.soter_locksmith_id
+        first = self.soter_ids.first()
+        return first.soter_locksmith_id if first else None
+
 
 class SoterLocksmithId(models.Model):
     """One of a locksmith's Soter Lookup_Locksmiths.ID values.
@@ -58,11 +72,20 @@ class SoterLocksmithId(models.Model):
     person.
     """
 
+    class Location(models.TextChoices):
+        VAN = "V", "Van"
+        ADMIN = "A", "Admin"
+
     locksmith = models.ForeignKey(
         Locksmith, on_delete=models.CASCADE, related_name="soter_ids"
     )
     soter_locksmith_id = models.CharField(
         max_length=64, help_text="Lookup_Locksmiths.ID in Soter, e.g. '1163'."
+    )
+    location = models.CharField(
+        max_length=1, choices=Location.choices, blank=True,
+        help_text="Parsed from the '(V)'/'(A)' suffix on the Soter name, when "
+        "present — see Locksmith.van_soter_id.",
     )
 
     class Meta:
@@ -70,7 +93,8 @@ class SoterLocksmithId(models.Model):
         verbose_name = "Soter locksmith ID"
 
     def __str__(self):
-        return f"{self.locksmith} → Soter #{self.soter_locksmith_id}"
+        suffix = f" ({self.location})" if self.location else ""
+        return f"{self.locksmith} → Soter #{self.soter_locksmith_id}{suffix}"
 
 
 class OptimoDriverId(models.Model):

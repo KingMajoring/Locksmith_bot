@@ -235,12 +235,12 @@ def job_detail(request, order_no):
                 )
                 continue
 
-            # Which of a locksmith's (usually two, "(V)"/"(A)") Soter IDs
-            # a disposal should be written against isn't confirmed — see
-            # apps.integrations.handl.SQLHandlClient.record_disposal's
-            # docstring. Using the first configured one for now; needs a
-            # supervised test disposal before this is trusted for real.
-            soter_id = soter_ids[0] if soter_ids else ""
+            # A disposal is consumed from the locksmith's physical van
+            # stock, so it's deliberately written against their "(V)"
+            # Soter id (see Locksmith.van_soter_id) rather than "(A)" or
+            # whichever happens to be configured first — confirmed via
+            # a supervised manual test disposal.
+            soter_id = locksmith.van_soter_id or ""
             disposal = PortalDisposal.objects.create(
                 locksmith=locksmith,
                 created_by=request.user,

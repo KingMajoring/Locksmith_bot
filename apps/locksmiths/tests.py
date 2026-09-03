@@ -10,7 +10,7 @@ from django.urls import reverse
 from apps.integrations.optimo import OptimoDriverInfo
 
 from .management.commands.import_soter_locksmiths import parse_rows
-from .models import Locksmith, OptimoDriverId
+from .models import Locksmith, OptimoDriverId, SoterLocksmithId
 from .services import (
     commit_optimo_driver_matches,
     group_locksmiths,
@@ -71,6 +71,35 @@ class GroupLocksmithsTests(TestCase):
         self.assertEqual(set(groups.keys()), {"SOME PANEL FIRM", "XWGTK - EX STAFF"})
         self.assertEqual(stats, {"excluded": 0, "xwgtk": 0})
 
+    def test_captures_v_and_a_location_per_id(self):
+        groups, _ = group_locksmiths(self.ROWS)
+        self.assertEqual(
+            groups["WGTK - DEAN S"]["locations"], {"887": "A", "885": "V"}
+        )
+
+    def test_id_with_no_suffix_has_blank_location(self):
+        groups, _ = group_locksmiths(self.ROWS)
+        self.assertEqual(groups["WGTK - ANDREW S"]["locations"], {"1204": ""})
+
+
+class VanSoterIdTests(TestCase):
+    def test_prefers_van_location_regardless_of_order(self):
+        locksmith = Locksmith.objects.create(name="WGTK - Dean S")
+        locksmith.soter_ids.create(soter_locksmith_id="887", location=SoterLocksmithId.Location.ADMIN)
+        locksmith.soter_ids.create(soter_locksmith_id="885", location=SoterLocksmithId.Location.VAN)
+        self.assertEqual(locksmith.van_soter_id, "885")
+
+    def test_falls_back_to_first_id_when_no_location_captured(self):
+        # Rows synced before the location field existed.
+        locksmith = Locksmith.objects.create(name="WGTK - Dean S")
+        locksmith.soter_ids.create(soter_locksmith_id="887")
+        locksmith.soter_ids.create(soter_locksmith_id="885")
+        self.assertEqual(locksmith.van_soter_id, "887")
+
+    def test_none_when_no_soter_ids_at_all(self):
+        locksmith = Locksmith.objects.create(name="WGTK - No IDs")
+        self.assertIsNone(locksmith.van_soter_id)
+
 
 class ParseRowsTests(TestCase):
     def test_parses_tab_separated_with_header(self):
@@ -121,6 +150,13 @@ class ImportCommandTests(TestCase):
 
         dean = Locksmith.objects.get(name="WGTK - Dean S")
         self.assertEqual(sorted(dean.soter_id_list), ["885", "887"])
+
+    def test_commit_records_v_and_a_location_and_van_soter_id_prefers_it(self):
+        call_command("import_soter_locksmiths", str(self.sample_path), "--commit", stdout=StringIO())
+        dean = Locksmith.objects.get(name="WGTK - Dean S")
+        self.assertEqual(dean.soter_ids.get(soter_locksmith_id="885").location, "V")
+        self.assertEqual(dean.soter_ids.get(soter_locksmith_id="887").location, "A")
+        self.assertEqual(dean.van_soter_id, "885")
 
     def test_excludes_non_person_and_panel_and_xwgtk_rows(self):
         call_command("import_soter_locksmiths", str(self.sample_path), "--commit", stdout=StringIO())

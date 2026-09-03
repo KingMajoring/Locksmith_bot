@@ -94,6 +94,16 @@ HANDL_SQL_PASSWORD = env("HANDL_SQL_PASSWORD", default="")
 HANDL_SQL_WRITE_USER = env("HANDL_SQL_WRITE_USER", default="")
 HANDL_SQL_WRITE_PASSWORD = env("HANDL_SQL_WRITE_PASSWORD", default="")
 
+# Soter's own Inventory_Disposals.CreatedByUserId is NOT NULL and,
+# looking at real data, always a genuine staff user id (whoever was
+# logged into Soter's own UI when they recorded the disposal). Rather
+# than misattribute every portal disposal to a random staff member,
+# this should be a dedicated "Locksmith Portal" (or similar) account
+# added to whatever Soter's own Users table is — left unset (0) until
+# one exists, at which point record_disposal refuses to write rather
+# than guess.
+HANDL_PORTAL_CREATED_BY_USER_ID = env.int("HANDL_PORTAL_CREATED_BY_USER_ID", default=0)
+
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
     {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},

@@ -391,30 +391,69 @@ class SQLHandlClientTests(TestCase):
         client = SQLHandlClient()
         self.assertEqual(client.list_current_stock([]), [])
 
-    def test_record_disposal_inserts_against_most_recent_batch_and_commits(self):
+    @override_settings(HANDL_PORTAL_CREATED_BY_USER_ID=999)
+    def test_record_disposal_inserts_and_decrements_stock_then_commits(self):
         fake_conn = MagicMock()
         fake_conn.__enter__.return_value = fake_conn
         fake_conn.__exit__.return_value = False
-        fake_conn.cursor.return_value.fetchone.return_value = {"Id": 555}
+        cursor = fake_conn.cursor.return_value
+        cursor.fetchone.return_value = {"Id": 555}
+        cursor.fetchall.return_value = [{"Id": "loc-stock-1", "Quantity": 5}]
+
         client = SQLHandlClient()
         with patch.object(client, "_write_connection", return_value=fake_conn):
             client.record_disposal("885", "496390", "TK-100", 2)
 
-        cursor = fake_conn.cursor.return_value
-        select_query, select_params = cursor.execute.call_args_list[0][0]
+        calls = cursor.execute.call_args_list
+
+        select_query, select_params = calls[0][0]
         self.assertIn("Inventory_Stock", select_query)
         self.assertIn("ORDER BY ist.DateCreated DESC", select_query)
         self.assertEqual(select_params["sku"], "TK-100")
 
-        insert_query, insert_params = cursor.execute.call_args_list[1][0]
+        stock_query, stock_params = calls[1][0]
+        self.assertIn("Inventory_Locksmith_Stock", stock_query)
+        self.assertEqual(stock_params["lid"], 885)
+        self.assertEqual(stock_params["sku"], "TK-100")
+
+        update_query, update_params = calls[2][0]
+        self.assertIn("UPDATE Inventory_Locksmith_Stock", update_query)
+        self.assertEqual(update_params, {"take": 2, "id": "loc-stock-1"})
+
+        insert_query, insert_params = calls[3][0]
         self.assertIn("INSERT INTO Inventory_Disposals", insert_query)
+        self.assertIn("NEWID()", insert_query)
         self.assertEqual(insert_params["lid"], 885)
         self.assertEqual(insert_params["report_id"], "496390")
         self.assertEqual(insert_params["stock_id"], 555)
+        self.assertEqual(insert_params["locksmith_stock_id"], "loc-stock-1")
         self.assertEqual(insert_params["qty"], 2)
+        self.assertEqual(insert_params["created_by"], 999)
 
         fake_conn.commit.assert_called_once()
 
+    @override_settings(HANDL_PORTAL_CREATED_BY_USER_ID=999)
+    def test_record_disposal_decrements_across_multiple_rows_largest_first(self):
+        fake_conn = MagicMock()
+        fake_conn.__enter__.return_value = fake_conn
+        fake_conn.__exit__.return_value = False
+        cursor = fake_conn.cursor.return_value
+        cursor.fetchone.return_value = {"Id": 555}
+        cursor.fetchall.return_value = [
+            {"Id": "row-big", "Quantity": 3},
+            {"Id": "row-small", "Quantity": 2},
+        ]
+
+        client = SQLHandlClient()
+        with patch.object(client, "_write_connection", return_value=fake_conn):
+            client.record_disposal("885", "496390", "TK-100", 4)
+
+        update_calls = [c for c in cursor.execute.call_args_list if "UPDATE" in c[0][0]]
+        self.assertEqual(len(update_calls), 2)
+        self.assertEqual(update_calls[0][0][1], {"take": 3, "id": "row-big"})
+        self.assertEqual(update_calls[1][0][1], {"take": 1, "id": "row-small"})
+
+    @override_settings(HANDL_PORTAL_CREATED_BY_USER_ID=999)
     def test_record_disposal_raises_when_no_stock_batch_found(self):
         fake_conn = MagicMock()
         fake_conn.__enter__.return_value = fake_conn
@@ -425,6 +464,40 @@ class SQLHandlClientTests(TestCase):
             with self.assertRaises(ValueError):
                 client.record_disposal("885", "496390", "TK-999", 1)
         fake_conn.commit.assert_not_called()
+
+    @override_settings(HANDL_PORTAL_CREATED_BY_USER_ID=999)
+    def test_record_disposal_raises_when_no_locksmith_stock_found(self):
+        fake_conn = MagicMock()
+        fake_conn.__enter__.return_value = fake_conn
+        fake_conn.__exit__.return_value = False
+        cursor = fake_conn.cursor.return_value
+        cursor.fetchone.return_value = {"Id": 555}
+        cursor.fetchall.return_value = []
+        client = SQLHandlClient()
+        with patch.object(client, "_write_connection", return_value=fake_conn):
+            with self.assertRaises(ValueError):
+                client.record_disposal("885", "496390", "TK-100", 1)
+        fake_conn.commit.assert_not_called()
+
+    @override_settings(HANDL_PORTAL_CREATED_BY_USER_ID=999)
+    def test_record_disposal_raises_when_stock_rows_insufficient(self):
+        fake_conn = MagicMock()
+        fake_conn.__enter__.return_value = fake_conn
+        fake_conn.__exit__.return_value = False
+        cursor = fake_conn.cursor.return_value
+        cursor.fetchone.return_value = {"Id": 555}
+        cursor.fetchall.return_value = [{"Id": "row-1", "Quantity": 1}]
+        client = SQLHandlClient()
+        with patch.object(client, "_write_connection", return_value=fake_conn):
+            with self.assertRaises(ValueError):
+                client.record_disposal("885", "496390", "TK-100", 5)
+        fake_conn.commit.assert_not_called()
+
+    @override_settings(HANDL_PORTAL_CREATED_BY_USER_ID=0)
+    def test_record_disposal_raises_when_created_by_user_id_not_configured(self):
+        client = SQLHandlClient()
+        with self.assertRaises(ValueError):
+            client.record_disposal("885", "496390", "TK-100", 1)
 
 
 class GetHandlClientTests(TestCase):
