@@ -3,26 +3,41 @@
 {% block content %}
 <a class="back-link" href="{% url 'locksmith_portal:dashboard' %}">&larr; Back</a>
 <h1>Job {{ report_id }}</h1>
-<p>Enter how many of each part you used/disposed of on this job. Leave blank for anything you didn't use.</p>
-<form method="post" class="card">
+<p>Search for a part by SKU or name to record it as used/disposed of on this job. Add more parts if you used more than one.</p>
+
+{% if stock_lines %}
+<datalist id="parts-catalogue">
+  {% for line in stock_lines %}
+    <option value="{{ line.part_code }} — {{ line.part_name }}">{{ line.part_code }} — {{ line.part_name }} (have {{ line.qty }})</option>
+  {% endfor %}
+</datalist>
+
+<form method="post" class="card" id="dispose-form">
   {% csrf_token %}
-  {% if stock_lines %}
-  <table>
-    <tr><th>Part</th><th>In stock</th><th>Dispose</th></tr>
-    {% for line in stock_lines %}
-    <tr>
-      <td>{{ line.part_name }}<br><span class="sub">{{ line.part_code }}</span></td>
-      <td>{{ line.qty }}</td>
-      <td>
-        <input type="number" min="0" max="{{ line.qty }}" inputmode="numeric"
-               name="dispose_{{ line.part_code }}">
-      </td>
-    </tr>
-    {% endfor %}
-  </table>
+  <div id="dispose-rows">
+    <div class="dispose-row">
+      <input type="text" list="parts-catalogue" name="part_code" placeholder="Search SKU or part name" autocomplete="off">
+      <input type="number" min="1" inputmode="numeric" name="quantity" placeholder="Qty">
+    </div>
+  </div>
+  <p><button type="button" class="btn-secondary" id="add-row">+ Add another part</button></p>
   <p style="margin-top:1rem;"><button class="btn" type="submit">Save disposals</button></p>
-  {% else %}
-    <p class="empty">You don't have any parts in stock to dispose.</p>
-  {% endif %}
 </form>
+
+<template id="dispose-row-template">
+  <div class="dispose-row">
+    <input type="text" list="parts-catalogue" name="part_code" placeholder="Search SKU or part name" autocomplete="off">
+    <input type="number" min="1" inputmode="numeric" name="quantity" placeholder="Qty">
+  </div>
+</template>
+
+<script>
+  document.getElementById('add-row').addEventListener('click', function () {
+    var tpl = document.getElementById('dispose-row-template');
+    document.getElementById('dispose-rows').appendChild(tpl.content.cloneNode(true));
+  });
+</script>
+{% else %}
+  <p class="empty">You don't have any parts in stock to dispose.</p>
+{% endif %}
 {% endblock %}

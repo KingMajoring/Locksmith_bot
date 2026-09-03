@@ -184,18 +184,49 @@ def job_detail(request, order_no):
     stock_lines = handl.list_current_stock(soter_ids)
 
     if request.method == "POST":
-        disposed_any = False
-        for line in stock_lines:
-            raw = request.POST.get(f"dispose_{line.part_code}", "").strip()
-            if not raw:
+        by_code = {line.part_code.upper(): line for line in stock_lines}
+        by_name = {line.part_name.lower(): line for line in stock_lines}
+
+        def _resolve(raw_input):
+            # A datalist pick comes back as "SKU — Name"; typing
+            # (without picking a suggestion) may be a bare SKU or the
+            # part name instead — try all three.
+            candidate = raw_input.split(" — ", 1)[0].strip()
+            return (
+                by_code.get(candidate.upper())
+                or by_name.get(candidate.lower())
+                or by_name.get(raw_input.strip().lower())
+            )
+
+        # Aggregate by part first, in case the same part was searched
+        # for and added across more than one row.
+        requested: dict[str, int] = {}
+        for raw_code, raw_qty in zip(
+            request.POST.getlist("part_code"), request.POST.getlist("quantity")
+        ):
+            raw_code = raw_code.strip()
+            raw_qty = raw_qty.strip()
+            if not raw_code and not raw_qty:
+                continue
+            line = _resolve(raw_code) if raw_code else None
+            if line is None:
+                if raw_code:
+                    messages.error(request, f"Couldn't find '{raw_code}' in your stock.")
+                continue
+            if not raw_qty:
                 continue
             try:
-                qty = int(raw)
+                qty = int(raw_qty)
             except ValueError:
-                messages.error(request, f"'{raw}' isn't a valid quantity for {line.part_code}.")
+                messages.error(request, f"'{raw_qty}' isn't a valid quantity for {line.part_code}.")
                 continue
             if qty <= 0:
                 continue
+            requested[line.part_code] = requested.get(line.part_code, 0) + qty
+
+        disposed_any = False
+        for part_code, qty in requested.items():
+            line = by_code[part_code.upper()]
             if qty > line.qty:
                 messages.error(
                     request,
