@@ -5,6 +5,13 @@
 <p>Average earning and parts cost per successful job, by make — all jobs on file, not a recent window.
    Click a make to drill into its models, then years.</p>
 
+<ul class="tabs">
+  <li><a href="?" class="{% if not selected_service %}tab-active{% endif %}">All services</a></li>
+  {% for s in services %}
+  <li><a href="?service={{ s|urlencode }}" class="{% if s == selected_service %}tab-active{% endif %}">{{ s }}</a></li>
+  {% endfor %}
+</ul>
+
 <div class="card">
   {% if rows %}
   <table>
@@ -18,7 +25,7 @@
     </tr>
     {% for row in rows %}
     <tr>
-      <td><a href="{% url 'job_completion:margin_models' row.make %}">{{ row.make }}</a></td>
+      <td><a href="{% url 'job_completion:margin_models' row.make %}{% if selected_service %}?service={{ selected_service|urlencode }}{% endif %}">{{ row.make }}</a></td>
       <td>{{ row.job_count }}</td>
       <td>{% if row.avg_earning is not None %}£{{ row.avg_earning }}{% else %}—{% endif %}</td>
       <td>{% if row.avg_cost is not None %}£{{ row.avg_cost }}{% else %}—{% endif %}</td>

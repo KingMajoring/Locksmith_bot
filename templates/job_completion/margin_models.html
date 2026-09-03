@@ -1,9 +1,16 @@
 {% extends "base.html" %}
 {% block title %}Margin — {{ make }}{% endblock %}
 {% block content %}
-<a class="back-link" href="{% url 'job_completion:margin_makes' %}">&larr; All makes</a>
+<a class="back-link" href="{% url 'job_completion:margin_makes' %}{% if selected_service %}?service={{ selected_service|urlencode }}{% endif %}">&larr; All makes</a>
 <h1>Margin — {{ make }}</h1>
 <p>By model family (trim/spec variants grouped together). Click a model to drill into years.</p>
+
+<ul class="tabs">
+  <li><a href="?" class="{% if not selected_service %}tab-active{% endif %}">All services</a></li>
+  {% for s in services %}
+  <li><a href="?service={{ s|urlencode }}" class="{% if s == selected_service %}tab-active{% endif %}">{{ s }}</a></li>
+  {% endfor %}
+</ul>
 
 <div class="card">
   {% if rows %}
@@ -18,7 +25,7 @@
     </tr>
     {% for row in rows %}
     <tr>
-      <td><a href="{% url 'job_completion:margin_years' make row.model_family %}">{{ row.model_family }}</a></td>
+      <td><a href="{% url 'job_completion:margin_years' make row.model_family %}{% if selected_service %}?service={{ selected_service|urlencode }}{% endif %}">{{ row.model_family }}</a></td>
       <td>{{ row.job_count }}</td>
       <td>{% if row.avg_earning is not None %}£{{ row.avg_earning }}{% else %}—{% endif %}</td>
       <td>{% if row.avg_cost is not None %}£{{ row.avg_cost }}{% else %}—{% endif %}</td>

@@ -170,23 +170,43 @@ def locksmith_report(request, pk):
 
 
 def _job_info_makes(request, template):
-    return render(request, template, {"rows": job_information.makes_summary()})
+    service = request.GET.get("service") or None
+    return render(
+        request,
+        template,
+        {
+            "rows": job_information.makes_summary(service=service),
+            "services": job_information.available_services(),
+            "selected_service": service,
+        },
+    )
 
 
 def _job_info_models(request, template, make):
+    service = request.GET.get("service") or None
     return render(
-        request, template, {"make": make, "rows": job_information.models_summary(make)}
+        request,
+        template,
+        {
+            "make": make,
+            "rows": job_information.models_summary(make, service=service),
+            "services": job_information.available_services(),
+            "selected_service": service,
+        },
     )
 
 
 def _job_info_years(request, template, make, model_family):
+    service = request.GET.get("service") or None
     return render(
         request,
         template,
         {
             "make": make,
             "model_family": model_family,
-            "rows": job_information.years_summary(make, model_family),
+            "rows": job_information.years_summary(make, model_family, service=service),
+            "services": job_information.available_services(),
+            "selected_service": service,
         },
     )
 

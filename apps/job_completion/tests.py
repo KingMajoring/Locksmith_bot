@@ -13,7 +13,12 @@ from .models import CompletedJob, FailureCategory, SLATarget
 from .services.benchmarking import duration_benchmark
 from .services.costing import parts_cost_for_jobs
 from .services.daily import day_pills, jobs_for_day, next_offset, prev_offset, summarize_day
-from .services.job_information import makes_summary, models_summary, years_summary
+from .services.job_information import (
+    available_services,
+    makes_summary,
+    models_summary,
+    years_summary,
+)
 from .services.model_analysis import (
     company_model_failure_breakdown,
     locksmith_model_failure_breakdown,
@@ -1169,7 +1174,7 @@ class JobInformationTests(TestCase):
         self.handl_patch.start()
         self.addCleanup(self.handl_patch.stop)
 
-    def _job(self, order_no, make, model, year, net_cost, minutes, disposed_skus="", status=CompletedJob.Status.SUCCESS):
+    def _job(self, order_no, make, model, year, net_cost, minutes, disposed_skus="", status=CompletedJob.Status.SUCCESS, loss_type=""):
         start = datetime(2026, 9, 1, 9, 0, tzinfo=dt_timezone.utc)
         end = start.replace(minute=minutes % 60, hour=9 + minutes // 60)
         return CompletedJob.objects.create(
@@ -1177,6 +1182,7 @@ class JobInformationTests(TestCase):
             locksmith=self.locksmith, status=status,
             make=make, model=model, year=year, net_cost=net_cost,
             disposed_skus=disposed_skus, start_time=start, end_time=end,
+            loss_type=loss_type,
         )
 
     def _make_ford_data(self):
@@ -1235,6 +1241,42 @@ class JobInformationTests(TestCase):
         self.assertEqual(models_summary("Ford"), [])
         self.assertEqual(years_summary("Ford", "FOCUS"), [])
 
+    def test_available_services_lists_distinct_display_labels(self):
+        self._job("a", "Ford", "Focus", "2019", 100.0, 30, loss_type="LOST")
+        self._job("b", "Ford", "Fiesta", "2019", 100.0, 30, loss_type="LOCKED IN PROPERTY")
+        self._job("c", "Ford", "Focus", "2020", 100.0, 30, loss_type="Spare Key")
+        self._job("d", "Ford", "Focus", "2020", 100.0, 30, loss_type="")
+        self.assertEqual(available_services(), ["AKL", "Gain access", "Spare Key"])
+
+    def test_makes_summary_filtered_by_service(self):
+        self._job("a", "Ford", "Focus", "2019", 100.0, 30, loss_type="LOST")
+        self._job("b", "BMW", "3 Series", "2019", 200.0, 60, loss_type="LOCKED IN PROPERTY")
+        rows = makes_summary(service="AKL")
+        self.assertEqual([r["make"] for r in rows], ["Ford"])
+
+    def test_models_summary_filtered_by_service(self):
+        self._job("a", "Ford", "Focus", "2019", 100.0, 30, loss_type="LOST")
+        self._job("b", "Ford", "Fiesta", "2019", 200.0, 60, loss_type="LOCKED IN PROPERTY")
+        rows = models_summary("Ford", service="Gain access")
+        self.assertEqual([r["model_family"] for r in rows], ["FIESTA"])
+
+    def test_years_summary_filtered_by_service(self):
+        self._job("a", "Ford", "Focus", "2019", 100.0, 30, loss_type="LOST")
+        self._job("b", "Ford", "Focus", "2020", 200.0, 60, loss_type="LOCKED IN PROPERTY")
+        rows = years_summary("Ford", "FOCUS", service="AKL")
+        self.assertEqual([r["year"] for r in rows], ["2019"])
+
+    def test_service_filter_is_case_insensitive_on_raw_value(self):
+        self._job("a", "Ford", "Focus", "2019", 100.0, 30, loss_type="lost")
+        rows = makes_summary(service="AKL")
+        self.assertEqual(len(rows), 1)
+
+    def test_no_service_filter_returns_everything(self):
+        self._job("a", "Ford", "Focus", "2019", 100.0, 30, loss_type="LOST")
+        self._job("b", "BMW", "3 Series", "2019", 200.0, 60, loss_type="LOCKED IN PROPERTY")
+        rows = makes_summary(service=None)
+        self.assertEqual(len(rows), 2)
+
 
 class JobInformationViewsTests(TestCase):
     def setUp(self):
@@ -1255,6 +1297,15 @@ class JobInformationViewsTests(TestCase):
             make="Ford", model="Focus Titanium", year="2019", net_cost=100.0,
             start_time=datetime(2026, 9, 1, 9, 0, tzinfo=dt_timezone.utc),
             end_time=datetime(2026, 9, 1, 9, 30, tzinfo=dt_timezone.utc),
+            loss_type="LOST",
+        )
+        CompletedJob.objects.create(
+            order_no="b", report_id="b", job_date=date(2026, 9, 1),
+            locksmith=self.locksmith, status=CompletedJob.Status.SUCCESS,
+            make="BMW", model="3 Series", year="2019", net_cost=200.0,
+            start_time=datetime(2026, 9, 1, 9, 0, tzinfo=dt_timezone.utc),
+            end_time=datetime(2026, 9, 1, 10, 0, tzinfo=dt_timezone.utc),
+            loss_type="LOCKED IN PROPERTY",
         )
 
     def test_margin_makes_renders_and_links_to_models(self):
@@ -1295,3 +1346,30 @@ class JobInformationViewsTests(TestCase):
         self.client.logout()
         response = self.client.get(reverse("job_completion:margin_makes"))
         self.assertEqual(response.status_code, 302)
+
+    def test_margin_makes_shows_service_tags(self):
+        response = self.client.get(reverse("job_completion:margin_makes"))
+        self.assertContains(response, "AKL")
+        self.assertContains(response, "Gain access")
+
+    def test_margin_makes_filtered_by_service_query_param(self):
+        response = self.client.get(reverse("job_completion:margin_makes"), {"service": "AKL"})
+        self.assertContains(response, "Ford")
+        self.assertNotContains(response, "BMW")
+
+    def test_selected_service_carried_into_drill_down_link(self):
+        response = self.client.get(reverse("job_completion:margin_makes"), {"service": "AKL"})
+        self.assertContains(response, "margin/Ford/?service=AKL")
+
+    def test_selected_service_persists_through_models_and_years(self):
+        response = self.client.get(
+            reverse("job_completion:margin_models", args=["Ford"]), {"service": "AKL"}
+        )
+        self.assertContains(response, "FOCUS")
+        self.assertContains(response, "margin/Ford/FOCUS/?service=AKL")
+        self.assertContains(response, "margin/?service=AKL")  # back-link
+
+    def test_timing_makes_filtered_by_service_query_param(self):
+        response = self.client.get(reverse("job_completion:timing_makes"), {"service": "Gain access"})
+        self.assertContains(response, "BMW")
+        self.assertNotContains(response, "Ford")

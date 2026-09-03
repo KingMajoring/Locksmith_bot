@@ -11,7 +11,10 @@ as a stable reference, not a recent snapshot.
 """
 from __future__ import annotations
 
+from django.db.models import Q
+
 from .costing import parts_cost_for_jobs
+from .labels import display_loss_type, raw_values_for_display_label
 from .model_normalization import normalize_model
 from ..models import CompletedJob
 
@@ -22,6 +25,25 @@ def _base_queryset():
         .exclude(make="")
         .exclude(model="")
     )
+
+
+def _filter_by_service(queryset, service: str | None):
+    """service is a display label from services/labels.py (e.g. "AKL",
+    "Gain access") — filters to the raw loss_type value(s) it maps
+    from. No-op when service is falsy."""
+    if not service:
+        return queryset
+    raw_filter = Q()
+    for value in raw_values_for_display_label(service):
+        raw_filter |= Q(loss_type__iexact=value)
+    return queryset.filter(raw_filter)
+
+
+def available_services() -> list[str]:
+    """Every distinct service (loss_type display label) present across
+    all-time successful jobs, for the filter tags shown on each page."""
+    raw_values = _base_queryset().exclude(loss_type="").values_list("loss_type", flat=True).distinct()
+    return sorted({display_loss_type(v) for v in raw_values})
 
 
 def _avg(values: list[float]) -> float | None:
@@ -52,10 +74,11 @@ def _summarize(jobs: list, parts_costs: dict[str, float]) -> dict:
     }
 
 
-def makes_summary() -> list[dict]:
+def makes_summary(service: str | None = None) -> list[dict]:
     """One row per make, across every successful job on file for it
-    regardless of model/year."""
-    jobs = list(_base_queryset())
+    regardless of model/year. service optionally scopes this to one
+    loss_type display label (see services/labels.py)."""
+    jobs = list(_filter_by_service(_base_queryset(), service))
     parts_costs = parts_cost_for_jobs(jobs)
 
     by_make: dict[str, list] = {}
@@ -66,9 +89,9 @@ def makes_summary() -> list[dict]:
     return sorted(rows, key=lambda r: r["make"])
 
 
-def models_summary(make: str) -> list[dict]:
+def models_summary(make: str, service: str | None = None) -> list[dict]:
     """One row per normalized model family within a make."""
-    jobs = list(_base_queryset().filter(make=make))
+    jobs = list(_filter_by_service(_base_queryset().filter(make=make), service))
     parts_costs = parts_cost_for_jobs(jobs)
 
     by_family: dict[str, list] = {}
@@ -83,11 +106,11 @@ def models_summary(make: str) -> list[dict]:
     return sorted(rows, key=lambda r: r["model_family"])
 
 
-def years_summary(make: str, model_family: str) -> list[dict]:
+def years_summary(make: str, model_family: str, service: str | None = None) -> list[dict]:
     """One row per year of manufacture within a make + model family."""
     jobs = [
         job
-        for job in _base_queryset().filter(make=make)
+        for job in _filter_by_service(_base_queryset().filter(make=make), service)
         if normalize_model(job.make, job.model) == model_family
     ]
     parts_costs = parts_cost_for_jobs(jobs)
