@@ -22,20 +22,32 @@
     </div>
   </div>
 
+  <div class="field-group completed-branch" hidden>
+    <label>Customer signature — happy with the completed job</label>
+    <canvas id="completion-signature-pad" class="signature-pad" width="600" height="200"></canvas>
+    <p><button type="button" class="btn-secondary" id="clear-completion-signature">Clear signature</button></p>
+    <input type="hidden" name="completion_signature" id="completion_signature">
+  </div>
+
   <div class="field-group failure-branch" hidden>
     <label>Reason for failure</label>
     <div class="outcome-choice">
-      <label><input type="radio" name="failure_reason" value="wrong_parts" class="failure-reason-input"> Wrong parts</label>
-      <label><input type="radio" name="failure_reason" value="programmer_issue" class="failure-reason-input"> Programmer issue</label>
+      {% for category in failure_categories %}
+      <label>
+        <input type="radio" name="failure_category" value="{{ category.id }}" class="failure-category-input"
+               data-needs-sku="{{ category.needs_sku|yesno:'1,' }}" data-needs-reattend="{{ category.needs_reattend|yesno:'1,' }}">
+        {{ category.name }}
+      </label>
+      {% endfor %}
     </div>
   </div>
 
-  <div class="field-group failure-reason-branch" data-reason="wrong_parts" hidden>
-    <label for="failure_sku_needed">SKU needed</label>
+  <div class="field-group failure-category-branch" data-need="sku" hidden>
+    <label for="failure_sku_needed">SKU / part needed</label>
     <input type="text" id="failure_sku_needed" name="failure_sku_needed" placeholder="Part SKU">
   </div>
 
-  <div class="field-group failure-reason-branch" data-reason="programmer_issue" hidden>
+  <div class="field-group failure-category-branch" data-need="reattend" hidden>
     <label>Reattend?</label>
     <div class="outcome-choice">
       <label><input type="radio" name="failure_reattend_action" value="self"> Myself</label>
@@ -61,24 +73,102 @@
     document.querySelectorAll('.outcome-input').forEach(function (radio) {
       radio.addEventListener('change', function () {
         var failed = radio.value === 'failed';
+        var completed = radio.value === 'completed';
         document.querySelectorAll('.failure-branch').forEach(function (branch) {
           showBranch(branch, failed);
         });
+        document.querySelectorAll('.completed-branch').forEach(function (branch) {
+          showBranch(branch, completed);
+        });
         if (!failed) {
-          document.querySelectorAll('.failure-reason-branch').forEach(function (branch) {
+          document.querySelectorAll('.failure-category-branch').forEach(function (branch) {
             showBranch(branch, false);
           });
         }
       });
     });
 
-    document.querySelectorAll('.failure-reason-input').forEach(function (radio) {
+    document.querySelectorAll('.failure-category-input').forEach(function (radio) {
       radio.addEventListener('change', function () {
-        var chosen = radio.value;
-        document.querySelectorAll('.failure-reason-branch').forEach(function (branch) {
-          showBranch(branch, branch.dataset.reason === chosen);
+        var needsSku = radio.dataset.needsSku === '1';
+        var needsReattend = radio.dataset.needsReattend === '1';
+        document.querySelectorAll('.failure-category-branch').forEach(function (branch) {
+          if (branch.dataset.need === 'sku') showBranch(branch, needsSku);
+          if (branch.dataset.need === 'reattend') showBranch(branch, needsReattend);
         });
       });
+    });
+  })();
+
+  (function () {
+    function setUpSignaturePad(canvasId, clearButtonId) {
+      var canvas = document.getElementById(canvasId);
+      if (!canvas) return null;
+      var ctx = canvas.getContext('2d');
+      ctx.lineWidth = 2;
+      ctx.lineCap = 'round';
+      ctx.strokeStyle = '#16241d';
+      var drawing = false;
+      var hasSignature = false;
+
+      function point(e) {
+        var rect = canvas.getBoundingClientRect();
+        var scaleX = canvas.width / rect.width;
+        var scaleY = canvas.height / rect.height;
+        return { x: (e.clientX - rect.left) * scaleX, y: (e.clientY - rect.top) * scaleY };
+      }
+
+      function start(e) {
+        e.preventDefault();
+        canvas.setPointerCapture(e.pointerId);
+        drawing = true;
+        hasSignature = true;
+        var p = point(e);
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+      }
+
+      function move(e) {
+        if (!drawing) return;
+        e.preventDefault();
+        var p = point(e);
+        ctx.lineTo(p.x, p.y);
+        ctx.stroke();
+      }
+
+      function end() { drawing = false; }
+
+      canvas.addEventListener('pointerdown', start);
+      canvas.addEventListener('pointermove', move);
+      canvas.addEventListener('pointerup', end);
+      canvas.addEventListener('pointercancel', end);
+
+      var clearButton = document.getElementById(clearButtonId);
+      if (clearButton) {
+        clearButton.addEventListener('click', function () {
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          hasSignature = false;
+        });
+      }
+
+      return {
+        hasSignature: function () { return hasSignature; },
+        dataUrl: function () { return canvas.toDataURL('image/png'); },
+        visible: function () { return !canvas.closest('[hidden]'); },
+      };
+    }
+
+    var completionPad = setUpSignaturePad('completion-signature-pad', 'clear-completion-signature');
+
+    document.getElementById('complete-form').addEventListener('submit', function (e) {
+      if (completionPad && completionPad.visible()) {
+        if (!completionPad.hasSignature()) {
+          e.preventDefault();
+          alert("The customer needs to sign to confirm they're happy with the job.");
+          return;
+        }
+        document.getElementById('completion_signature').value = completionPad.dataUrl();
+      }
     });
   })();
 </script>

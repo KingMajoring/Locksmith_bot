@@ -102,11 +102,29 @@ class JobVisit(models.Model):
     pick_used = models.CharField(max_length=200, blank=True)
     disclaimer_signed_at = models.DateTimeField(null=True, blank=True)
 
-    # Failed jobs: why, and (for a programmer issue) what the locksmith
-    # thinks should happen next — office's to action, not automated.
+    # Failed jobs: why, and (for reasons that need it) the SKU still
+    # needed or the locksmith's own reattend recommendation — office's
+    # to action, not automated. failure_category is picked from office's
+    # own admin-configured apps.job_completion.models.FailureCategory
+    # list (see views._FAILURE_CATEGORIES_HIDDEN_FROM_LOCKSMITH etc. for
+    # which categories show which sub-field) — deliberately not the
+    # locksmith self-rating their own competence; that classification
+    # (FailureCategory.master_reason) happens office-side, invisibly to
+    # the locksmith. failure_reason/FailureReason predate this and are
+    # unused going forward, kept only so any already-recorded failures
+    # aren't silently blanked.
     failure_reason = models.CharField(max_length=20, choices=FailureReason.choices, blank=True)
+    failure_category = models.ForeignKey(
+        "job_completion.FailureCategory", null=True, blank=True,
+        on_delete=models.SET_NULL, related_name="+",
+    )
     failure_sku_needed = models.CharField(max_length=200, blank=True)
     failure_reattend_action = models.CharField(max_length=20, choices=ReattendAction.choices, blank=True)
+
+    # Every completed (not failed) job: the customer signs on the
+    # locksmith's phone to confirm they're happy with the completed
+    # work — see JobVisitPhoto.Kind.COMPLETION_SIGNATURE for the image.
+    completion_signed_at = models.DateTimeField(null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -141,6 +159,7 @@ class JobVisitPhoto(models.Model):
         CLIENT_KEY = "client_key", "Client's key"
         IGNITION_ON = "ignition_on", "Ignition on"
         DISCLAIMER_SIGNATURE = "disclaimer_signature", "Disclaimer signature"
+        COMPLETION_SIGNATURE = "completion_signature", "Completion sign-off signature"
 
     visit = models.ForeignKey(JobVisit, on_delete=models.CASCADE, related_name="photos")
     kind = models.CharField(max_length=25, choices=Kind.choices)

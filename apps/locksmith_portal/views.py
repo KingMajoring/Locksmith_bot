@@ -41,6 +41,7 @@ from django.views.decorators.http import require_POST
 from apps.integrations.handl import get_handl_client
 from apps.integrations.optimo import get_optimo_client
 from apps.integrations.photos import get_photo_storage
+from apps.job_completion.models import FailureCategory
 from apps.job_completion.services.labels import display_loss_type
 from apps.job_completion.services.pulling import _report_id_from_order_no
 from apps.locksmiths.models import Locksmith
@@ -57,16 +58,28 @@ DISCLAIMER_TEXT = (
     "might cause small bodywork damage that WGTK can't be held liable for."
 )
 
+# Handl's other "key issue" loss types (everything in its loss-type
+# dropdown besides Locked in Property/Gain access and Spare Key, which
+# have their own distinct flows) — start all of them on the same
+# checklist as AKL/Lost, rather than the generic single before/after
+# photo. Easy to split any one of them out with its own list later once
+# office has seen it in use.
+_AKL_STYLE_SERVICE_LABELS = (
+    "AKL", "Stolen", "Broken", "Ignition/Door Barrel", "Extraction",
+    "Immobiliser", "Key Broken in Lock", "Diagnosis", "Other",
+)
+
 # Named photo slots for the arrival step, by service (Handl loss_type
 # display label — see services/labels.py) — a service not listed here
 # just gets the generic single "before" photo (the pre-existing
 # behaviour). (kind, required) pairs.
 _ARRIVAL_PHOTO_SLOTS_BY_SERVICE = {
-    "AKL": [
+    label: [
         (JobVisitPhoto.Kind.FRONT_OF_CAR, True),
         (JobVisitPhoto.Kind.DOOR_LOCK, True),
         (JobVisitPhoto.Kind.DAMAGE, False),
-    ],
+    ]
+    for label in _AKL_STYLE_SERVICE_LABELS
 }
 
 # Named photo slots for the completion step, by service (Handl loss_type
@@ -80,11 +93,14 @@ _ARRIVAL_PHOTO_SLOTS_BY_SERVICE = {
 # photos, so one shared list covers it until office asks for them to
 # diverge.
 _AFTER_PHOTO_SLOTS_BY_SERVICE = {
-    "AKL": [
-        (JobVisitPhoto.Kind.IGNITION_ON, True),
-        (JobVisitPhoto.Kind.KEYS_SUPPLIED, True),
-        (JobVisitPhoto.Kind.DAMAGE, False),
-    ],
+    **{
+        label: [
+            (JobVisitPhoto.Kind.IGNITION_ON, True),
+            (JobVisitPhoto.Kind.KEYS_SUPPLIED, True),
+            (JobVisitPhoto.Kind.DAMAGE, False),
+        ]
+        for label in _AKL_STYLE_SERVICE_LABELS
+    },
     "Spare Key": [
         (JobVisitPhoto.Kind.FRONT_OF_CAR, True),
         (JobVisitPhoto.Kind.DOOR_LOCK, True),
@@ -132,6 +148,38 @@ def _access_method_photo_slots(access_method):
     if access_method == JobVisit.AccessMethod.AIRBAG:
         return [(JobVisitPhoto.Kind.DOOR_FRAME, True)]
     return []
+
+
+# The failure-reason list is office's own admin-managed
+# apps.job_completion.models.FailureCategory (Job Completion > Failure
+# categories in the office admin) — the same list used for office's own
+# reporting, rather than a separate locksmith-only enum. Deliberately
+# NOT a self-rating: FailureCategory.master_reason is how "was this the
+# locksmith's fault" gets classified, set by office against each
+# category, invisible to the locksmith filling out this form.
+#
+# A few categories aren't meant to be locksmith-selectable at all, and
+# some need a specific follow-up question depending on which one's
+# picked — both hardcoded here by name (matching the codebase's existing
+# per-service dicts above) rather than another admin-configurable layer.
+_FAILURE_CATEGORIES_HIDDEN_FROM_LOCKSMITH = {
+    "Not a failure", "Skill set - locksmith", "Uncategorized",
+}
+_FAILURE_CATEGORIES_NEEDING_SKU = {
+    "Incorrect parts - ordered by WGTK", "Parts not arrived", "Parts issue - (suppiler)",
+    "Further parts required (should have been known)", "Further parts required (unknown)",
+    "Parts issue - (WGTK Stock)", "Stock issues- not on van as expected.",
+}
+_FAILURE_CATEGORIES_NEEDING_REATTEND = {
+    "programmer issue", "Skill set - placed incorrectly",
+    "Vehicle not available - client aware", "Vehicle not available - client NOT aware",
+}
+
+
+def _selectable_failure_categories():
+    return FailureCategory.objects.filter(active=True).exclude(
+        name__in=_FAILURE_CATEGORIES_HIDDEN_FROM_LOCKSMITH
+    ).order_by("name")
 
 
 def _decode_data_url(data_url):
@@ -707,24 +755,33 @@ def job_complete(request, order_no):
     if request.method == "POST":
         notes_text = request.POST.get("notes", "").strip()
         outcome = request.POST.get("outcome")
-        failure_reason = request.POST.get("failure_reason", "")
         failure_sku_needed = request.POST.get("failure_sku_needed", "").strip()
         failure_reattend_action = request.POST.get("failure_reattend_action", "")
+        failure_category_id = request.POST.get("failure_category", "")
+        failure_category = (
+            _selectable_failure_categories().filter(pk=failure_category_id).first()
+            if failure_category_id else None
+        )
+        completion_signature_data_url = request.POST.get("completion_signature", "").strip()
 
         errors = []
         if outcome not in (JobVisit.Outcome.COMPLETED, JobVisit.Outcome.FAILED):
             errors.append("Choose Completed or Failed.")
 
+        if outcome == JobVisit.Outcome.COMPLETED and not completion_signature_data_url:
+            errors.append("The customer needs to sign to confirm they're happy with the job.")
+
         if outcome == JobVisit.Outcome.FAILED:
-            if failure_reason not in (JobVisit.FailureReason.WRONG_PARTS, JobVisit.FailureReason.PROGRAMMER_ISSUE):
+            if failure_category is None:
                 errors.append("Choose a reason for the failure.")
-            elif failure_reason == JobVisit.FailureReason.WRONG_PARTS and not failure_sku_needed:
-                errors.append("Enter the SKU needed.")
-            elif (
-                failure_reason == JobVisit.FailureReason.PROGRAMMER_ISSUE
-                and failure_reattend_action not in JobVisit.ReattendAction.values
-            ):
-                errors.append("Choose a reattend option.")
+            else:
+                if failure_category.name in _FAILURE_CATEGORIES_NEEDING_SKU and not failure_sku_needed:
+                    errors.append("Enter the SKU / part needed.")
+                if (
+                    failure_category.name in _FAILURE_CATEGORIES_NEEDING_REATTEND
+                    and failure_reattend_action not in JobVisit.ReattendAction.values
+                ):
+                    errors.append("Choose a reattend option.")
 
         slot_pairs = _after_photo_slots(loss_label)
         slot_files = {}
@@ -750,12 +807,27 @@ def job_complete(request, order_no):
                 if urls:
                     note_parts.append(f"{JobVisitPhoto.Kind(kind).label}: {_photo_links_html(urls)}")
 
-            if failure_reason == JobVisit.FailureReason.WRONG_PARTS:
-                note_parts.append(f"Failure reason: wrong parts (SKU needed: {escape(failure_sku_needed)}).")
-            elif failure_reason == JobVisit.FailureReason.PROGRAMMER_ISSUE:
+            if failure_category is not None:
+                detail = ""
+                if failure_category.name in _FAILURE_CATEGORIES_NEEDING_SKU:
+                    detail = f" (SKU / part needed: {escape(failure_sku_needed)})"
+                elif failure_category.name in _FAILURE_CATEGORIES_NEEDING_REATTEND:
+                    detail = f" ({JobVisit.ReattendAction(failure_reattend_action).label})"
+                note_parts.append(f"Failure reason: {escape(failure_category.name)}{detail}.")
+
+            if outcome == JobVisit.Outcome.COMPLETED:
+                content_type, signature_bytes = _decode_data_url(completion_signature_data_url)
+                signature_url = get_photo_storage().upload(
+                    report_id=report_id, stage="completion", filename="signature.png",
+                    content=signature_bytes, content_type=content_type,
+                )
+                JobVisitPhoto.objects.create(
+                    visit=visit, kind=JobVisitPhoto.Kind.COMPLETION_SIGNATURE, url=signature_url
+                )
+                visit.completion_signed_at = timezone.now()
                 note_parts.append(
-                    "Failure reason: programmer issue "
-                    f"({JobVisit.ReattendAction(failure_reattend_action).label})."
+                    f"Customer signed to confirm they're happy with the job: "
+                    f"{_photo_links_html([signature_url])}"
                 )
 
             if notes_text:
@@ -766,20 +838,21 @@ def job_complete(request, order_no):
 
             visit.notes = notes_text
             visit.outcome = outcome
-            visit.failure_reason = failure_reason if outcome == JobVisit.Outcome.FAILED else ""
+            visit.failure_category = failure_category if outcome == JobVisit.Outcome.FAILED else None
             visit.failure_sku_needed = (
-                failure_sku_needed if failure_reason == JobVisit.FailureReason.WRONG_PARTS else ""
+                failure_sku_needed
+                if failure_category and failure_category.name in _FAILURE_CATEGORIES_NEEDING_SKU else ""
             )
             visit.failure_reattend_action = (
                 failure_reattend_action
-                if failure_reason == JobVisit.FailureReason.PROGRAMMER_ISSUE else ""
+                if failure_category and failure_category.name in _FAILURE_CATEGORIES_NEEDING_REATTEND else ""
             )
             visit.stage = JobVisit.Stage.DONE
             visit.completed_at = timezone.now()
             visit.save(update_fields=[
                 "notes", "outcome",
-                "failure_reason", "failure_sku_needed", "failure_reattend_action",
-                "stage", "completed_at",
+                "failure_category", "failure_sku_needed", "failure_reattend_action",
+                "completion_signed_at", "stage", "completed_at",
             ])
 
             _write_handl_note(locksmith, report_id, " ".join(note_parts))
@@ -796,6 +869,15 @@ def job_complete(request, order_no):
         {"kind": kind, "label": JobVisitPhoto.Kind(kind).label, "required": required}
         for kind, required in _after_photo_slots(loss_label)
     ]
+    failure_categories = [
+        {
+            "id": category.pk,
+            "name": category.name,
+            "needs_sku": category.name in _FAILURE_CATEGORIES_NEEDING_SKU,
+            "needs_reattend": category.name in _FAILURE_CATEGORIES_NEEDING_REATTEND,
+        }
+        for category in _selectable_failure_categories()
+    ]
 
     return render(
         request,
@@ -809,6 +891,7 @@ def job_complete(request, order_no):
             "is_preview": _is_preview(request),
             "loss_label": loss_label,
             "photo_slots": photo_slots,
+            "failure_categories": failure_categories,
         },
     )
 

@@ -9,6 +9,7 @@ from django.utils import timezone
 
 from apps.integrations.handl import CurrentStockLine, JobDetails
 from apps.integrations.optimo import OptimoOrderSummary
+from apps.job_completion.models import FailureCategory
 from apps.locksmiths.models import Locksmith
 from apps.stock_accuracy.models import WeeklyStockCheck
 from apps.stock_accuracy.services.generation import generate_weekly_check
@@ -606,6 +607,25 @@ class JobVisitWorkflowTests(TestCase):
         )
         mock_get_storage.return_value = self.mock_storage
 
+        # A handful of office-configured failure categories — one from
+        # each sub-question group, plus one hidden from the locksmith —
+        # covering what real office data looks like (see
+        # views._FAILURE_CATEGORIES_*).
+        self.category_wrong_parts = FailureCategory.objects.create(
+            name="Incorrect parts - ordered by WGTK", master_reason=FailureCategory.MasterReason.WGTK_OFFICE,
+        )
+        self.category_programmer_issue = FailureCategory.objects.create(
+            name="programmer issue", master_reason=FailureCategory.MasterReason.WGTK_LOCKSMITH,
+        )
+        self.category_notes_only = FailureCategory.objects.create(
+            name="Vehicle Issues", master_reason=FailureCategory.MasterReason.NONE,
+        )
+        FailureCategory.objects.create(
+            name="Skill set - locksmith", master_reason=FailureCategory.MasterReason.WGTK_LOCKSMITH,
+        )
+        FailureCategory.objects.create(name="Not a failure", master_reason=FailureCategory.MasterReason.NONE)
+        FailureCategory.objects.create(name="Uncategorized", master_reason=FailureCategory.MasterReason.NONE)
+
     def _visit(self):
         return JobVisit.objects.get(locksmith=self.locksmith, order_no=self.order_no)
 
@@ -791,7 +811,10 @@ class JobVisitWorkflowTests(TestCase):
         url = reverse("locksmith_portal:job_complete", args=[self.order_no])
         response = self.client.post(
             url,
-            {"photo_after": [_fake_photo(name="after.jpg")], "notes": "Left a spare key.", "outcome": "completed"},
+            {
+                "photo_after": [_fake_photo(name="after.jpg")], "notes": "Left a spare key.",
+                "outcome": "completed", "completion_signature": "data:image/png;base64,aGVsbG8=",
+            },
         )
 
         visit = self._visit()
@@ -799,7 +822,9 @@ class JobVisitWorkflowTests(TestCase):
         self.assertEqual(visit.outcome, JobVisit.Outcome.COMPLETED)
         self.assertEqual(visit.notes, "Left a spare key.")
         self.assertIsNotNone(visit.completed_at)
+        self.assertIsNotNone(visit.completion_signed_at)
         self.assertEqual(visit.photos.filter(kind=JobVisitPhoto.Kind.AFTER).count(), 1)
+        self.assertEqual(visit.photos.filter(kind=JobVisitPhoto.Kind.COMPLETION_SIGNATURE).count(), 1)
         self.assertRedirects(
             response,
             f"{reverse('locksmith_portal:job_overview', args=[self.order_no])}?date={self.today.isoformat()}",
@@ -807,10 +832,23 @@ class JobVisitWorkflowTests(TestCase):
         note_text = self.mock_handl.add_report_note.call_args[0][1]
         self.assertIn("Completed", note_text)
         self.assertIn("Left a spare key.", note_text)
-        self.assertIn(f'<a href="{visit.photos.first().url}" target="_blank">Photo 1</a>', note_text)
+        self.assertIn("happy with the job", note_text)
+        self.assertIn(f'<a href="{visit.photos.get(kind=JobVisitPhoto.Kind.AFTER).url}" target="_blank">', note_text)
         self.mock_optimo.update_completion_status.assert_called_once_with(
             self.order_no, "success", start_time=visit.arrived_at, end_time=visit.completed_at
         )
+
+    def test_complete_requires_completion_signature(self):
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            stage=JobVisit.Stage.PARTS_DONE, parts_done_at=timezone.now(),
+        )
+        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        response = self.client.post(
+            url, {"photo_after": [_fake_photo()], "outcome": "completed"},
+        )
+        self.assertContains(response, "customer needs to sign")
+        self.assertEqual(self._visit().stage, JobVisit.Stage.PARTS_DONE)
 
     def test_complete_failed_outcome_pushes_failed_status_to_optimo(self):
         JobVisit.objects.create(
@@ -820,7 +858,7 @@ class JobVisitWorkflowTests(TestCase):
         url = reverse("locksmith_portal:job_complete", args=[self.order_no])
         self.client.post(url, {
             "photo_after": [_fake_photo()], "outcome": "failed",
-            "failure_reason": "wrong_parts", "failure_sku_needed": "TK-100",
+            "failure_category": self.category_wrong_parts.pk, "failure_sku_needed": "TK-100",
         })
         self.mock_optimo.update_completion_status.assert_called_once_with(
             self.order_no, "failed", start_time=None, end_time=self._visit().completed_at
@@ -837,7 +875,10 @@ class JobVisitWorkflowTests(TestCase):
         url = reverse("locksmith_portal:job_complete", args=[self.order_no])
         self.client.post(
             url,
-            {"photo_after": [_fake_photo()], "notes": "<script>alert(1)</script>", "outcome": "completed"},
+            {
+                "photo_after": [_fake_photo()], "notes": "<script>alert(1)</script>",
+                "outcome": "completed", "completion_signature": "data:image/png;base64,aGVsbG8=",
+            },
         )
         note_text = self.mock_handl.add_report_note.call_args[0][1]
         self.assertNotIn("<script>", note_text)
@@ -851,9 +892,10 @@ class JobVisitWorkflowTests(TestCase):
         url = reverse("locksmith_portal:job_complete", args=[self.order_no])
         self.client.post(url, {
             "photo_after": [_fake_photo()], "outcome": "failed",
-            "failure_reason": "wrong_parts", "failure_sku_needed": "TK-100",
+            "failure_category": self.category_wrong_parts.pk, "failure_sku_needed": "TK-100",
         })
         self.assertEqual(self._visit().outcome, JobVisit.Outcome.FAILED)
+        self.assertEqual(self._visit().failure_category, self.category_wrong_parts)
 
     def test_complete_already_done_redirects_with_info(self):
         JobVisit.objects.create(
@@ -1069,7 +1111,7 @@ class JobVisitWorkflowTests(TestCase):
         response = self.client.post(url, {
             "photo_keys_supplied": [_fake_photo(name="c.jpg")],
             "photo_ignition_on": [_fake_photo(name="d.jpg")],
-            "outcome": "completed",
+            "outcome": "completed", "completion_signature": "data:image/png;base64,aGVsbG8=",
         })
         self.assertRedirects(
             response,
@@ -1100,17 +1142,18 @@ class JobVisitWorkflowTests(TestCase):
             "photo_keys_supplied": [_fake_photo(name="c.jpg")],
             "photo_client_key": [_fake_photo(name="d.jpg")],
             "photo_ignition_on": [_fake_photo(name="e.jpg")],
-            "outcome": "completed",
+            "outcome": "completed", "completion_signature": "data:image/png;base64,aGVsbG8=",
         })
         self.assertRedirects(
             response,
             f"{reverse('locksmith_portal:job_overview', args=[self.order_no])}?date={self.today.isoformat()}",
         )
         visit = self._visit()
-        self.assertEqual(visit.photos.count(), 5)
+        self.assertEqual(visit.photos.count(), 6)
         self.assertEqual(visit.photos.filter(kind=JobVisitPhoto.Kind.CLIENT_KEY).count(), 1)
+        self.assertEqual(visit.photos.filter(kind=JobVisitPhoto.Kind.COMPLETION_SIGNATURE).count(), 1)
 
-    # --- failure reasons --------------------------------------------------
+    # --- failure reasons (office-configured FailureCategory) -------------
 
     def test_failed_requires_a_failure_reason(self):
         self._parts_done_visit()
@@ -1118,51 +1161,90 @@ class JobVisitWorkflowTests(TestCase):
         response = self.client.post(url, {"photo_after": [_fake_photo()], "outcome": "failed"})
         self.assertContains(response, "Choose a reason for the failure")
 
-    def test_failed_wrong_parts_requires_sku(self):
+    def test_failed_category_get_excludes_hidden_categories(self):
         self._parts_done_visit()
         url = reverse("locksmith_portal:job_complete", args=[self.order_no])
-        response = self.client.post(url, {
-            "photo_after": [_fake_photo()], "outcome": "failed", "failure_reason": "wrong_parts",
-        })
-        self.assertContains(response, "Enter the SKU needed")
+        response = self.client.get(url)
+        names = {c["name"] for c in response.context["failure_categories"]}
+        self.assertIn("Incorrect parts - ordered by WGTK", names)
+        self.assertIn("programmer issue", names)
+        self.assertIn("Vehicle Issues", names)
+        self.assertNotIn("Skill set - locksmith", names)
+        self.assertNotIn("Not a failure", names)
+        self.assertNotIn("Uncategorized", names)
 
-    def test_failed_wrong_parts_success_records_sku_and_notes_handl(self):
+    def test_failed_sku_category_requires_sku(self):
         self._parts_done_visit()
         url = reverse("locksmith_portal:job_complete", args=[self.order_no])
         response = self.client.post(url, {
             "photo_after": [_fake_photo()], "outcome": "failed",
-            "failure_reason": "wrong_parts", "failure_sku_needed": "TK-100",
+            "failure_category": self.category_wrong_parts.pk,
+        })
+        self.assertContains(response, "Enter the SKU / part needed")
+
+    def test_failed_sku_category_success_records_sku_and_notes_handl(self):
+        self._parts_done_visit()
+        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        response = self.client.post(url, {
+            "photo_after": [_fake_photo()], "outcome": "failed",
+            "failure_category": self.category_wrong_parts.pk, "failure_sku_needed": "TK-100",
         })
         visit = self._visit()
-        self.assertEqual(visit.failure_reason, JobVisit.FailureReason.WRONG_PARTS)
+        self.assertEqual(visit.failure_category, self.category_wrong_parts)
         self.assertEqual(visit.failure_sku_needed, "TK-100")
         self.assertRedirects(
             response,
             f"{reverse('locksmith_portal:job_overview', args=[self.order_no])}?date={self.today.isoformat()}",
         )
         note_text = self.mock_handl.add_report_note.call_args[0][1]
-        self.assertIn("wrong parts (SKU needed: TK-100)", note_text)
+        self.assertIn("Incorrect parts - ordered by WGTK (SKU / part needed: TK-100)", note_text)
 
-    def test_failed_programmer_issue_requires_reattend_choice(self):
-        self._parts_done_visit()
-        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
-        response = self.client.post(url, {
-            "photo_after": [_fake_photo()], "outcome": "failed", "failure_reason": "programmer_issue",
-        })
-        self.assertContains(response, "Choose a reattend option")
-
-    def test_failed_programmer_issue_success_records_reattend_action(self):
+    def test_failed_reattend_category_requires_reattend_choice(self):
         self._parts_done_visit()
         url = reverse("locksmith_portal:job_complete", args=[self.order_no])
         response = self.client.post(url, {
             "photo_after": [_fake_photo()], "outcome": "failed",
-            "failure_reason": "programmer_issue", "failure_reattend_action": "different_locksmith",
+            "failure_category": self.category_programmer_issue.pk,
+        })
+        self.assertContains(response, "Choose a reattend option")
+
+    def test_failed_reattend_category_success_records_reattend_action(self):
+        self._parts_done_visit()
+        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        response = self.client.post(url, {
+            "photo_after": [_fake_photo()], "outcome": "failed",
+            "failure_category": self.category_programmer_issue.pk,
+            "failure_reattend_action": "different_locksmith",
         })
         visit = self._visit()
-        self.assertEqual(visit.failure_reason, JobVisit.FailureReason.PROGRAMMER_ISSUE)
+        self.assertEqual(visit.failure_category, self.category_programmer_issue)
         self.assertEqual(visit.failure_reattend_action, JobVisit.ReattendAction.DIFFERENT_LOCKSMITH)
         note_text = self.mock_handl.add_report_note.call_args[0][1]
         self.assertIn("programmer issue (Reattend with a different locksmith)", note_text)
+
+    def test_failed_notes_only_category_needs_no_sub_field(self):
+        self._parts_done_visit()
+        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        response = self.client.post(url, {
+            "photo_after": [_fake_photo()], "outcome": "failed",
+            "failure_category": self.category_notes_only.pk,
+        })
+        self.assertRedirects(
+            response,
+            f"{reverse('locksmith_portal:job_overview', args=[self.order_no])}?date={self.today.isoformat()}",
+        )
+        self.assertEqual(self._visit().failure_category, self.category_notes_only)
+        note_text = self.mock_handl.add_report_note.call_args[0][1]
+        self.assertIn("Failure reason: Vehicle Issues.", note_text)
+
+    def test_failed_hidden_category_id_is_rejected(self):
+        self._parts_done_visit()
+        hidden = FailureCategory.objects.get(name="Skill set - locksmith")
+        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        response = self.client.post(url, {
+            "photo_after": [_fake_photo()], "outcome": "failed", "failure_category": hidden.pk,
+        })
+        self.assertContains(response, "Choose a reason for the failure")
 
     # --- parts (job_detail) gated behind arrived ------------------------
 
