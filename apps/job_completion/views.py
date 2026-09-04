@@ -288,6 +288,7 @@ _SCHEDULABLE_COMMANDS = {
     "pull_completed_jobs",
     "refresh_job_financials",
     "send_weekly_stock_checks",
+    "check_overdue_visits",
 }
 
 

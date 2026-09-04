@@ -6,6 +6,7 @@ app_name = "locksmith_portal"
 
 urlpatterns = [
     path("", views.dashboard, name="dashboard"),
+    path("panic/", views.panic_alert, name="panic_alert"),
     path("stock-check/<int:pk>/", views.stock_check_entry, name="stock_check_entry"),
     # order_no uses the <path:> converter because it can itself contain
     # "/" (real Optimo order numbers have been seen to) — the specific

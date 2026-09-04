@@ -67,6 +67,7 @@ TEMPLATES = [
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
                 "apps.job_completion.context_processors.needs_categorization_count",
+                "apps.locksmith_portal.context_processors.panic_contact",
             ],
         },
     },
@@ -110,6 +111,17 @@ HANDL_PORTAL_CREATED_BY_USER_ID = env.int("HANDL_PORTAL_CREATED_BY_USER_ID", def
 # Storage Account.
 AZURE_STORAGE_CONNECTION_STRING = env("AZURE_STORAGE_CONNECTION_STRING", default="")
 AZURE_STORAGE_CONTAINER = env("AZURE_STORAGE_CONTAINER", default="job-photos")
+
+# Lone-worker safety alerts (panic button, overdue-job escalation — see
+# apps/integrations/notifications.py). Until all three are set,
+# get_notification_service() falls back to MockNotificationService
+# (just logs), so the rest of the app can be built/tested without a
+# real Twilio account. TWILIO_SMS_FROM is the Twilio number sending the
+# alert; a WhatsApp sender can replace this later without changing the
+# calling code (see TwilioNotificationService).
+TWILIO_ACCOUNT_SID = env("TWILIO_ACCOUNT_SID", default="")
+TWILIO_AUTH_TOKEN = env("TWILIO_AUTH_TOKEN", default="")
+TWILIO_SMS_FROM = env("TWILIO_SMS_FROM", default="")
 
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},

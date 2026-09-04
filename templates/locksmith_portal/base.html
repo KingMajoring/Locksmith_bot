@@ -10,14 +10,37 @@
 <body>
   <header class="portal-header">
     <a class="brand" href="{% url 'locksmith_portal:dashboard' %}">🔑 WGTK Locksmith Portal</a>
-    <span class="signout">
-      {% if is_preview %}
-        <a href="{% url 'locksmith_portal:stop_preview' %}">Stop previewing</a>
-      {% else %}
-        <a href="{% url 'account_logout' %}">Sign out</a>
-      {% endif %}
-    </span>
+    <div class="header-actions">
+      <button type="button" id="panic-button" class="panic-button" data-phone="{{ panic_contact_phone }}">🆘 SOS</button>
+      <span class="signout">
+        {% if is_preview %}
+          <a href="{% url 'locksmith_portal:stop_preview' %}">Stop previewing</a>
+        {% else %}
+          <a href="{% url 'account_logout' %}">Sign out</a>
+        {% endif %}
+      </span>
+    </div>
   </header>
+  <script>
+    (function () {
+      var button = document.getElementById('panic-button');
+      if (!button) return;
+      button.addEventListener('click', function () {
+        if (!confirm("Send a safety alert to the office and call for help now?")) return;
+        var csrfToken = document.cookie.replace(/(?:(?:^|.*;\s*)csrftoken\s*\=\s*([^;]*).*$)|^.*$/, '$1');
+        fetch('{% url "locksmith_portal:panic_alert" %}', {
+          method: 'POST',
+          headers: { 'X-CSRFToken': csrfToken },
+        }).catch(function () {});
+        var phone = button.dataset.phone;
+        if (phone) {
+          window.location.href = 'tel:' + phone;
+        } else {
+          alert('Alert sent to the office. No emergency contact number is set up — call 999 directly if needed.');
+        }
+      });
+    })();
+  </script>
   <main class="portal-main">
     {% if is_preview %}
       <div class="preview-banner">

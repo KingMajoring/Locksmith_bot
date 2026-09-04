@@ -8,3 +8,4 @@ requests==2.32.*
 whitenoise==6.*
 pymssql==2.4.*
 azure-storage-blob==12.*
+twilio==9.*

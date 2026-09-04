@@ -33,6 +33,7 @@ from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.db.models import Count, Sum
+from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
@@ -40,6 +41,7 @@ from django.utils.html import escape
 from django.views.decorators.http import require_POST
 
 from apps.integrations.handl import get_handl_client
+from apps.integrations.notifications import get_notification_service
 from apps.integrations.optimo import get_optimo_client
 from apps.integrations.photos import get_photo_storage
 from apps.job_completion.models import CompletedJob, FailureCategory
@@ -48,7 +50,7 @@ from apps.job_completion.services.pulling import _report_id_from_order_no
 from apps.locksmiths.models import Locksmith
 from apps.stock_accuracy.models import WeeklyStockCheck
 
-from .models import JobVisit, JobVisitPhoto, PortalDisposal
+from .models import JobVisit, JobVisitPhoto, PortalDisposal, SafetyAlert, SeniorStaffContact
 
 logger = logging.getLogger(__name__)
 
@@ -1251,3 +1253,41 @@ def start_preview(request, locksmith_id):
 def stop_preview(request):
     request.session.pop(_PREVIEW_SESSION_KEY, None)
     return redirect("stock_accuracy:dashboard")
+
+
+def _alert_senior_staff(message):
+    """Best-effort, same rationale as _write_handl_note — a delivery
+    failure to one contact is logged, not surfaced, and doesn't stop
+    the rest of the list being tried. Returns the names actually
+    notified, for the SafetyAlert audit record."""
+    service = get_notification_service()
+    notified = []
+    for contact in SeniorStaffContact.objects.filter(active=True):
+        try:
+            service.send_message(contact.phone_number, message)
+        except Exception:
+            logger.exception("Failed to send safety alert to %s", contact.name)
+        else:
+            notified.append(contact.name)
+    return notified
+
+
+@login_required
+@require_POST
+def panic_alert(request):
+    """Always-visible emergency button (see base.html) — not tied to
+    one job, since the point is speed: alert office the instant a
+    locksmith needs help, from wherever they are in the portal."""
+    locksmith = _locksmith_for_request(request)
+    if locksmith is None:
+        return JsonResponse({"ok": False}, status=403)
+
+    message = (
+        f"WGTK SAFETY ALERT: {locksmith.name} has pressed the emergency button "
+        "in the locksmith portal. Call them back immediately."
+    )
+    notified = _alert_senior_staff(message)
+    SafetyAlert.objects.create(
+        locksmith=locksmith, kind=SafetyAlert.Kind.PANIC, notified_contacts=", ".join(notified),
+    )
+    return JsonResponse({"ok": True})

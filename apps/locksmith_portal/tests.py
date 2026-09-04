@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, patch
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.core.management import call_command
 from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
@@ -14,7 +15,13 @@ from apps.locksmiths.models import Locksmith
 from apps.stock_accuracy.models import WeeklyStockCheck
 from apps.stock_accuracy.services.generation import generate_weekly_check
 
-from .models import JobVisit, JobVisitPhoto, PortalDisposal
+from .models import (
+    JobVisit,
+    JobVisitPhoto,
+    PortalDisposal,
+    SafetyAlert,
+    SeniorStaffContact,
+)
 
 User = get_user_model()
 
@@ -625,6 +632,127 @@ class JobDetailTests(TestCase):
         self.assertRedirects(
             response, f"{reverse('locksmith_portal:dashboard')}?date={yesterday.isoformat()}"
         )
+
+
+class PanicAlertTests(TestCase):
+    """Always-visible emergency button (see base.html) — see
+    views.panic_alert and the check_overdue_visits management command,
+    which share _alert_senior_staff."""
+
+    def setUp(self):
+        self.locksmith, self.user = _make_locksmith_user()
+        self.client.force_login(self.user)
+        self.contact1 = SeniorStaffContact.objects.create(
+            name="Alice", phone_number="+441111111111", order=0,
+        )
+        self.contact2 = SeniorStaffContact.objects.create(
+            name="Bob", phone_number="+442222222222", order=1,
+        )
+        SeniorStaffContact.objects.create(
+            name="Inactive Carol", phone_number="+443333333333", active=False,
+        )
+
+    @patch("apps.locksmith_portal.views.get_notification_service")
+    def test_panic_alert_notifies_active_contacts_only(self, mock_get_service):
+        mock_service = MagicMock()
+        mock_get_service.return_value = mock_service
+
+        url = reverse("locksmith_portal:panic_alert")
+        response = self.client.post(url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(mock_service.send_message.call_count, 2)
+        called_numbers = {call.args[0] for call in mock_service.send_message.call_args_list}
+        self.assertEqual(called_numbers, {"+441111111111", "+442222222222"})
+
+        alert = SafetyAlert.objects.get()
+        self.assertEqual(alert.kind, SafetyAlert.Kind.PANIC)
+        self.assertEqual(alert.locksmith, self.locksmith)
+        self.assertIn("Alice", alert.notified_contacts)
+        self.assertIn("Bob", alert.notified_contacts)
+
+    @patch("apps.locksmith_portal.views.get_notification_service")
+    def test_panic_alert_one_failed_contact_does_not_block_the_rest(self, mock_get_service):
+        mock_service = MagicMock()
+        mock_service.send_message.side_effect = [Exception("boom"), None]
+        mock_get_service.return_value = mock_service
+
+        url = reverse("locksmith_portal:panic_alert")
+        self.client.post(url)
+
+        alert = SafetyAlert.objects.get()
+        self.assertNotIn("Alice", alert.notified_contacts)
+        self.assertIn("Bob", alert.notified_contacts)
+
+    def test_panic_alert_requires_login(self):
+        self.client.logout()
+        url = reverse("locksmith_portal:panic_alert")
+        response = self.client.post(url)
+        self.assertEqual(response.status_code, 302)
+
+    def test_panic_alert_get_not_allowed(self):
+        url = reverse("locksmith_portal:panic_alert")
+        self.assertEqual(self.client.get(url).status_code, 405)
+
+    def test_panic_contact_phone_in_context_is_the_first_active_contact(self):
+        response = self.client.get(reverse("locksmith_portal:dashboard"))
+        self.assertEqual(response.context["panic_contact_phone"], "+441111111111")
+        self.assertContains(response, "🆘 SOS")
+
+
+class CheckOverdueVisitsCommandTests(TestCase):
+    def setUp(self):
+        self.locksmith, self.user = _make_locksmith_user()
+        self.contact = SeniorStaffContact.objects.create(name="Alice", phone_number="+441111111111")
+
+    @patch("apps.locksmith_portal.views.get_notification_service")
+    def test_alerts_once_for_a_visit_stuck_over_an_hour(self, mock_get_service):
+        mock_service = MagicMock()
+        mock_get_service.return_value = mock_service
+
+        visit = JobVisit.objects.create(
+            locksmith=self.locksmith, order_no="1_2026-09-04", report_id="1",
+            stage=JobVisit.Stage.ARRIVED, arrived_at=timezone.now() - timedelta(minutes=90),
+        )
+
+        call_command("check_overdue_visits")
+
+        mock_service.send_message.assert_called_once()
+        self.assertEqual(SafetyAlert.objects.filter(kind=SafetyAlert.Kind.OVERDUE).count(), 1)
+        alert = SafetyAlert.objects.get(kind=SafetyAlert.Kind.OVERDUE)
+        self.assertEqual(alert.job_visit, visit)
+
+        # Running it again shouldn't re-alert on the same visit.
+        call_command("check_overdue_visits")
+        mock_service.send_message.assert_called_once()
+
+    @patch("apps.locksmith_portal.views.get_notification_service")
+    def test_does_not_alert_on_a_recently_arrived_visit(self, mock_get_service):
+        mock_service = MagicMock()
+        mock_get_service.return_value = mock_service
+
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no="2_2026-09-04", report_id="2",
+            stage=JobVisit.Stage.ARRIVED, arrived_at=timezone.now() - timedelta(minutes=10),
+        )
+
+        call_command("check_overdue_visits")
+        mock_service.send_message.assert_not_called()
+        self.assertEqual(SafetyAlert.objects.count(), 0)
+
+    @patch("apps.locksmith_portal.views.get_notification_service")
+    def test_does_not_alert_on_a_visit_past_arrived_stage(self, mock_get_service):
+        mock_service = MagicMock()
+        mock_get_service.return_value = mock_service
+
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no="3_2026-09-04", report_id="3",
+            stage=JobVisit.Stage.DONE, arrived_at=timezone.now() - timedelta(minutes=90),
+            completed_at=timezone.now(),
+        )
+
+        call_command("check_overdue_visits")
+        mock_service.send_message.assert_not_called()
 
 
 class StaffPreviewTests(TestCase):

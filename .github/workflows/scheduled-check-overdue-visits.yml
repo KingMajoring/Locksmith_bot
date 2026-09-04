@@ -1,0 +1,39 @@
+name: Scheduled - Check Overdue Visits
+
+# Lone-worker safety escalation — see
+# apps/locksmith_portal/management/commands/check_overdue_visits.py.
+# Calls the app's own protected endpoint (see
+# job_completion.views.run_scheduled_job) rather than an Azure WebJob —
+# see scheduled-pull-completed-jobs.yml for why those never actually
+# ran on this deployment.
+#
+# Runs much more often than the other scheduled jobs (every 15 min, not
+# once a day) since the whole point is catching a locksmith who's gone
+# quiet soon after it happens — note GitHub's scheduled workflows aren't
+# guaranteed to fire exactly on time, so treat the 60-minute overdue
+# threshold in the command itself as approximate, not precise.
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call run-job endpoint
+        env:
+          SCHEDULED_JOB_TOKEN: ${{ secrets.SCHEDULED_JOB_TOKEN }}
+        run: |
+          response=$(curl -sS -w "\n%{http_code}" -X POST \
+            -H "X-Job-Token: $SCHEDULED_JOB_TOKEN" \
+            "https://wgtk-ops-tool.azurewebsites.net/job-completion/internal/run-job/check_overdue_visits/")
+          http_code=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+          echo "HTTP $http_code"
+          echo "$body"
+          if [ "$http_code" != "200" ]; then
+            echo "::error::check_overdue_visits failed with HTTP $http_code"
+            exit 1
+          fi

@@ -204,3 +204,50 @@ class JobVisitPhoto(models.Model):
 
     def __str__(self):
         return f"{self.get_kind_display()} photo for {self.visit.order_no}"
+
+
+class SeniorStaffContact(models.Model):
+    """Who gets a lone-worker safety alert (panic button, overdue-job
+    escalation — see views.panic_alert and the check_overdue_visits
+    management command). Admin-managed so office can add/remove people
+    without a code change; order controls who the panic button's own
+    tap-to-call link dials (lowest order first)."""
+
+    name = models.CharField(max_length=200)
+    phone_number = models.CharField(max_length=30)
+    active = models.BooleanField(default=True)
+    order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ["order", "name"]
+        verbose_name = "Senior staff contact"
+
+    def __str__(self):
+        return f"{self.name} ({self.phone_number})"
+
+
+class SafetyAlert(models.Model):
+    """Audit trail of every lone-worker safety alert sent — a panic
+    button press, or an overdue-job auto-escalation. Office-visible
+    record even though the real-time alert itself goes out over SMS/
+    WhatsApp, not through this app."""
+
+    class Kind(models.TextChoices):
+        PANIC = "panic", "Panic button"
+        OVERDUE = "overdue", "Overdue job"
+
+    locksmith = models.ForeignKey(Locksmith, on_delete=models.CASCADE, related_name="safety_alerts")
+    kind = models.CharField(max_length=20, choices=Kind.choices)
+    job_visit = models.ForeignKey(
+        JobVisit, null=True, blank=True, on_delete=models.SET_NULL, related_name="safety_alerts"
+    )
+    triggered_at = models.DateTimeField(auto_now_add=True)
+    notified_contacts = models.TextField(
+        blank=True, help_text="Comma-separated names of who was alerted, for the record."
+    )
+
+    class Meta:
+        ordering = ["-triggered_at"]
+
+    def __str__(self):
+        return f"{self.get_kind_display()} — {self.locksmith} at {self.triggered_at:%Y-%m-%d %H:%M}"
