@@ -705,6 +705,12 @@ class ViewsSmokeTests(TestCase):
         response = self.client.get(reverse("job_completion:dashboard"))
         self.assertEqual(response.status_code, 200)
 
+    def test_dashboard_no_longer_shows_failure_breakdowns(self):
+        """Moved to Job Failures — the Dashboard is locksmith summary only."""
+        response = self.client.get(reverse("job_completion:dashboard"))
+        self.assertNotContains(response, "Training focus")
+        self.assertNotContains(response, "Failure reasons")
+
     def test_locksmith_report_renders(self):
         response = self.client.get(
             reverse("job_completion:locksmith_report", args=[self.locksmith.pk])
@@ -714,6 +720,16 @@ class ViewsSmokeTests(TestCase):
     def test_job_failures_renders(self):
         response = self.client.get(reverse("job_completion:job_failures"))
         self.assertEqual(response.status_code, 200)
+
+    def test_job_failures_shows_failure_breakdowns(self):
+        CompletedJob.objects.create(
+            order_no="a", report_id="1", job_date=date(2026, 9, 1),
+            status=CompletedJob.Status.FAILED, locksmith=self.locksmith,
+        )
+        response = self.client.get(reverse("job_completion:job_failures"))
+        self.assertContains(response, "Training focus")
+        self.assertContains(response, "Failure reasons")
+        self.assertContains(response, "Uncategorized")
 
     def test_job_failures_shows_parts_cost_and_selling_price(self):
         CompletedJob.objects.create(

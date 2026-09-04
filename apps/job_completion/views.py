@@ -37,15 +37,11 @@ from .services.reporting import (
 @login_required
 def dashboard(request):
     summaries = all_locksmith_summaries()
-    categories = failure_category_breakdown()
-    master_reasons = master_reason_breakdown()
     return render(
         request,
         "job_completion/dashboard.html",
         {
             "summaries": summaries,
-            "categories": categories,
-            "master_reasons": master_reasons,
         },
     )
 
@@ -57,12 +53,16 @@ def job_failures(request):
     for job in needs_categorization:
         job.parts_cost = parts_costs.get(job.order_no)
     failure_category_choices = FailureCategory.objects.filter(active=True)
+    categories = failure_category_breakdown()
+    master_reasons = master_reason_breakdown()
     return render(
         request,
         "job_completion/job_failures.html",
         {
             "needs_categorization": needs_categorization,
             "failure_category_choices": failure_category_choices,
+            "categories": categories,
+            "master_reasons": master_reasons,
         },
     )
 
