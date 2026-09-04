@@ -704,7 +704,7 @@ class JobVisitWorkflowTests(TestCase):
             stage=JobVisit.Stage.ON_ROUTE, on_route_at=timezone.now(),
         )
         url = reverse("locksmith_portal:job_arrived", args=[self.order_no])
-        response = self.client.post(url, {"photos": [_fake_photo()]})
+        response = self.client.post(url, {"photo_before": [_fake_photo()]})
 
         visit = self._visit()
         self.assertEqual(visit.stage, JobVisit.Stage.ARRIVED)
@@ -732,7 +732,7 @@ class JobVisitWorkflowTests(TestCase):
         )
         url = reverse("locksmith_portal:job_arrived", args=[self.order_no])
         bad_file = SimpleUploadedFile("notes.txt", b"hello", content_type="text/plain")
-        response = self.client.post(url, {"photos": [bad_file]})
+        response = self.client.post(url, {"photo_before": [bad_file]})
 
         self.assertEqual(self._visit().stage, JobVisit.Stage.ON_ROUTE)
         self.assertContains(response, "isn&#x27;t an image")
@@ -1000,14 +1000,54 @@ class JobVisitWorkflowTests(TestCase):
 
     # --- per-service completion flow: AKL / Spare Key --------------------
 
+    def test_akl_arrival_get_shows_named_photo_slots(self):
+        self._set_loss_type("LOST")
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            stage=JobVisit.Stage.ON_ROUTE, on_route_at=timezone.now(),
+        )
+        url = reverse("locksmith_portal:job_arrived", args=[self.order_no])
+        response = self.client.get(url)
+        self.assertContains(response, "Front of the car")
+        self.assertContains(response, "Door with the lock")
+
+    def test_akl_arrival_missing_required_slot_is_rejected(self):
+        self._set_loss_type("LOST")
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            stage=JobVisit.Stage.ON_ROUTE, on_route_at=timezone.now(),
+        )
+        url = reverse("locksmith_portal:job_arrived", args=[self.order_no])
+        response = self.client.post(url, {"photo_front_of_car": [_fake_photo()]})
+        self.assertContains(response, "Add at least one photo: Door with the lock")
+        self.assertEqual(self._visit().stage, JobVisit.Stage.ON_ROUTE)
+
+    def test_akl_arrival_success_advances_stage(self):
+        self._set_loss_type("LOST")
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            stage=JobVisit.Stage.ON_ROUTE, on_route_at=timezone.now(),
+        )
+        url = reverse("locksmith_portal:job_arrived", args=[self.order_no])
+        response = self.client.post(url, {
+            "photo_front_of_car": [_fake_photo(name="a.jpg")],
+            "photo_door_lock": [_fake_photo(name="b.jpg")],
+        })
+        self.assertRedirects(
+            response,
+            f"{reverse('locksmith_portal:job_overview', args=[self.order_no])}?date={self.today.isoformat()}",
+        )
+        self.assertEqual(self._visit().stage, JobVisit.Stage.ARRIVED)
+        self.assertEqual(self._visit().photos.filter(kind=JobVisitPhoto.Kind.DAMAGE).count(), 0)
+
     def test_akl_get_shows_named_photo_slots(self):
         self._set_loss_type("LOST")
         self._parts_done_visit()
         url = reverse("locksmith_portal:job_complete", args=[self.order_no])
         response = self.client.get(url)
         self.assertEqual(response.context["loss_label"], "AKL")
-        self.assertContains(response, "Front of the car")
         self.assertContains(response, "Ignition on")
+        self.assertContains(response, "Keys supplied")
         self.assertNotContains(response, "Client&#x27;s key")
 
     def test_akl_missing_required_slot_is_rejected(self):
@@ -1015,7 +1055,6 @@ class JobVisitWorkflowTests(TestCase):
         self._parts_done_visit()
         url = reverse("locksmith_portal:job_complete", args=[self.order_no])
         response = self.client.post(url, {
-            "photo_front_of_car": [_fake_photo()], "photo_door_lock": [_fake_photo()],
             "photo_keys_supplied": [_fake_photo()],
             # missing photo_ignition_on
             "outcome": "completed",
@@ -1028,8 +1067,6 @@ class JobVisitWorkflowTests(TestCase):
         self._parts_done_visit()
         url = reverse("locksmith_portal:job_complete", args=[self.order_no])
         response = self.client.post(url, {
-            "photo_front_of_car": [_fake_photo(name="a.jpg")],
-            "photo_door_lock": [_fake_photo(name="b.jpg")],
             "photo_keys_supplied": [_fake_photo(name="c.jpg")],
             "photo_ignition_on": [_fake_photo(name="d.jpg")],
             "outcome": "completed",

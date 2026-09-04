@@ -134,7 +134,7 @@ class JobVisitPhoto(models.Model):
         BEFORE = "before", "Before"
         AFTER = "after", "After"
         DOOR_FRAME = "door_frame", "Door frame"
-        FRONT_OF_CAR = "front_of_car", "Front of the car"
+        FRONT_OF_CAR = "front_of_car", "Front of the car (with the reg plate visible)"
         DOOR_LOCK = "door_lock", "Door with the lock"
         DAMAGE = "damage", "Damage"
         KEYS_SUPPLIED = "keys_supplied", "Keys supplied"

@@ -57,17 +57,33 @@ DISCLAIMER_TEXT = (
     "might cause small bodywork damage that WGTK can't be held liable for."
 )
 
-# Named photo slots for the completion step, by service (Handl loss_type
-# display label — see services/labels.py) — the specific evidence photos
-# the business wants captured per job type, rather than one generic
-# "after" bucket. (label, required) pairs.
-_AFTER_PHOTO_SLOTS_BY_SERVICE = {
+# Named photo slots for the arrival step, by service (Handl loss_type
+# display label — see services/labels.py) — a service not listed here
+# just gets the generic single "before" photo (the pre-existing
+# behaviour). (kind, required) pairs.
+_ARRIVAL_PHOTO_SLOTS_BY_SERVICE = {
     "AKL": [
         (JobVisitPhoto.Kind.FRONT_OF_CAR, True),
         (JobVisitPhoto.Kind.DOOR_LOCK, True),
         (JobVisitPhoto.Kind.DAMAGE, False),
-        (JobVisitPhoto.Kind.KEYS_SUPPLIED, True),
+    ],
+}
+
+# Named photo slots for the completion step, by service (Handl loss_type
+# display label — see services/labels.py) — the specific evidence photos
+# the business wants captured per job type, rather than one generic
+# "after" bucket. (label, required) pairs.
+#
+# AKL covers both "Lost - with no spare" and "Lost - with spare" (Handl
+# doesn't have a separate loss_type for these — it's the same "LOST"
+# claim with a true/false spare-key flag) — both need the exact same
+# photos, so one shared list covers it until office asks for them to
+# diverge.
+_AFTER_PHOTO_SLOTS_BY_SERVICE = {
+    "AKL": [
         (JobVisitPhoto.Kind.IGNITION_ON, True),
+        (JobVisitPhoto.Kind.KEYS_SUPPLIED, True),
+        (JobVisitPhoto.Kind.DAMAGE, False),
     ],
     "Spare Key": [
         (JobVisitPhoto.Kind.FRONT_OF_CAR, True),
@@ -83,14 +99,21 @@ _AFTER_PHOTO_SLOTS_BY_SERVICE = {
 def _loss_label_for(report_id):
     """Handl's loss_type display label (e.g. "Gain access", "AKL",
     "Spare Key") for this job, or "" if it can't be looked up — decides
-    which completion questions/photo slots job_complete (and, for Gain
-    access, job_access_method) shows."""
+    which arrival/completion questions/photo slots job_arrived,
+    job_complete (and, for Gain access, job_access_method) show."""
     try:
         details = get_handl_client().get_job_details([report_id]).get(report_id)
     except Exception:
         logger.exception("Failed to fetch Handl job details for report %s", report_id)
         return ""
     return display_loss_type(details.loss_type) if details else ""
+
+
+def _arrival_photo_slots(loss_label):
+    """(kind, required) pairs for the arrival step's photo prompts. A
+    service not specifically modelled here just gets one generic
+    "before" photo, the original behaviour."""
+    return _ARRIVAL_PHOTO_SLOTS_BY_SERVICE.get(loss_label, [(JobVisitPhoto.Kind.BEFORE, True)])
 
 
 def _after_photo_slots(loss_label):
@@ -482,26 +505,48 @@ def job_arrived(request, order_no):
         messages.error(request, "Mark yourself on route first.")
         return redirect(overview_url)
 
+    slot_prompts = _arrival_photo_slots(_loss_label_for(report_id))
+
     if request.method == "POST":
-        photos = request.FILES.getlist("photos")
-        if not photos:
-            messages.error(request, "Add at least one before-job photo to continue.")
+        errors = []
+        slot_files = {}
+        for kind, required in slot_prompts:
+            files = request.FILES.getlist(f"photo_{kind}")
+            if required and not files:
+                errors.append(f"Add at least one photo: {JobVisitPhoto.Kind(kind).label}.")
+            slot_files[kind] = files
+
+        if errors:
+            for error in errors:
+                messages.error(request, error)
         else:
-            urls = _save_visit_photos(
-                request, visit, report_id, "before", JobVisitPhoto.Kind.BEFORE, photos
-            )
-            if urls:
+            note_parts = [f"'{locksmith.van_soter_display_name}' has arrived on site."]
+            any_uploaded = False
+            for kind, files in slot_files.items():
+                if not files:
+                    continue
+                urls = _save_visit_photos(request, visit, report_id, kind, kind, files)
+                if urls:
+                    any_uploaded = True
+                    note_parts.append(f"{JobVisitPhoto.Kind(kind).label}: {_photo_links_html(urls)}")
+
+            if not any_uploaded:
+                # Every attached file failed image/size validation (see
+                # _save_visit_photos) — nothing to advance the stage for.
+                messages.error(request, "Add at least one before-job photo to continue.")
+            else:
                 visit.stage = JobVisit.Stage.ARRIVED
                 visit.arrived_at = timezone.now()
                 visit.save(update_fields=["stage", "arrived_at"])
-                _write_handl_note(
-                    locksmith, report_id,
-                    f"'{locksmith.van_soter_display_name}' has arrived on site. "
-                    f"Before-job photos: {_photo_links_html(urls)}",
-                )
+                _write_handl_note(locksmith, report_id, " ".join(note_parts))
                 _update_optimo_status(order_no, "servicing", start_time=visit.arrived_at)
                 messages.success(request, "Arrival photos saved.")
                 return redirect(overview_url)
+
+    photo_slots = [
+        {"kind": kind, "label": JobVisitPhoto.Kind(kind).label, "required": required}
+        for kind, required in slot_prompts
+    ]
 
     return render(
         request,
@@ -514,6 +559,7 @@ def job_arrived(request, order_no):
             "action_url": f"{reverse('locksmith_portal:job_arrived', args=[order_no])}?date={selected_date.isoformat()}",
             "dashboard_url": ctx["dashboard_url"],
             "back_url": overview_url,
+            "photo_slots": photo_slots,
             "is_preview": _is_preview(request),
         },
     )

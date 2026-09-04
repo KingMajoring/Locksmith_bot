@@ -7,7 +7,12 @@
 
 <form method="post" action="{{ action_url }}" enctype="multipart/form-data" class="card">
   {% csrf_token %}
-  <input type="file" name="photos" accept="image/*" capture="environment" multiple required>
+  {% for slot in photo_slots %}
+  <div class="field-group">
+    <label>{{ slot.label }}{% if not slot.required %} <span class="sub">(if applicable)</span>{% endif %}</label>
+    <input type="file" name="photo_{{ slot.kind }}" accept="image/*" capture="environment" multiple {% if slot.required %}required{% endif %}>
+  </div>
+  {% endfor %}
   <p style="margin-top:1rem;"><button class="btn" type="submit">Save photos &amp; continue</button></p>
 </form>
 {% endblock %}
