@@ -715,6 +715,32 @@ class ViewsSmokeTests(TestCase):
         response = self.client.get(reverse("job_completion:job_failures"))
         self.assertEqual(response.status_code, 200)
 
+    def test_job_failures_shows_parts_cost_and_selling_price(self):
+        CompletedJob.objects.create(
+            order_no="a", report_id="1", job_date=date(2026, 9, 1),
+            status=CompletedJob.Status.FAILED, locksmith=self.locksmith,
+            net_cost=150.0, disposed_skus="TK-100",
+        )
+        with patch(
+            "apps.job_completion.views.parts_cost_for_jobs",
+            return_value={"a": 25.0},
+        ):
+            response = self.client.get(reverse("job_completion:job_failures"))
+        job = response.context["needs_categorization"][0]
+        self.assertEqual(job.parts_cost, 25.0)
+        self.assertContains(response, "£25.0")
+        self.assertContains(response, "£150.0")
+
+    def test_job_failures_shows_dash_when_parts_cost_unknown(self):
+        CompletedJob.objects.create(
+            order_no="a", report_id="1", job_date=date(2026, 9, 1),
+            status=CompletedJob.Status.FAILED, locksmith=self.locksmith,
+            net_cost=150.0,
+        )
+        response = self.client.get(reverse("job_completion:job_failures"))
+        job = response.context["needs_categorization"][0]
+        self.assertIsNone(job.parts_cost)
+
     def test_sidebar_badge_shows_needs_categorization_count(self):
         CompletedJob.objects.create(
             order_no="a", report_id="1", job_date=date(2026, 9, 1),

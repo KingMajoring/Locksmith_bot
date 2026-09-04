@@ -52,7 +52,10 @@ def dashboard(request):
 
 @login_required
 def job_failures(request):
-    needs_categorization = needs_categorization_queryset()
+    needs_categorization = list(needs_categorization_queryset())
+    parts_costs = parts_cost_for_jobs(needs_categorization)
+    for job in needs_categorization:
+        job.parts_cost = parts_costs.get(job.order_no)
     failure_category_choices = FailureCategory.objects.filter(active=True)
     return render(
         request,

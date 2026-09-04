@@ -9,7 +9,7 @@
   <form method="post" action="{% url 'job_completion:categorize_jobs' %}">
     {% csrf_token %}
     <table>
-      <tr><th>Order</th><th>Date</th><th>Locksmith</th><th>Service</th><th>Note</th><th>Category</th></tr>
+      <tr><th>Order</th><th>Date</th><th>Locksmith</th><th>Service</th><th>Note</th><th>Parts cost</th><th>Selling price</th><th>Category</th></tr>
       {% for job in needs_categorization %}
       <tr>
         <td>{{ job.order_no }}</td>
@@ -17,6 +17,8 @@
         <td>{% if job.locksmith %}{{ job.locksmith.name }}{% else %}Unmatched ({{ job.driver_serial }}){% endif %}</td>
         <td>{{ job.service_type }}</td>
         <td>{{ job.completion_note }}</td>
+        <td>{% if job.parts_cost is not None %}£{{ job.parts_cost }}{% else %}—{% endif %}</td>
+        <td>{% if job.net_cost is not None %}£{{ job.net_cost }}{% else %}—{% endif %}</td>
         <td>
           <select name="category_{{ job.pk }}">
             <option value="">Choose a reason…</option>
