@@ -359,6 +359,98 @@ class JobDetailTests(TestCase):
         self.assertEqual(disposal.part_code, "TK-100")
         self.assertEqual(disposal.report_id, "496390")
         self.assertTrue(disposal.handl_synced)
+        self.assertFalse(disposal.client_supplied)
+
+    @patch("apps.locksmith_portal.views.get_handl_client")
+    @patch("apps.locksmith_portal.views.get_optimo_client")
+    def test_client_supplied_known_sku_skips_stock_decrement(self, mock_get_optimo, mock_get_handl):
+        self._mock_optimo(mock_get_optimo)
+        mock_handl = MagicMock()
+        mock_handl.list_current_stock.return_value = [
+            CurrentStockLine(part_code="TK-100", part_name="Transponder key blank", qty=4),
+        ]
+        mock_get_handl.return_value = mock_handl
+
+        url = reverse("locksmith_portal:job_detail", args=[self.order_no])
+        response = self.client.post(url, {
+            "part_code": ["TK-100 — Transponder key blank"], "quantity": ["1"], "client_supplied": ["1"],
+        })
+
+        self.assertRedirects(response, f"{url}?date={self.today.isoformat()}")
+        mock_handl.record_disposal.assert_not_called()
+
+        disposal = PortalDisposal.objects.get()
+        self.assertEqual(disposal.part_code, "TK-100")
+        self.assertEqual(disposal.quantity, 1)
+        self.assertTrue(disposal.client_supplied)
+        self.assertTrue(disposal.handl_synced)
+
+        note_text = mock_handl.add_report_note.call_args[0][1]
+        self.assertIn("supplied by the client — not from WGTK stock", note_text)
+        self.assertNotIn("may need adding to the system", note_text)
+
+    @patch("apps.locksmith_portal.views.get_handl_client")
+    @patch("apps.locksmith_portal.views.get_optimo_client")
+    def test_client_supplied_unknown_sku_still_accepted_and_flagged(self, mock_get_optimo, mock_get_handl):
+        self._mock_optimo(mock_get_optimo)
+        mock_handl = MagicMock()
+        mock_handl.list_current_stock.return_value = []
+        mock_get_handl.return_value = mock_handl
+
+        url = reverse("locksmith_portal:job_detail", args=[self.order_no])
+        response = self.client.post(url, {
+            "part_code": ["XYZ-999"], "quantity": ["1"], "client_supplied": ["1"],
+        })
+
+        self.assertRedirects(response, f"{url}?date={self.today.isoformat()}")
+        mock_handl.record_disposal.assert_not_called()
+
+        disposal = PortalDisposal.objects.get()
+        self.assertEqual(disposal.part_code, "XYZ-999")
+        self.assertTrue(disposal.client_supplied)
+
+        note_text = mock_handl.add_report_note.call_args[0][1]
+        self.assertIn("may need adding to the system", note_text)
+
+    @patch("apps.locksmith_portal.views.get_handl_client")
+    @patch("apps.locksmith_portal.views.get_optimo_client")
+    def test_client_supplied_can_exceed_van_stock_quantity(self, mock_get_optimo, mock_get_handl):
+        self._mock_optimo(mock_get_optimo)
+        mock_handl = MagicMock()
+        mock_handl.list_current_stock.return_value = [
+            CurrentStockLine(part_code="TK-100", part_name="Transponder key blank", qty=1),
+        ]
+        mock_get_handl.return_value = mock_handl
+
+        url = reverse("locksmith_portal:job_detail", args=[self.order_no])
+        response = self.client.post(url, {
+            "part_code": ["TK-100 — Transponder key blank"], "quantity": ["5"], "client_supplied": ["1"],
+        })
+
+        self.assertRedirects(response, f"{url}?date={self.today.isoformat()}")
+        disposal = PortalDisposal.objects.get()
+        self.assertEqual(disposal.quantity, 5)
+
+    @patch("apps.locksmith_portal.views.get_handl_client")
+    @patch("apps.locksmith_portal.views.get_optimo_client")
+    def test_missing_client_supplied_field_defaults_to_normal_disposal(self, mock_get_optimo, mock_get_handl):
+        # A POST without the client_supplied field at all (e.g. an old
+        # cached form) shouldn't silently drop every row — zip_longest
+        # padding, not zip, is what makes this work.
+        self._mock_optimo(mock_get_optimo)
+        mock_handl = MagicMock()
+        mock_handl.list_current_stock.return_value = [
+            CurrentStockLine(part_code="TK-100", part_name="Transponder key blank", qty=4),
+        ]
+        mock_get_handl.return_value = mock_handl
+
+        url = reverse("locksmith_portal:job_detail", args=[self.order_no])
+        response = self.client.post(
+            url, {"part_code": ["TK-100 — Transponder key blank"], "quantity": ["2"]}
+        )
+        self.assertRedirects(response, f"{url}?date={self.today.isoformat()}")
+        mock_handl.record_disposal.assert_called_once()
+        self.assertEqual(PortalDisposal.objects.count(), 1)
 
     @patch("apps.locksmith_portal.views.get_handl_client")
     @patch("apps.locksmith_portal.views.get_optimo_client")

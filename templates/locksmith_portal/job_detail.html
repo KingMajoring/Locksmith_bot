@@ -35,6 +35,11 @@
     <div class="dispose-row">
       <input type="text" list="parts-catalogue" name="part_code" placeholder="Search SKU or part name" autocomplete="off">
       <input type="number" min="1" inputmode="numeric" name="quantity" placeholder="Qty">
+      <label class="client-supplied-label">
+        <input type="checkbox" class="client-supplied-checkbox">
+        Client supplied
+      </label>
+      <input type="hidden" name="client_supplied" value="0">
     </div>
   </div>
   <p><button type="button" class="btn-secondary" id="add-row">+ Add another part</button></p>
@@ -45,6 +50,11 @@
   <div class="dispose-row">
     <input type="text" list="parts-catalogue" name="part_code" placeholder="Search SKU or part name" autocomplete="off">
     <input type="number" min="1" inputmode="numeric" name="quantity" placeholder="Qty">
+    <label class="client-supplied-label">
+      <input type="checkbox" class="client-supplied-checkbox">
+      Client supplied
+    </label>
+    <input type="hidden" name="client_supplied" value="0">
   </div>
 </template>
 
@@ -63,6 +73,12 @@
   document.getElementById('add-row').addEventListener('click', function () {
     var tpl = document.getElementById('dispose-row-template');
     document.getElementById('dispose-rows').appendChild(tpl.content.cloneNode(true));
+  });
+
+  document.getElementById('dispose-rows').addEventListener('change', function (e) {
+    if (!e.target.classList.contains('client-supplied-checkbox')) return;
+    var hidden = e.target.closest('.dispose-row').querySelector('input[name=client_supplied]');
+    hidden.value = e.target.checked ? '1' : '0';
   });
 
   (function () {
@@ -91,7 +107,10 @@
       form.querySelectorAll('.dispose-row').forEach(function (row) {
         var code = row.querySelector('input[name=part_code]').value.trim();
         var qty = row.querySelector('input[name=quantity]').value.trim();
-        if (code && qty) rows.push(describeRow(code) + ' — qty ' + qty);
+        var clientSupplied = row.querySelector('input[name=client_supplied]').value === '1';
+        if (code && qty) {
+          rows.push(describeRow(code) + ' — qty ' + qty + (clientSupplied ? ' (client supplied)' : ''));
+        }
       });
       if (rows.length === 0) return; // nothing entered — let the server show its own message
 

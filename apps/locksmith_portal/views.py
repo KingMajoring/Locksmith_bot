@@ -25,6 +25,7 @@ happening — not a sandbox.
 """
 from __future__ import annotations
 
+import itertools
 import logging
 from datetime import date, timedelta
 
@@ -1078,28 +1079,47 @@ def job_detail(request, order_no):
             )
 
         # Aggregate by part first, in case the same part was searched
-        # for and added across more than one row.
+        # for and added across more than one row. Client-supplied rows
+        # aren't merged into this — they don't touch van stock, so
+        # there's nothing to aggregate against, and each one might
+        # resolve to a different part_name for the same free-typed code.
         requested: dict[str, int] = {}
-        for raw_code, raw_qty in zip(
-            request.POST.getlist("part_code"), request.POST.getlist("quantity")
+        client_supplied_rows: list[tuple[str, str, int]] = []
+        for raw_code, raw_qty, is_client_supplied in itertools.zip_longest(
+            request.POST.getlist("part_code"), request.POST.getlist("quantity"),
+            request.POST.getlist("client_supplied"), fillvalue="0",
         ):
             raw_code = raw_code.strip()
             raw_qty = raw_qty.strip()
             if not raw_code and not raw_qty:
-                continue
-            line = _resolve(raw_code) if raw_code else None
-            if line is None:
-                if raw_code:
-                    messages.error(request, f"Couldn't find '{raw_code}' in your stock.")
                 continue
             if not raw_qty:
                 continue
             try:
                 qty = int(raw_qty)
             except ValueError:
-                messages.error(request, f"'{raw_qty}' isn't a valid quantity for {line.part_code}.")
+                messages.error(request, f"'{raw_qty}' isn't a valid quantity for {raw_code or 'that row'}.")
                 continue
             if qty <= 0:
+                continue
+
+            line = _resolve(raw_code) if raw_code else None
+
+            if is_client_supplied == "1":
+                if line is not None:
+                    client_supplied_rows.append((line.part_code, line.part_name, qty))
+                elif raw_code:
+                    # Not a part in this locksmith's own stock (the
+                    # whole point of "client supplied") — accept the
+                    # typed text as-is; office gets flagged in the
+                    # Handl note if it doesn't match a real SKU so the
+                    # part can be added to the system properly.
+                    client_supplied_rows.append((raw_code.split(" — ", 1)[0].strip(), raw_code, qty))
+                continue
+
+            if line is None:
+                if raw_code:
+                    messages.error(request, f"Couldn't find '{raw_code}' in your stock.")
                 continue
             requested[line.part_code] = requested.get(line.part_code, 0) + qty
 
@@ -1158,6 +1178,27 @@ def job_detail(request, order_no):
                 disposal.handl_synced = True
                 disposal.save(update_fields=["handl_synced"])
                 disposed_any = True
+
+        for part_code, part_name, qty in client_supplied_rows:
+            PortalDisposal.objects.create(
+                locksmith=locksmith,
+                created_by=request.user,
+                order_no=order_no,
+                report_id=report_id,
+                part_code=part_code,
+                part_name=part_name,
+                quantity=qty,
+                client_supplied=True,
+                handl_synced=True,
+            )
+            note = (
+                f"'{locksmith.van_soter_display_name}' used {qty} x {escape(part_name)} "
+                f"({escape(part_code)}) supplied by the client — not from WGTK stock."
+            )
+            if part_code.upper() not in by_code:
+                note += " Doesn't match a known SKU — may need adding to the system."
+            _write_handl_note(locksmith, report_id, note)
+            disposed_any = True
 
         if disposed_any:
             messages.success(request, "Parts disposed and saved.")

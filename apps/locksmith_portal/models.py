@@ -28,6 +28,14 @@ class PortalDisposal(models.Model):
     handl_synced = models.BooleanField(default=False)
     handl_error = models.TextField(blank=True)
 
+    # The client supplied this part themselves (e.g. already had a
+    # replacement key blank) — no real WGTK stock was used, so van
+    # stock isn't decremented and this never goes through
+    # apps.integrations.handl.record_disposal, but the SKU is still
+    # recorded (as a plain Handl note, via _write_handl_note) so
+    # historical parts-usage reporting still has it.
+    client_supplied = models.BooleanField(default=False)
+
     class Meta:
         ordering = ["-created_at"]
 
