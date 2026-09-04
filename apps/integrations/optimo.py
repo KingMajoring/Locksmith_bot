@@ -280,8 +280,17 @@ class RealOptimoClient(OptimoClient):
             {"updates": [{"orderNo": order_no, "data": entry_data}]},
         )
         orders = data.get("orders") or []
-        if not orders or not orders[0].get("success"):
-            message = (orders[0].get("message") if orders else None) or "Optimo rejected the status update."
+        entry = orders[0] if orders else {}
+        if not entry.get("success"):
+            message = entry.get("message") or data.get("message")
+            code = entry.get("code")
+            if not message:
+                # Optimo gave us nothing usable to explain the rejection —
+                # dump the raw response so it's diagnosable from the logs
+                # rather than a dead-end generic message.
+                message = f"Optimo rejected the status update. Response: {data!r}"
+            elif code:
+                message = f"{message} [{code}]"
             raise ValueError(message)
 
 

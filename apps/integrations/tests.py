@@ -676,7 +676,7 @@ class RealOptimoClientCompletionStatusTests(TestCase):
         mock_post.return_value = response
         client = RealOptimoClient("KEY")
 
-        with self.assertRaises(ValueError):
+        with self.assertRaisesMessage(ValueError, "not found [ERR_ORD_NOT_FOUND]"):
             client.update_completion_status("XXX", "on_route")
 
     @patch("requests.post")
@@ -685,6 +685,21 @@ class RealOptimoClientCompletionStatusTests(TestCase):
         client = RealOptimoClient("KEY")
         with self.assertRaises(ValueError):
             client.update_completion_status("496390", "on_route")
+
+    @patch("requests.post")
+    def test_rejection_with_no_message_dumps_raw_response_for_diagnosis(self, mock_post):
+        # Seen live: Optimo can reject an update with success: false and
+        # no message/code at all — the error must still be diagnosable
+        # from the logs rather than a dead-end generic string.
+        response = MagicMock()
+        response.json.return_value = {"success": False, "orders": [{"success": False}]}
+        mock_post.return_value = response
+        client = RealOptimoClient("KEY")
+
+        with self.assertRaises(ValueError) as ctx:
+            client.update_completion_status("496390", "servicing")
+        self.assertIn("orders", str(ctx.exception))
+        self.assertIn("success", str(ctx.exception))
 
 
 @override_settings(OPTIMO_API_KEY="")
