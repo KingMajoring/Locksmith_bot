@@ -294,9 +294,46 @@ input[type=number] { width: 5rem; }
   flex-shrink: 0;
 }
 
+.job-done { border-color: var(--wgtk-green-light); }
+.job-tick { color: var(--wgtk-green-dark); font-weight: 700; }
+
+.day-nav { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.9rem; }
+.day-nav h2 { margin: 0; font-size: 1rem; text-align: center; }
+.day-nav-link { color: var(--wgtk-orange); text-decoration: none; font-weight: 700; font-size: 0.85rem; white-space: nowrap; flex-shrink: 0; }
+.day-nav-link.disabled { visibility: hidden; }
+
+.disposal-list { list-style: none; padding: 0; margin: 0; }
+.disposal-list li { padding: 0.5rem 0; border-bottom: 1px solid var(--border); font-weight: 600; }
+.disposal-list li:last-child { border-bottom: none; }
+.disposal-list .sub { font-weight: 400; }
+
 .dispose-row { display: flex; gap: 0.5rem; margin-bottom: 0.6rem; }
 .dispose-row input[type=text] { flex: 1; min-width: 0; padding: 0.55rem 0.7rem; font-size: 1rem; }
 .dispose-row input[type=number] { width: 4.5rem; flex-shrink: 0; }
+
+.confirm-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 20, 0.55);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  z-index: 20;
+  padding: 1rem;
+}
+.confirm-overlay[hidden] { display: none; }
+.confirm-box {
+  background: var(--card-bg);
+  border-radius: var(--radius);
+  padding: 1.25rem 1.1rem;
+  width: 100%;
+  max-width: 480px;
+  box-shadow: var(--shadow-md);
+}
+.confirm-box h2 { margin-top: 0; }
+.confirm-box ul { margin: 0.75rem 0; padding-left: 1.1rem; }
+.confirm-box li { margin-bottom: 0.35rem; font-weight: 600; }
+.confirm-box .btn, .confirm-box .btn-secondary { width: 100%; margin-top: 0.5rem; }
 
 /* Portal buttons go full-width — easier to hit on a phone. */
 .portal-main .btn, .portal-main .btn-secondary { width: 100%; padding: 0.85rem; font-size: 1rem; }

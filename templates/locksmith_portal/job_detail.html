@@ -1,9 +1,26 @@
 {% extends "locksmith_portal/base.html" %}
 {% block title %}Job {{ report_id }} — WGTK Locksmith Portal{% endblock %}
 {% block content %}
-<a class="back-link" href="{% url 'locksmith_portal:dashboard' %}">&larr; Back</a>
+<a class="back-link" href="{{ dashboard_url }}">&larr; Back</a>
 <h1>Job {{ report_id }}</h1>
+{% if not is_today %}
+  <p class="sub">Adding disposals for {{ selected_date|date:"D j M Y" }}.</p>
+{% endif %}
 <p>Search for a part by SKU or name to record it as used/disposed of on this job. Add more parts if you used more than one.</p>
+
+{% if previous_disposals %}
+<div class="card">
+  <h2>Already recorded</h2>
+  <ul class="disposal-list">
+    {% for d in previous_disposals %}
+      <li>
+        {{ d.quantity }} x {{ d.part_name }} <span class="sub">({{ d.part_code }})</span>
+        <span class="sub">— {{ d.created_at|date:"D j M, H:i" }}{% if d.handl_error %}, not yet synced to Soter{% endif %}</span>
+      </li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
 
 {% if stock_lines %}
 <datalist id="parts-catalogue">
@@ -12,7 +29,7 @@
   {% endfor %}
 </datalist>
 
-<form method="post" class="card" id="dispose-form">
+<form method="post" class="card" id="dispose-form" action="{% url 'locksmith_portal:job_detail' order_no=order_no %}?date={{ selected_date|date:'Y-m-d' }}">
   {% csrf_token %}
   <div id="dispose-rows">
     <div class="dispose-row">
@@ -21,7 +38,7 @@
     </div>
   </div>
   <p><button type="button" class="btn-secondary" id="add-row">+ Add another part</button></p>
-  <p style="margin-top:1rem;"><button class="btn" type="submit">Save disposals</button></p>
+  <p style="margin-top:1rem;"><button class="btn" type="submit" id="submit-dispose">Save disposals</button></p>
 </form>
 
 <template id="dispose-row-template">
@@ -31,11 +48,72 @@
   </div>
 </template>
 
+<div class="confirm-overlay" id="confirm-overlay" hidden>
+  <div class="confirm-box">
+    <h2>Confirm disposal</h2>
+    <p>You're about to record these parts as used/disposed on this job:</p>
+    <ul id="confirm-list"></ul>
+    <p class="sub">This updates your van stock and Soter — check the list before confirming.</p>
+    <button type="button" class="btn" id="confirm-yes">Confirm &amp; save</button>
+    <button type="button" class="btn-secondary" id="confirm-no">Go back and check</button>
+  </div>
+</div>
+
 <script>
   document.getElementById('add-row').addEventListener('click', function () {
     var tpl = document.getElementById('dispose-row-template');
     document.getElementById('dispose-rows').appendChild(tpl.content.cloneNode(true));
   });
+
+  (function () {
+    var form = document.getElementById('dispose-form');
+    var overlay = document.getElementById('confirm-overlay');
+    var list = document.getElementById('confirm-list');
+    var confirmed = false;
+
+    function describeRow(raw) {
+      // Picking a suggestion gives "SKU — Name" already; typing a bare
+      // SKU without picking one doesn't — look it up in the catalogue
+      // so the confirmation shows the part name, not just a code.
+      if (raw.indexOf(' — ') !== -1) return raw;
+      var match = null;
+      document.querySelectorAll('#parts-catalogue option').forEach(function (opt) {
+        if (match) return;
+        var code = opt.value.split(' — ')[0].trim().toLowerCase();
+        if (code === raw.trim().toLowerCase()) match = opt.value;
+      });
+      return match || raw;
+    }
+
+    form.addEventListener('submit', function (e) {
+      if (confirmed) return;
+      var rows = [];
+      form.querySelectorAll('.dispose-row').forEach(function (row) {
+        var code = row.querySelector('input[name=part_code]').value.trim();
+        var qty = row.querySelector('input[name=quantity]').value.trim();
+        if (code && qty) rows.push(describeRow(code) + ' — qty ' + qty);
+      });
+      if (rows.length === 0) return; // nothing entered — let the server show its own message
+
+      e.preventDefault();
+      list.innerHTML = '';
+      rows.forEach(function (text) {
+        var li = document.createElement('li');
+        li.textContent = text;
+        list.appendChild(li);
+      });
+      overlay.hidden = false;
+    });
+
+    document.getElementById('confirm-yes').addEventListener('click', function () {
+      confirmed = true;
+      overlay.hidden = true;
+      if (form.requestSubmit) { form.requestSubmit(); } else { form.submit(); }
+    });
+    document.getElementById('confirm-no').addEventListener('click', function () {
+      overlay.hidden = true;
+    });
+  })();
 </script>
 {% else %}
   <p class="empty">You don't have any parts in stock to dispose.</p>

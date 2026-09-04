@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 from unittest.mock import MagicMock, patch
 
 from django.contrib.auth import get_user_model
@@ -114,6 +114,66 @@ class DashboardTests(TestCase):
         response = self.client.get(reverse("locksmith_portal:dashboard"))
         self.assertEqual(response.status_code, 302)
 
+    @patch("apps.locksmith_portal.views.get_optimo_client")
+    def test_dashboard_shows_disposed_tick_and_count(self, mock_get_optimo):
+        today = timezone.localdate()
+        order_no = f"1001_{today.isoformat()}"
+        mock_client = MagicMock()
+        mock_client.list_orders_for_date.return_value = [
+            OptimoOrderSummary(
+                order_no=order_no, driver_serial="011", distance_metres=0, travel_time_seconds=0
+            ),
+        ]
+        mock_get_optimo.return_value = mock_client
+
+        PortalDisposal.objects.create(
+            locksmith=self.locksmith, order_no=order_no, report_id="1001",
+            part_code="TK-100", part_name="Transponder key blank", quantity=2,
+        )
+        PortalDisposal.objects.create(
+            locksmith=self.locksmith, order_no=order_no, report_id="1001",
+            part_code="TK-101", part_name="Remote key fob", quantity=1,
+        )
+
+        response = self.client.get(reverse("locksmith_portal:dashboard"))
+        job = response.context["jobs"][0]
+        self.assertEqual(job["disposed_quantity"], 3)
+        self.assertEqual(job["disposed_parts"], 2)
+        self.assertContains(response, "3 parts disposed")
+
+    @patch("apps.locksmith_portal.views.get_optimo_client")
+    def test_dashboard_date_navigation(self, mock_get_optimo):
+        mock_client = MagicMock()
+        mock_client.list_orders_for_date.return_value = []
+        mock_get_optimo.return_value = mock_client
+        today = timezone.localdate()
+
+        response = self.client.get(reverse("locksmith_portal:dashboard"))
+        self.assertEqual(response.context["selected_date"], today)
+        self.assertTrue(response.context["is_today"])
+        self.assertIsNone(response.context["next_date"])
+
+        yesterday = today - timedelta(days=1)
+        response = self.client.get(
+            reverse("locksmith_portal:dashboard"), {"date": yesterday.isoformat()}
+        )
+        self.assertEqual(response.context["selected_date"], yesterday)
+        self.assertFalse(response.context["is_today"])
+        self.assertEqual(response.context["next_date"], today)
+
+    @patch("apps.locksmith_portal.views.get_optimo_client")
+    def test_dashboard_date_param_clamped_to_today(self, mock_get_optimo):
+        mock_client = MagicMock()
+        mock_client.list_orders_for_date.return_value = []
+        mock_get_optimo.return_value = mock_client
+        today = timezone.localdate()
+        future = today + timedelta(days=5)
+
+        response = self.client.get(
+            reverse("locksmith_portal:dashboard"), {"date": future.isoformat()}
+        )
+        self.assertEqual(response.context["selected_date"], today)
+
 
 class StockCheckEntryTests(TestCase):
     def setUp(self):
@@ -173,7 +233,9 @@ class JobDetailTests(TestCase):
         self._mock_optimo(mock_get_optimo)
         url = reverse("locksmith_portal:job_detail", args=[f"999999_{self.today.isoformat()}"])
         response = self.client.get(url)
-        self.assertRedirects(response, reverse("locksmith_portal:dashboard"))
+        self.assertRedirects(
+            response, f"{reverse('locksmith_portal:dashboard')}?date={self.today.isoformat()}"
+        )
 
     @patch("apps.locksmith_portal.views.get_handl_client")
     @patch("apps.locksmith_portal.views.get_optimo_client")
@@ -207,7 +269,7 @@ class JobDetailTests(TestCase):
             url, {"part_code": ["TK-100 — Transponder key blank"], "quantity": ["2"]}
         )
 
-        self.assertRedirects(response, url)
+        self.assertRedirects(response, f"{url}?date={self.today.isoformat()}")
         mock_handl.record_disposal.assert_called_once_with(
             "885",
             "496390",
@@ -335,6 +397,64 @@ class JobDetailTests(TestCase):
         self.client.logout()
         url = reverse("locksmith_portal:job_detail", args=[self.order_no])
         self.assertEqual(self.client.get(url).status_code, 302)
+
+    @patch("apps.locksmith_portal.views.get_handl_client")
+    @patch("apps.locksmith_portal.views.get_optimo_client")
+    def test_get_shows_previously_recorded_disposals(self, mock_get_optimo, mock_get_handl):
+        self._mock_optimo(mock_get_optimo)
+        mock_handl = MagicMock()
+        mock_handl.list_current_stock.return_value = [
+            CurrentStockLine(part_code="TK-100", part_name="Transponder key blank", qty=4),
+        ]
+        mock_get_handl.return_value = mock_handl
+        PortalDisposal.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            part_code="TK-100", part_name="Transponder key blank", quantity=1,
+        )
+
+        url = reverse("locksmith_portal:job_detail", args=[self.order_no])
+        response = self.client.get(url)
+
+        self.assertContains(response, "Already recorded")
+        self.assertContains(response, "Transponder key blank")
+
+    @patch("apps.locksmith_portal.views.get_handl_client")
+    @patch("apps.locksmith_portal.views.get_optimo_client")
+    def test_past_day_job_detail_uses_that_days_schedule(self, mock_get_optimo, mock_get_handl):
+        yesterday = self.today - timedelta(days=1)
+        past_order_no = f"555555_{yesterday.isoformat()}"
+        mock_client = MagicMock()
+        mock_client.list_orders_for_date.return_value = [
+            OptimoOrderSummary(
+                order_no=past_order_no, driver_serial="011", distance_metres=0, travel_time_seconds=0
+            ),
+        ]
+        mock_get_optimo.return_value = mock_client
+        mock_handl = MagicMock()
+        mock_handl.list_current_stock.return_value = []
+        mock_get_handl.return_value = mock_handl
+
+        url = reverse("locksmith_portal:job_detail", args=[past_order_no])
+        response = self.client.get(url, {"date": yesterday.isoformat()})
+
+        self.assertEqual(response.status_code, 200)
+        mock_client.list_orders_for_date.assert_called_once_with(yesterday)
+
+    @patch("apps.locksmith_portal.views.get_handl_client")
+    @patch("apps.locksmith_portal.views.get_optimo_client")
+    def test_job_not_on_that_past_days_schedule_redirects_preserving_date(
+        self, mock_get_optimo, mock_get_handl
+    ):
+        yesterday = self.today - timedelta(days=1)
+        self._mock_optimo(mock_get_optimo)  # only self.order_no is scheduled, any date
+
+        other_order_no = f"999999_{yesterday.isoformat()}"
+        url = reverse("locksmith_portal:job_detail", args=[other_order_no])
+        response = self.client.get(url, {"date": yesterday.isoformat()})
+
+        self.assertRedirects(
+            response, f"{reverse('locksmith_portal:dashboard')}?date={yesterday.isoformat()}"
+        )
 
 
 class StaffPreviewTests(TestCase):

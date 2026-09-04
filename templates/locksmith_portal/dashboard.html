@@ -19,19 +19,32 @@
 </div>
 
 <div class="card">
-  <h2>Today's jobs — {{ today }}</h2>
+  <div class="day-nav">
+    <a class="day-nav-link" href="?date={{ prev_date|date:'Y-m-d' }}">&larr; {{ prev_date|date:"D j M" }}</a>
+    <h2>{% if is_today %}Today's jobs{% else %}Jobs — {{ selected_date|date:"D j M" }}{% endif %}</h2>
+    {% if next_date %}
+      <a class="day-nav-link" href="?date={{ next_date|date:'Y-m-d' }}">{{ next_date|date:"D j M" }} &rarr;</a>
+    {% else %}
+      <span class="day-nav-link disabled">&nbsp;</span>
+    {% endif %}
+  </div>
   {% if locksmith.sees_all_jobs_for_testing %}
-    <p class="sub">Test account — showing every job scheduled today, not just your own.</p>
+    <p class="sub">Test account — showing every job scheduled that day, not just your own.</p>
   {% endif %}
   {% if jobs %}
     {% for job in jobs %}
-      <a class="job" href="{% url 'locksmith_portal:job_detail' order_no=job.order_no %}">
+      <a class="job{% if job.disposed_quantity %} job-done{% endif %}"
+         href="{% url 'locksmith_portal:job_detail' order_no=job.order_no %}?date={{ selected_date|date:'Y-m-d' }}">
         <strong>Job {{ job.report_id }}</strong>
-        <span>Dispose parts used on this job</span>
+        {% if job.disposed_quantity %}
+          <span class="job-tick">&#10003; {{ job.disposed_quantity }} part{{ job.disposed_quantity|pluralize }} disposed</span>
+        {% else %}
+          <span>Dispose parts used on this job</span>
+        {% endif %}
       </a>
     {% endfor %}
   {% else %}
-    <p class="empty">No jobs found for you today.</p>
+    <p class="empty">No jobs found for {% if is_today %}you today{% else %}this day{% endif %}.</p>
   {% endif %}
 </div>
 {% endblock %}
