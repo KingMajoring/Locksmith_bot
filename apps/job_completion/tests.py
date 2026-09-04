@@ -2,7 +2,7 @@ from datetime import date, datetime, timedelta, timezone as dt_timezone
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from apps.integrations.handl import JobDetails
@@ -1401,3 +1401,87 @@ class JobInformationViewsTests(TestCase):
         response = self.client.get(reverse("job_completion:timing_makes"), {"service": "Gain access"})
         self.assertContains(response, "BMW")
         self.assertNotContains(response, "Ford")
+
+
+class RunScheduledJobViewTests(TestCase):
+    """Azure's WebJobs never actually run on this deployment (confirmed
+    live: Kudu's WebJobs discovery scans the persistent site directory,
+    but this app's real code only ever exists in a per-instance temp
+    extraction) — a GitHub Actions scheduled workflow calls this
+    endpoint instead, authenticated by a shared secret rather than
+    Django login, since it can't go through Microsoft SSO."""
+
+    def _url(self, command_name):
+        return reverse("job_completion:run_scheduled_job", args=[command_name])
+
+    @override_settings(SCHEDULED_JOB_TOKEN="secret123")
+    def test_valid_token_runs_the_named_command(self):
+        with patch("apps.job_completion.views.call_command") as mock_call:
+            response = self.client.post(
+                self._url("pull_completed_jobs"), HTTP_X_JOB_TOKEN="secret123"
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["ok"])
+        self.assertEqual(mock_call.call_args[0][0], "pull_completed_jobs")
+
+    @override_settings(SCHEDULED_JOB_TOKEN="secret123")
+    def test_wrong_token_is_forbidden(self):
+        with patch("apps.job_completion.views.call_command") as mock_call:
+            response = self.client.post(
+                self._url("pull_completed_jobs"), HTTP_X_JOB_TOKEN="wrong"
+            )
+        self.assertEqual(response.status_code, 403)
+        mock_call.assert_not_called()
+
+    @override_settings(SCHEDULED_JOB_TOKEN="")
+    def test_unconfigured_token_refuses_every_request(self):
+        with patch("apps.job_completion.views.call_command") as mock_call:
+            response = self.client.post(
+                self._url("pull_completed_jobs"), HTTP_X_JOB_TOKEN="anything"
+            )
+        self.assertEqual(response.status_code, 403)
+        mock_call.assert_not_called()
+
+    @override_settings(SCHEDULED_JOB_TOKEN="secret123")
+    def test_send_weekly_stock_checks_is_also_schedulable(self):
+        with patch("apps.job_completion.views.call_command") as mock_call:
+            response = self.client.post(
+                self._url("send_weekly_stock_checks"), HTTP_X_JOB_TOKEN="secret123"
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(mock_call.call_args[0][0], "send_weekly_stock_checks")
+
+    @override_settings(SCHEDULED_JOB_TOKEN="secret123")
+    def test_command_name_not_on_the_allow_list_is_forbidden(self):
+        with patch("apps.job_completion.views.call_command") as mock_call:
+            response = self.client.post(
+                self._url("migrate"), HTTP_X_JOB_TOKEN="secret123"
+            )
+        self.assertEqual(response.status_code, 403)
+        mock_call.assert_not_called()
+
+    @override_settings(SCHEDULED_JOB_TOKEN="secret123")
+    def test_get_request_not_allowed(self):
+        response = self.client.get(self._url("pull_completed_jobs"), HTTP_X_JOB_TOKEN="secret123")
+        self.assertEqual(response.status_code, 405)
+
+    @override_settings(SCHEDULED_JOB_TOKEN="secret123")
+    def test_command_error_is_reported_not_raised(self):
+        from django.core.management.base import CommandError
+
+        with patch("apps.job_completion.views.call_command", side_effect=CommandError("boom")):
+            response = self.client.post(
+                self._url("refresh_job_financials"), HTTP_X_JOB_TOKEN="secret123"
+            )
+        self.assertEqual(response.status_code, 500)
+        self.assertFalse(response.json()["ok"])
+
+    @override_settings(SCHEDULED_JOB_TOKEN="secret123")
+    def test_works_for_an_anonymous_caller(self):
+        """Unlike every other view in this app, this one must not
+        require a logged-in session — GitHub Actions can't sign in."""
+        with patch("apps.job_completion.views.call_command"):
+            response = self.client.post(
+                self._url("refresh_job_financials"), HTTP_X_JOB_TOKEN="secret123"
+            )
+        self.assertEqual(response.status_code, 200)

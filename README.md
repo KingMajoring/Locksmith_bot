@@ -92,10 +92,18 @@ group `wgtk-ops-tool-rg`):
   offline review or if the app can't reach Soter.)
 - ⏳ **Stock check schedule**: one `StockCheckSchedule` row per locksmith
   in `/admin/`, picking which weekday they're sent their check.
-- ⏳ **Scheduled job**: nothing yet triggers
-  `python manage.py send_weekly_stock_checks` daily — needs an Azure
-  WebJob, Container App Job, or similar cron-like trigger against the
-  App Service.
+- **Scheduled job**: `send_weekly_stock_checks`, along with
+  `pull_completed_jobs` and `refresh_job_financials` (Area 2), run
+  daily via GitHub Actions scheduled workflows
+  (`.github/workflows/scheduled-*.yml`) calling a protected endpoint
+  on the app (`job_completion.views.run_scheduled_job`) rather than
+  Azure WebJobs — confirmed live that WebJobs never actually run on
+  this deployment: Kudu's WebJobs discovery scans the persistent
+  `/home/site/wwwroot`, but this app's real code only ever exists in a
+  per-instance temp extraction of the Oryx build artifact, so a WebJob
+  placed in `App_Data/jobs/` is never picked up. Requires the
+  `SCHEDULED_JOB_TOKEN` app setting/GitHub secret to match (see
+  `config/settings/base.py`).
 
 ## Stock Accuracy — how it works
 

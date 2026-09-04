@@ -203,3 +203,17 @@ STOCK_CHECK_TEST_REDIRECT_EMAIL = env("STOCK_CHECK_TEST_REDIRECT_EMAIL", default
 # --- Optimo API (Area 2+, wired up in a later phase) ------------------------
 OPTIMO_API_BASE_URL = env("OPTIMO_API_BASE_URL", default="")
 OPTIMO_API_KEY = env("OPTIMO_API_KEY", default="")
+
+# --- Scheduled jobs over HTTP (replaces Azure WebJobs) -----------------------
+# Confirmed live: Azure's WebJobs feature (App_Data/jobs/triggered/...)
+# never actually runs here — Kudu's WebJobs discovery scans the
+# persistent /home/site/wwwroot, but this app's real code (App_Data
+# included) only ever exists in a per-instance temp extraction of the
+# Oryx build artifact, so a WebJob placed there is never picked up (no
+# cron, no webjob process, and Kudu itself reports zero registered
+# jobs). See job_completion.views.run_scheduled_job — a GitHub Actions
+# scheduled workflow calls it instead, authenticated by this shared
+# secret rather than Django login (GitHub Actions can't go through
+# SSO). Left unset by default so the endpoint refuses everything until
+# deliberately configured.
+SCHEDULED_JOB_TOKEN = env("SCHEDULED_JOB_TOKEN", default="")

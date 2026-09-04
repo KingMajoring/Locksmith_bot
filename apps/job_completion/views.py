@@ -1,9 +1,17 @@
+import hmac
 from datetime import date
+from io import StringIO
 
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
+from django.core.management import call_command
+from django.core.management.base import CommandError
+from django.http import HttpResponseForbidden, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
+from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_POST
 
 from apps.locksmiths.models import Locksmith
 
@@ -239,3 +247,36 @@ def timing_models(request, make):
 @login_required
 def timing_years(request, make, model_family):
     return _job_info_years(request, "job_completion/timing_years.html", make, model_family)
+
+
+# --- Scheduled jobs over HTTP (replaces Azure WebJobs — see
+# SCHEDULED_JOB_TOKEN in config/settings/base.py for why) -------------------
+
+_SCHEDULABLE_COMMANDS = {
+    "pull_completed_jobs",
+    "refresh_job_financials",
+    "send_weekly_stock_checks",
+}
+
+
+@csrf_exempt
+@require_POST
+def run_scheduled_job(request, command_name):
+    """Runs one of a fixed allow-list of management commands. Deliberately
+    not @login_required — the caller is a GitHub Actions scheduled
+    workflow, which can't go through Microsoft SSO — authenticated
+    instead by a shared secret header, compared in constant time to
+    resist timing attacks."""
+    token = request.headers.get("X-Job-Token", "")
+    expected = settings.SCHEDULED_JOB_TOKEN
+    if not expected or not hmac.compare_digest(token, expected):
+        return HttpResponseForbidden("Forbidden")
+    if command_name not in _SCHEDULABLE_COMMANDS:
+        return HttpResponseForbidden("Unknown command")
+
+    out = StringIO()
+    try:
+        call_command(command_name, stdout=out)
+    except CommandError as exc:
+        return JsonResponse({"ok": False, "error": str(exc)}, status=500)
+    return JsonResponse({"ok": True, "output": out.getvalue()})

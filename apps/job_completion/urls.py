@@ -17,4 +17,9 @@ urlpatterns = [
     path("timing/", views.timing_makes, name="timing_makes"),
     path("timing/<str:make>/", views.timing_models, name="timing_models"),
     path("timing/<str:make>/<str:model_family>/", views.timing_years, name="timing_years"),
+    path(
+        "internal/run-job/<str:command_name>/",
+        views.run_scheduled_job,
+        name="run_scheduled_job",
+    ),
 ]
