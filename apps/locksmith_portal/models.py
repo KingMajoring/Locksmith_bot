@@ -63,6 +63,22 @@ class JobVisit(models.Model):
         COMPLETED = "completed", "Completed"
         FAILED = "failed", "Failed"
 
+    class AccessMethod(models.TextChoices):
+        """Gain access jobs only — how the locksmith actually got in."""
+        PICKED = "picked", "Picked"
+        AIRBAG = "airbag", "Airbag"
+
+    class FailureReason(models.TextChoices):
+        WRONG_PARTS = "wrong_parts", "Wrong parts"
+        PROGRAMMER_ISSUE = "programmer_issue", "Programmer issue"
+
+    class ReattendAction(models.TextChoices):
+        """Programmer-issue failures only — the locksmith's own
+        recommendation for what happens next, for office to action."""
+        SELF = "self", "Reattend myself"
+        DIFFERENT_LOCKSMITH = "different_locksmith", "Reattend with a different locksmith"
+        NONE = "none", "No reattend"
+
     locksmith = models.ForeignKey(
         Locksmith, on_delete=models.CASCADE, related_name="job_visits"
     )
@@ -77,6 +93,20 @@ class JobVisit(models.Model):
 
     notes = models.TextField(blank=True)
     outcome = models.CharField(max_length=20, choices=Outcome.choices, blank=True)
+
+    # Gain access jobs: how they got in, and the disclaimer the customer
+    # signs on the locksmith's phone before an airbag attempt (see
+    # JobVisitPhoto.Kind.DISCLAIMER_SIGNATURE for the actual signature
+    # image — disclaimer_signed_at is just the attestation timestamp).
+    access_method = models.CharField(max_length=20, choices=AccessMethod.choices, blank=True)
+    pick_used = models.CharField(max_length=200, blank=True)
+    disclaimer_signed_at = models.DateTimeField(null=True, blank=True)
+
+    # Failed jobs: why, and (for a programmer issue) what the locksmith
+    # thinks should happen next — office's to action, not automated.
+    failure_reason = models.CharField(max_length=20, choices=FailureReason.choices, blank=True)
+    failure_sku_needed = models.CharField(max_length=200, blank=True)
+    failure_reattend_action = models.CharField(max_length=20, choices=ReattendAction.choices, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -103,9 +133,17 @@ class JobVisitPhoto(models.Model):
     class Kind(models.TextChoices):
         BEFORE = "before", "Before"
         AFTER = "after", "After"
+        DOOR_FRAME = "door_frame", "Door frame"
+        FRONT_OF_CAR = "front_of_car", "Front of the car"
+        DOOR_LOCK = "door_lock", "Door with the lock"
+        DAMAGE = "damage", "Damage"
+        KEYS_SUPPLIED = "keys_supplied", "Keys supplied"
+        CLIENT_KEY = "client_key", "Client's key"
+        IGNITION_ON = "ignition_on", "Ignition on"
+        DISCLAIMER_SIGNATURE = "disclaimer_signature", "Disclaimer signature"
 
     visit = models.ForeignKey(JobVisit, on_delete=models.CASCADE, related_name="photos")
-    kind = models.CharField(max_length=10, choices=Kind.choices)
+    kind = models.CharField(max_length=25, choices=Kind.choices)
     url = models.CharField(max_length=1000)
     uploaded_at = models.DateTimeField(auto_now_add=True)
 

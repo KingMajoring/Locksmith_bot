@@ -7,7 +7,7 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from apps.integrations.handl import CurrentStockLine
+from apps.integrations.handl import CurrentStockLine, JobDetails
 from apps.integrations.optimo import OptimoOrderSummary
 from apps.locksmiths.models import Locksmith
 from apps.stock_accuracy.models import WeeklyStockCheck
@@ -114,6 +114,36 @@ class DashboardTests(TestCase):
         self.client.logout()
         response = self.client.get(reverse("locksmith_portal:dashboard"))
         self.assertEqual(response.status_code, 302)
+
+    @patch("apps.locksmith_portal.views.get_handl_client")
+    @patch("apps.locksmith_portal.views.get_optimo_client")
+    def test_dashboard_shows_make_model_year_service(self, mock_get_optimo, mock_get_handl):
+        today = timezone.localdate()
+        order_no = f"1001_{today.isoformat()}"
+        mock_optimo = MagicMock()
+        mock_optimo.list_orders_for_date.return_value = [
+            OptimoOrderSummary(
+                order_no=order_no, driver_serial="011", distance_metres=0, travel_time_seconds=0
+            ),
+        ]
+        mock_get_optimo.return_value = mock_optimo
+        mock_handl = MagicMock()
+        mock_handl.get_job_details.return_value = {
+            "1001": JobDetails(
+                report_id="1001", make="Ford", model="Focus", year="2020", vin="VIN1",
+                service_type="Car", loss_type="LOST", supplied_service="", net_cost=100.0,
+            )
+        }
+        mock_get_handl.return_value = mock_handl
+
+        response = self.client.get(reverse("locksmith_portal:dashboard"))
+        job = response.context["jobs"][0]
+        self.assertEqual(job["make"], "Ford")
+        self.assertEqual(job["model"], "Focus")
+        self.assertEqual(job["year"], "2020")
+        self.assertEqual(job["service"], "AKL")
+        self.assertContains(response, "Ford Focus 2020")
+        self.assertContains(response, "AKL")
 
     @patch("apps.locksmith_portal.views.get_optimo_client")
     def test_dashboard_shows_disposed_tick_and_count(self, mock_get_optimo):
@@ -559,6 +589,10 @@ class JobVisitWorkflowTests(TestCase):
         self.addCleanup(self.handl_patch.stop)
         self.mock_handl = MagicMock()
         self.mock_handl.list_current_stock.return_value = []
+        # No known loss_type by default (falls back to a single generic
+        # "photo_after" slot) — tests exercising a specific service
+        # (Gain access/AKL/Spare Key) override this per-test.
+        self.mock_handl.get_job_details.return_value = {}
         mock_get_handl.return_value = self.mock_handl
 
         self.storage_patch = patch("apps.locksmith_portal.views.get_photo_storage")
@@ -736,7 +770,8 @@ class JobVisitWorkflowTests(TestCase):
         )
         url = reverse("locksmith_portal:job_complete", args=[self.order_no])
         response = self.client.post(
-            url, {"photos": [_fake_photo(name="after.jpg")], "notes": "Left a spare key.", "outcome": "completed"}
+            url,
+            {"photo_after": [_fake_photo(name="after.jpg")], "notes": "Left a spare key.", "outcome": "completed"},
         )
 
         visit = self._visit()
@@ -763,7 +798,10 @@ class JobVisitWorkflowTests(TestCase):
             stage=JobVisit.Stage.PARTS_DONE, parts_done_at=timezone.now(),
         )
         url = reverse("locksmith_portal:job_complete", args=[self.order_no])
-        self.client.post(url, {"photos": [_fake_photo()], "outcome": "failed"})
+        self.client.post(url, {
+            "photo_after": [_fake_photo()], "outcome": "failed",
+            "failure_reason": "wrong_parts", "failure_sku_needed": "TK-100",
+        })
         self.mock_optimo.update_completion_status.assert_called_once_with(
             self.order_no, "failed", start_time=None, end_time=self._visit().completed_at
         )
@@ -779,7 +817,7 @@ class JobVisitWorkflowTests(TestCase):
         url = reverse("locksmith_portal:job_complete", args=[self.order_no])
         self.client.post(
             url,
-            {"photos": [_fake_photo()], "notes": "<script>alert(1)</script>", "outcome": "completed"},
+            {"photo_after": [_fake_photo()], "notes": "<script>alert(1)</script>", "outcome": "completed"},
         )
         note_text = self.mock_handl.add_report_note.call_args[0][1]
         self.assertNotIn("<script>", note_text)
@@ -791,7 +829,10 @@ class JobVisitWorkflowTests(TestCase):
             stage=JobVisit.Stage.PARTS_DONE, parts_done_at=timezone.now(),
         )
         url = reverse("locksmith_portal:job_complete", args=[self.order_no])
-        self.client.post(url, {"photos": [_fake_photo()], "outcome": "failed"})
+        self.client.post(url, {
+            "photo_after": [_fake_photo()], "outcome": "failed",
+            "failure_reason": "wrong_parts", "failure_sku_needed": "TK-100",
+        })
         self.assertEqual(self._visit().outcome, JobVisit.Outcome.FAILED)
 
     def test_complete_already_done_redirects_with_info(self):
@@ -802,6 +843,240 @@ class JobVisitWorkflowTests(TestCase):
         url = reverse("locksmith_portal:job_complete", args=[self.order_no])
         response = self.client.get(url, follow=True)
         self.assertContains(response, "already marked done")
+
+    # --- per-service completion flow: Gain access ------------------------
+
+    def _set_loss_type(self, raw_loss_type):
+        self.mock_handl.get_job_details.return_value = {
+            "496390": JobDetails(
+                report_id="496390", make="Ford", model="Focus", year="2020", vin="VIN1",
+                service_type="Car", loss_type=raw_loss_type, supplied_service="", net_cost=100.0,
+            )
+        }
+
+    def _parts_done_visit(self):
+        return JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            stage=JobVisit.Stage.PARTS_DONE, parts_done_at=timezone.now(),
+        )
+
+    def test_gain_access_get_shows_picked_and_airbag_choice(self):
+        self._set_loss_type("LOCKED IN PROPERTY")
+        self._parts_done_visit()
+        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        response = self.client.get(url)
+        self.assertTrue(response.context["is_gain_access"])
+        self.assertContains(response, "Picked")
+        self.assertContains(response, "Airbag")
+        self.assertContains(response, "signature-pad")
+
+    def test_gain_access_requires_an_access_method_choice(self):
+        self._set_loss_type("LOCKED IN PROPERTY")
+        self._parts_done_visit()
+        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        response = self.client.post(url, {"photo_after": [_fake_photo()], "outcome": "completed"})
+        self.assertContains(response, "Choose whether you picked the lock or used the airbag")
+        self.assertEqual(self._visit().stage, JobVisit.Stage.PARTS_DONE)
+
+    def test_gain_access_picked_requires_pick_used_text(self):
+        self._set_loss_type("LOCKED IN PROPERTY")
+        self._parts_done_visit()
+        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        response = self.client.post(
+            url, {"access_method": "picked", "photo_after": [_fake_photo()], "outcome": "completed"}
+        )
+        self.assertContains(response, "Enter what pick was used")
+
+    def test_gain_access_picked_success_records_pick_used_and_notes_handl(self):
+        self._set_loss_type("LOCKED IN PROPERTY")
+        self._parts_done_visit()
+        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        response = self.client.post(url, {
+            "access_method": "picked", "pick_used": "Slim jim",
+            "photo_after": [_fake_photo()], "outcome": "completed",
+        })
+        visit = self._visit()
+        self.assertEqual(visit.stage, JobVisit.Stage.DONE)
+        self.assertEqual(visit.access_method, JobVisit.AccessMethod.PICKED)
+        self.assertEqual(visit.pick_used, "Slim jim")
+        self.assertRedirects(
+            response,
+            f"{reverse('locksmith_portal:job_overview', args=[self.order_no])}?date={self.today.isoformat()}",
+        )
+        note_text = self.mock_handl.add_report_note.call_args[0][1]
+        self.assertIn("picking (pick used: Slim jim)", note_text)
+
+    def test_gain_access_airbag_requires_signature(self):
+        self._set_loss_type("LOCKED IN PROPERTY")
+        self._parts_done_visit()
+        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        response = self.client.post(
+            url, {"access_method": "airbag", "photo_door_frame": [_fake_photo()], "outcome": "completed"}
+        )
+        self.assertContains(response, "customer needs to sign the disclaimer")
+
+    def test_gain_access_airbag_requires_door_frame_photo(self):
+        self._set_loss_type("LOCKED IN PROPERTY")
+        self._parts_done_visit()
+        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        response = self.client.post(url, {
+            "access_method": "airbag", "disclaimer_signature": "data:image/png;base64,aGVsbG8=",
+            "outcome": "completed",
+        })
+        self.assertContains(response, "Add at least one photo: Door frame")
+
+    def test_gain_access_airbag_success_stores_signature_and_notes_handl(self):
+        self._set_loss_type("LOCKED IN PROPERTY")
+        self._parts_done_visit()
+        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        response = self.client.post(url, {
+            "access_method": "airbag",
+            "disclaimer_signature": "data:image/png;base64,aGVsbG8=",
+            "photo_door_frame": [_fake_photo()],
+            "outcome": "completed",
+        })
+        visit = self._visit()
+        self.assertEqual(visit.stage, JobVisit.Stage.DONE)
+        self.assertEqual(visit.access_method, JobVisit.AccessMethod.AIRBAG)
+        self.assertIsNotNone(visit.disclaimer_signed_at)
+        self.assertEqual(visit.photos.filter(kind=JobVisitPhoto.Kind.DISCLAIMER_SIGNATURE).count(), 1)
+        self.assertEqual(visit.photos.filter(kind=JobVisitPhoto.Kind.DOOR_FRAME).count(), 1)
+        self.assertRedirects(
+            response,
+            f"{reverse('locksmith_portal:job_overview', args=[self.order_no])}?date={self.today.isoformat()}",
+        )
+        note_text = self.mock_handl.add_report_note.call_args[0][1]
+        self.assertIn("signed the damage disclaimer", note_text)
+        self.assertIn("Door frame:", note_text)
+
+    # --- per-service completion flow: AKL / Spare Key --------------------
+
+    def test_akl_get_shows_named_photo_slots(self):
+        self._set_loss_type("LOST")
+        self._parts_done_visit()
+        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        response = self.client.get(url)
+        self.assertEqual(response.context["loss_label"], "AKL")
+        self.assertContains(response, "Front of the car")
+        self.assertContains(response, "Ignition on")
+        self.assertNotContains(response, "Client&#x27;s key")
+
+    def test_akl_missing_required_slot_is_rejected(self):
+        self._set_loss_type("LOST")
+        self._parts_done_visit()
+        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        response = self.client.post(url, {
+            "photo_front_of_car": [_fake_photo()], "photo_door_lock": [_fake_photo()],
+            "photo_keys_supplied": [_fake_photo()],
+            # missing photo_ignition_on
+            "outcome": "completed",
+        })
+        self.assertContains(response, "Add at least one photo: Ignition on")
+        self.assertEqual(self._visit().stage, JobVisit.Stage.PARTS_DONE)
+
+    def test_akl_damage_slot_is_optional(self):
+        self._set_loss_type("LOST")
+        self._parts_done_visit()
+        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        response = self.client.post(url, {
+            "photo_front_of_car": [_fake_photo(name="a.jpg")],
+            "photo_door_lock": [_fake_photo(name="b.jpg")],
+            "photo_keys_supplied": [_fake_photo(name="c.jpg")],
+            "photo_ignition_on": [_fake_photo(name="d.jpg")],
+            "outcome": "completed",
+        })
+        self.assertRedirects(
+            response,
+            f"{reverse('locksmith_portal:job_overview', args=[self.order_no])}?date={self.today.isoformat()}",
+        )
+        self.assertEqual(self._visit().photos.filter(kind=JobVisitPhoto.Kind.DAMAGE).count(), 0)
+
+    def test_spare_key_requires_client_key_photo(self):
+        self._set_loss_type("Spare Key")
+        self._parts_done_visit()
+        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        response = self.client.post(url, {
+            "photo_front_of_car": [_fake_photo(name="a.jpg")],
+            "photo_door_lock": [_fake_photo(name="b.jpg")],
+            "photo_keys_supplied": [_fake_photo(name="c.jpg")],
+            "photo_ignition_on": [_fake_photo(name="d.jpg")],
+            "outcome": "completed",
+        })
+        self.assertContains(response, "Add at least one photo: Client&#x27;s key")
+
+    def test_spare_key_success_uploads_all_named_slots(self):
+        self._set_loss_type("Spare Key")
+        self._parts_done_visit()
+        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        response = self.client.post(url, {
+            "photo_front_of_car": [_fake_photo(name="a.jpg")],
+            "photo_door_lock": [_fake_photo(name="b.jpg")],
+            "photo_keys_supplied": [_fake_photo(name="c.jpg")],
+            "photo_client_key": [_fake_photo(name="d.jpg")],
+            "photo_ignition_on": [_fake_photo(name="e.jpg")],
+            "outcome": "completed",
+        })
+        self.assertRedirects(
+            response,
+            f"{reverse('locksmith_portal:job_overview', args=[self.order_no])}?date={self.today.isoformat()}",
+        )
+        visit = self._visit()
+        self.assertEqual(visit.photos.count(), 5)
+        self.assertEqual(visit.photos.filter(kind=JobVisitPhoto.Kind.CLIENT_KEY).count(), 1)
+
+    # --- failure reasons --------------------------------------------------
+
+    def test_failed_requires_a_failure_reason(self):
+        self._parts_done_visit()
+        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        response = self.client.post(url, {"photo_after": [_fake_photo()], "outcome": "failed"})
+        self.assertContains(response, "Choose a reason for the failure")
+
+    def test_failed_wrong_parts_requires_sku(self):
+        self._parts_done_visit()
+        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        response = self.client.post(url, {
+            "photo_after": [_fake_photo()], "outcome": "failed", "failure_reason": "wrong_parts",
+        })
+        self.assertContains(response, "Enter the SKU needed")
+
+    def test_failed_wrong_parts_success_records_sku_and_notes_handl(self):
+        self._parts_done_visit()
+        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        response = self.client.post(url, {
+            "photo_after": [_fake_photo()], "outcome": "failed",
+            "failure_reason": "wrong_parts", "failure_sku_needed": "TK-100",
+        })
+        visit = self._visit()
+        self.assertEqual(visit.failure_reason, JobVisit.FailureReason.WRONG_PARTS)
+        self.assertEqual(visit.failure_sku_needed, "TK-100")
+        self.assertRedirects(
+            response,
+            f"{reverse('locksmith_portal:job_overview', args=[self.order_no])}?date={self.today.isoformat()}",
+        )
+        note_text = self.mock_handl.add_report_note.call_args[0][1]
+        self.assertIn("wrong parts (SKU needed: TK-100)", note_text)
+
+    def test_failed_programmer_issue_requires_reattend_choice(self):
+        self._parts_done_visit()
+        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        response = self.client.post(url, {
+            "photo_after": [_fake_photo()], "outcome": "failed", "failure_reason": "programmer_issue",
+        })
+        self.assertContains(response, "Choose a reattend option")
+
+    def test_failed_programmer_issue_success_records_reattend_action(self):
+        self._parts_done_visit()
+        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        response = self.client.post(url, {
+            "photo_after": [_fake_photo()], "outcome": "failed",
+            "failure_reason": "programmer_issue", "failure_reattend_action": "different_locksmith",
+        })
+        visit = self._visit()
+        self.assertEqual(visit.failure_reason, JobVisit.FailureReason.PROGRAMMER_ISSUE)
+        self.assertEqual(visit.failure_reattend_action, JobVisit.ReattendAction.DIFFERENT_LOCKSMITH)
+        note_text = self.mock_handl.add_report_note.call_args[0][1]
+        self.assertIn("programmer issue (Reattend with a different locksmith)", note_text)
 
     # --- parts (job_detail) gated behind arrived ------------------------
 
@@ -823,3 +1098,12 @@ class JobVisitWorkflowTests(TestCase):
         for name in ("job_on_route", "job_parts_continue"):
             url = reverse(f"locksmith_portal:{name}", args=[self.order_no])
             self.assertEqual(self.client.post(url).status_code, 302, name)
+
+
+class DecodeDataUrlTests(TestCase):
+    def test_decodes_content_type_and_bytes(self):
+        from apps.locksmith_portal.views import _decode_data_url
+
+        content_type, content = _decode_data_url("data:image/png;base64,aGVsbG8=")
+        self.assertEqual(content_type, "image/png")
+        self.assertEqual(content, b"hello")

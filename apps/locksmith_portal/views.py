@@ -41,6 +41,7 @@ from django.views.decorators.http import require_POST
 from apps.integrations.handl import get_handl_client
 from apps.integrations.optimo import get_optimo_client
 from apps.integrations.photos import get_photo_storage
+from apps.job_completion.services.labels import display_loss_type
 from apps.job_completion.services.pulling import _report_id_from_order_no
 from apps.locksmiths.models import Locksmith
 from apps.stock_accuracy.models import WeeklyStockCheck
@@ -48,6 +49,73 @@ from apps.stock_accuracy.models import WeeklyStockCheck
 from .models import JobVisit, JobVisitPhoto, PortalDisposal
 
 logger = logging.getLogger(__name__)
+
+DISCLAIMER_TEXT = (
+    "We need to attempt to gain access with a rod and airbag. This is by "
+    "placing an airbag in the door frame to provide enough gap to get a rod "
+    "inside to attempt to pull the door handle. Although damage is rare, it "
+    "might cause small bodywork damage that WGTK can't be held liable for."
+)
+
+# Named photo slots for the completion step, by service (Handl loss_type
+# display label — see services/labels.py) — the specific evidence photos
+# the business wants captured per job type, rather than one generic
+# "after" bucket. (label, required) pairs.
+_AFTER_PHOTO_SLOTS_BY_SERVICE = {
+    "AKL": [
+        (JobVisitPhoto.Kind.FRONT_OF_CAR, True),
+        (JobVisitPhoto.Kind.DOOR_LOCK, True),
+        (JobVisitPhoto.Kind.DAMAGE, False),
+        (JobVisitPhoto.Kind.KEYS_SUPPLIED, True),
+        (JobVisitPhoto.Kind.IGNITION_ON, True),
+    ],
+    "Spare Key": [
+        (JobVisitPhoto.Kind.FRONT_OF_CAR, True),
+        (JobVisitPhoto.Kind.DOOR_LOCK, True),
+        (JobVisitPhoto.Kind.DAMAGE, False),
+        (JobVisitPhoto.Kind.KEYS_SUPPLIED, True),
+        (JobVisitPhoto.Kind.CLIENT_KEY, True),
+        (JobVisitPhoto.Kind.IGNITION_ON, True),
+    ],
+}
+
+
+def _loss_label_for(report_id):
+    """Handl's loss_type display label (e.g. "Gain access", "AKL",
+    "Spare Key") for this job, or "" if it can't be looked up — decides
+    which completion questions/photo slots job_complete shows."""
+    try:
+        details = get_handl_client().get_job_details([report_id]).get(report_id)
+    except Exception:
+        logger.exception("Failed to fetch Handl job details for report %s", report_id)
+        return ""
+    return display_loss_type(details.loss_type) if details else ""
+
+
+def _after_photo_slots(loss_label, access_method):
+    """(kind, required) pairs for the completion step's photo prompts —
+    Gain access depends on how they got in (only known once the
+    locksmith answers that question), everything else is fixed per
+    service. Falls back to one generic "after" slot for anything not
+    specifically modelled here."""
+    if loss_label == "Gain access":
+        if access_method == JobVisit.AccessMethod.AIRBAG:
+            return [(JobVisitPhoto.Kind.DOOR_FRAME, True)]
+        return [(JobVisitPhoto.Kind.AFTER, True)]
+    return _AFTER_PHOTO_SLOTS_BY_SERVICE.get(loss_label, [(JobVisitPhoto.Kind.AFTER, True)])
+
+
+def _decode_data_url(data_url):
+    """Decodes a data: URL (e.g. from a <canvas>.toDataURL()) into
+    (content_type, bytes). Used for the disclaimer signature, captured
+    client-side as a PNG canvas drawing."""
+    import base64
+
+    header, _, encoded = data_url.partition(",")
+    content_type = "image/png"
+    if header.startswith("data:") and ";" in header:
+        content_type = header[len("data:"):header.index(";")] or content_type
+    return content_type, base64.b64decode(encoded)
 
 _PREVIEW_SESSION_KEY = "locksmith_portal_preview_id"
 MAX_PHOTO_BYTES = 15 * 1024 * 1024
@@ -260,6 +328,11 @@ def dashboard(request):
         v.order_no: v
         for v in JobVisit.objects.filter(locksmith=locksmith, order_no__in=order_nos)
     }
+    try:
+        job_details = get_handl_client().get_job_details([job["report_id"] for job in jobs])
+    except Exception:
+        logger.exception("Failed to fetch Handl job details for the dashboard job list")
+        job_details = {}
     for job in jobs:
         summary = totals.get(job["order_no"])
         job["disposed_quantity"] = summary["quantity"] if summary else 0
@@ -267,6 +340,11 @@ def dashboard(request):
         visit = visits.get(job["order_no"])
         job["visit_stage"] = visit.stage if visit else JobVisit.Stage.NOT_STARTED
         job["visit_stage_label"] = visit.get_stage_display() if visit else None
+        details = job_details.get(job["report_id"])
+        job["make"] = details.make if details else ""
+        job["model"] = details.model if details else ""
+        job["year"] = details.year if details else ""
+        job["service"] = display_loss_type(details.loss_type) if details else ""
 
     return render(
         request,
@@ -465,48 +543,131 @@ def job_complete(request, order_no):
         messages.error(request, "Dispose parts (or continue past that step) first.")
         return redirect(overview_url)
 
+    loss_label = _loss_label_for(report_id)
+    is_gain_access = loss_label == "Gain access"
+
     if request.method == "POST":
-        photos = request.FILES.getlist("photos")
         notes_text = request.POST.get("notes", "").strip()
         outcome = request.POST.get("outcome")
+        access_method = request.POST.get("access_method", "") if is_gain_access else ""
+        pick_used = request.POST.get("pick_used", "").strip()
+        signature_data_url = request.POST.get("disclaimer_signature", "").strip()
+        failure_reason = request.POST.get("failure_reason", "")
+        failure_sku_needed = request.POST.get("failure_sku_needed", "").strip()
+        failure_reattend_action = request.POST.get("failure_reattend_action", "")
 
-        errors = False
-        if not photos:
-            messages.error(request, "Add at least one photo of the completed job.")
-            errors = True
+        errors = []
         if outcome not in (JobVisit.Outcome.COMPLETED, JobVisit.Outcome.FAILED):
-            messages.error(request, "Choose Completed or Failed.")
-            errors = True
+            errors.append("Choose Completed or Failed.")
 
-        if not errors:
-            urls = _save_visit_photos(
-                request, visit, report_id, "after", JobVisitPhoto.Kind.AFTER, photos
+        if is_gain_access:
+            if access_method not in (JobVisit.AccessMethod.PICKED, JobVisit.AccessMethod.AIRBAG):
+                errors.append("Choose whether you picked the lock or used the airbag.")
+            elif access_method == JobVisit.AccessMethod.PICKED and not pick_used:
+                errors.append("Enter what pick was used.")
+            elif access_method == JobVisit.AccessMethod.AIRBAG and not signature_data_url:
+                errors.append("The customer needs to sign the disclaimer before continuing.")
+
+        if outcome == JobVisit.Outcome.FAILED:
+            if failure_reason not in (JobVisit.FailureReason.WRONG_PARTS, JobVisit.FailureReason.PROGRAMMER_ISSUE):
+                errors.append("Choose a reason for the failure.")
+            elif failure_reason == JobVisit.FailureReason.WRONG_PARTS and not failure_sku_needed:
+                errors.append("Enter the SKU needed.")
+            elif (
+                failure_reason == JobVisit.FailureReason.PROGRAMMER_ISSUE
+                and failure_reattend_action not in JobVisit.ReattendAction.values
+            ):
+                errors.append("Choose a reattend option.")
+
+        slot_pairs = _after_photo_slots(loss_label, access_method)
+        slot_files = {}
+        for kind, required in slot_pairs:
+            files = request.FILES.getlist(f"photo_{kind}")
+            if required and not files:
+                errors.append(f"Add at least one photo: {JobVisitPhoto.Kind(kind).label}.")
+            slot_files[kind] = files
+
+        if errors:
+            for error in errors:
+                messages.error(request, error)
+        else:
+            note_parts = [
+                f"'{locksmith.van_soter_display_name}' marked this job as "
+                f"{JobVisit.Outcome(outcome).label}."
+            ]
+
+            for kind, files in slot_files.items():
+                if not files:
+                    continue
+                urls = _save_visit_photos(request, visit, report_id, kind, kind, files)
+                if urls:
+                    note_parts.append(f"{JobVisitPhoto.Kind(kind).label}: {_photo_links_html(urls)}")
+
+            if access_method == JobVisit.AccessMethod.PICKED:
+                note_parts.append(f"Gained access by picking (pick used: {escape(pick_used)}).")
+            elif access_method == JobVisit.AccessMethod.AIRBAG:
+                content_type, signature_bytes = _decode_data_url(signature_data_url)
+                signature_url = get_photo_storage().upload(
+                    report_id=report_id, stage="disclaimer", filename="signature.png",
+                    content=signature_bytes, content_type=content_type,
+                )
+                JobVisitPhoto.objects.create(
+                    visit=visit, kind=JobVisitPhoto.Kind.DISCLAIMER_SIGNATURE, url=signature_url
+                )
+                visit.disclaimer_signed_at = timezone.now()
+                note_parts.append(
+                    "Gained access via airbag — customer signed the damage disclaimer: "
+                    f"{_photo_links_html([signature_url])}"
+                )
+
+            if failure_reason == JobVisit.FailureReason.WRONG_PARTS:
+                note_parts.append(f"Failure reason: wrong parts (SKU needed: {escape(failure_sku_needed)}).")
+            elif failure_reason == JobVisit.FailureReason.PROGRAMMER_ISSUE:
+                note_parts.append(
+                    "Failure reason: programmer issue "
+                    f"({JobVisit.ReattendAction(failure_reattend_action).label})."
+                )
+
+            if notes_text:
+                # escape()'d — unlike the photo/signature URLs (our own,
+                # safe to embed as raw <a> tags), this is locksmith-typed
+                # free text going into a field Handl renders as live HTML.
+                note_parts.append(f"Notes: {escape(notes_text)}")
+
+            visit.notes = notes_text
+            visit.outcome = outcome
+            visit.access_method = access_method
+            visit.pick_used = pick_used if access_method == JobVisit.AccessMethod.PICKED else ""
+            visit.failure_reason = failure_reason if outcome == JobVisit.Outcome.FAILED else ""
+            visit.failure_sku_needed = (
+                failure_sku_needed if failure_reason == JobVisit.FailureReason.WRONG_PARTS else ""
             )
-            if urls:
-                visit.notes = notes_text
-                visit.outcome = outcome
-                visit.stage = JobVisit.Stage.DONE
-                visit.completed_at = timezone.now()
-                visit.save(update_fields=["notes", "outcome", "stage", "completed_at"])
+            visit.failure_reattend_action = (
+                failure_reattend_action
+                if failure_reason == JobVisit.FailureReason.PROGRAMMER_ISSUE else ""
+            )
+            visit.stage = JobVisit.Stage.DONE
+            visit.completed_at = timezone.now()
+            visit.save(update_fields=[
+                "notes", "outcome", "access_method", "pick_used", "disclaimer_signed_at",
+                "failure_reason", "failure_sku_needed", "failure_reattend_action",
+                "stage", "completed_at",
+            ])
 
-                note = (
-                    f"'{locksmith.van_soter_display_name}' marked this job as "
-                    f"{visit.get_outcome_display()}. After-job photos: {_photo_links_html(urls)}"
-                )
-                if notes_text:
-                    # escape()'d — unlike the photo URLs (our own, safe to
-                    # embed as raw <a> tags), this is locksmith-typed free
-                    # text going into a field Handl renders as live HTML.
-                    note += f" Notes: {escape(notes_text)}"
-                _write_handl_note(locksmith, report_id, note)
-                _update_optimo_status(
-                    order_no,
-                    "success" if outcome == JobVisit.Outcome.COMPLETED else "failed",
-                    start_time=visit.arrived_at, end_time=visit.completed_at,
-                )
+            _write_handl_note(locksmith, report_id, " ".join(note_parts))
+            _update_optimo_status(
+                order_no,
+                "success" if outcome == JobVisit.Outcome.COMPLETED else "failed",
+                start_time=visit.arrived_at, end_time=visit.completed_at,
+            )
 
-                messages.success(request, "Job marked complete.")
-                return redirect(overview_url)
+            messages.success(request, "Job marked complete.")
+            return redirect(overview_url)
+
+    photo_slots = [] if is_gain_access else [
+        {"kind": kind, "label": JobVisitPhoto.Kind(kind).label, "required": required}
+        for kind, required in _after_photo_slots(loss_label, None)
+    ]
 
     return render(
         request,
@@ -518,6 +679,10 @@ def job_complete(request, order_no):
             "dashboard_url": ctx["dashboard_url"],
             "back_url": overview_url,
             "is_preview": _is_preview(request),
+            "loss_label": loss_label,
+            "is_gain_access": is_gain_access,
+            "disclaimer_text": DISCLAIMER_TEXT,
+            "photo_slots": photo_slots,
         },
     )
 
