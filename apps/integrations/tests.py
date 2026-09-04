@@ -1,4 +1,4 @@
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone as dt_timezone
 from unittest.mock import MagicMock, patch
 
 from django.core.mail import EmailMessage
@@ -623,6 +623,68 @@ class GetHandlClientTests(TestCase):
     @override_settings(HANDL_SQL_SERVER="soterlive1.database.windows.net")
     def test_returns_sql_client_when_configured(self):
         self.assertIsInstance(get_handl_client(), SQLHandlClient)
+
+
+class MockOptimoClientCompletionStatusTests(TestCase):
+    def test_update_completion_status_does_not_raise(self):
+        MockOptimoClient().update_completion_status("496390_2026-09-04", "on_route")
+
+
+class RealOptimoClientCompletionStatusTests(TestCase):
+    def _mock_response(self, orders):
+        response = MagicMock()
+        response.json.return_value = {"success": True, "orders": orders}
+        return response
+
+    @patch("requests.post")
+    def test_posts_status_only_update(self, mock_post):
+        mock_post.return_value = self._mock_response(
+            [{"success": True, "orderNo": "496390_2026-09-04", "data": {"status": "on_route"}}]
+        )
+        client = RealOptimoClient("KEY")
+        client.update_completion_status("496390_2026-09-04", "on_route")
+
+        body = mock_post.call_args.kwargs["json"]
+        self.assertEqual(
+            body["updates"],
+            [{"orderNo": "496390_2026-09-04", "data": {"status": "on_route"}}],
+        )
+        self.assertEqual(mock_post.call_args.kwargs["params"], {"key": "KEY"})
+
+    @patch("requests.post")
+    def test_formats_start_and_end_times_as_bare_utc_iso(self, mock_post):
+        mock_post.return_value = self._mock_response([{"success": True}])
+        client = RealOptimoClient("KEY")
+        start = datetime(2026, 9, 4, 9, 30, 0, tzinfo=dt_timezone.utc)
+        end = datetime(2026, 9, 4, 9, 45, 12, tzinfo=dt_timezone.utc)
+
+        client.update_completion_status("496390", "success", start_time=start, end_time=end)
+
+        data = mock_post.call_args.kwargs["json"]["updates"][0]["data"]
+        self.assertEqual(data["startTime"], {"utcTime": "2026-09-04T09:30:00"})
+        self.assertEqual(data["endTime"], {"utcTime": "2026-09-04T09:45:12"})
+
+    @patch("requests.post")
+    def test_raises_when_optimo_rejects_the_update(self, mock_post):
+        response = MagicMock()
+        response.json.return_value = {
+            "success": False,
+            "orders": [
+                {"success": False, "orderNo": "XXX", "message": "not found", "code": "ERR_ORD_NOT_FOUND"}
+            ],
+        }
+        mock_post.return_value = response
+        client = RealOptimoClient("KEY")
+
+        with self.assertRaises(ValueError):
+            client.update_completion_status("XXX", "on_route")
+
+    @patch("requests.post")
+    def test_raises_when_no_orders_returned(self, mock_post):
+        mock_post.return_value = self._mock_response([])
+        client = RealOptimoClient("KEY")
+        with self.assertRaises(ValueError):
+            client.update_completion_status("496390", "on_route")
 
 
 @override_settings(OPTIMO_API_KEY="")

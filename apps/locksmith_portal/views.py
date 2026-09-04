@@ -191,6 +191,20 @@ def _write_handl_note(locksmith, report_id, text):
         logger.exception("Failed to write Handl note for report %s", report_id)
 
 
+def _update_optimo_status(order_no, status, *, start_time=None, end_time=None):
+    """Best-effort, same rationale as _write_handl_note — pushes this
+    stage into Optimo too (on_route/servicing/success/failed), the same
+    as if the locksmith had used Optimo's own driver app for it,
+    including triggering Optimo's own customer-facing order-tracking
+    notifications where this account has them configured."""
+    try:
+        get_optimo_client().update_completion_status(
+            order_no, status, start_time=start_time, end_time=end_time
+        )
+    except Exception:
+        logger.exception("Failed to push Optimo status %s for order %s", status, order_no)
+
+
 def _photo_links_html(urls):
     """Handl's own Notes field isn't HTML-escaped on display (confirmed
     live: an existing "File Closed" note's <strong> tag renders as real
@@ -362,6 +376,7 @@ def job_on_route(request, order_no):
         _write_handl_note(
             locksmith, report_id, f"'{locksmith.van_soter_display_name}' is on route to this job."
         )
+        _update_optimo_status(order_no, "on_route")
 
     overview_url = f"{reverse('locksmith_portal:job_overview', args=[order_no])}?date={ctx['selected_date'].isoformat()}"
     return redirect(overview_url)
@@ -397,6 +412,7 @@ def job_arrived(request, order_no):
                     f"'{locksmith.van_soter_display_name}' has arrived on site. "
                     f"Before-job photos: {_photo_links_html(urls)}",
                 )
+                _update_optimo_status(order_no, "servicing", start_time=visit.arrived_at)
                 messages.success(request, "Arrival photos saved.")
                 return redirect(overview_url)
 
@@ -483,6 +499,11 @@ def job_complete(request, order_no):
                     # text going into a field Handl renders as live HTML.
                     note += f" Notes: {escape(notes_text)}"
                 _write_handl_note(locksmith, report_id, note)
+                _update_optimo_status(
+                    order_no,
+                    "success" if outcome == JobVisit.Outcome.COMPLETED else "failed",
+                    start_time=visit.arrived_at, end_time=visit.completed_at,
+                )
 
                 messages.success(request, "Job marked complete.")
                 return redirect(overview_url)

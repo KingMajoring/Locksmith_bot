@@ -69,6 +69,20 @@ class OptimoClient(ABC):
         across a date range. driver_external_id is typically the
         driver's email, useful for matching to Locksmith.email."""
 
+    @abstractmethod
+    def update_completion_status(
+        self, order_no: str, status: str, *, start_time: datetime | None = None, end_time: datetime | None = None
+    ) -> None:
+        """Push a status update for one order via update_completion_details
+        — status is one of Optimo's own values ("on_route", "servicing",
+        "success", "failed", ...). Used by the locksmith portal's job-visit
+        tracking (apps.locksmith_portal.views) so a locksmith's progress
+        through a job reflects in Optimo itself, the same as if they'd
+        used Optimo's own driver app for it — including triggering
+        Optimo's own customer-facing order-tracking notifications, if
+        this account has them configured. Raises if Optimo rejected the
+        update (e.g. unknown orderNo)."""
+
 
 class MockOptimoClient(OptimoClient):
     """Deterministic fake data for local dev/tests, standing in until a
@@ -133,6 +147,11 @@ class MockOptimoClient(OptimoClient):
             )
             for serial in self._DRIVER_SERIALS
         ]
+
+    def update_completion_status(
+        self, order_no: str, status: str, *, start_time: datetime | None = None, end_time: datetime | None = None
+    ) -> None:
+        pass
 
 
 class RealOptimoClient(OptimoClient):
@@ -247,11 +266,37 @@ class RealOptimoClient(OptimoClient):
             )
         return list(drivers.values())
 
+    def update_completion_status(
+        self, order_no: str, status: str, *, start_time: datetime | None = None, end_time: datetime | None = None
+    ) -> None:
+        entry_data = {"status": status}
+        if start_time is not None:
+            entry_data["startTime"] = {"utcTime": _format_optimo_time(start_time)}
+        if end_time is not None:
+            entry_data["endTime"] = {"utcTime": _format_optimo_time(end_time)}
+
+        data = self._post(
+            "update_completion_details",
+            {"updates": [{"orderNo": order_no, "data": entry_data}]},
+        )
+        orders = data.get("orders") or []
+        if not orders or not orders[0].get("success"):
+            message = (orders[0].get("message") if orders else None) or "Optimo rejected the status update."
+            raise ValueError(message)
+
 
 def _parse_optimo_time(time_obj: dict | None) -> datetime | None:
     if not time_obj or "utcTime" not in time_obj:
         return None
     return datetime.fromisoformat(time_obj["utcTime"]).replace(tzinfo=dt_timezone.utc)
+
+
+def _format_optimo_time(value: datetime) -> str:
+    """Optimo's utcTime fields are a bare ISO datetime string with no
+    offset, interpreted as UTC by convention (per the API reference)."""
+    if value.tzinfo is not None:
+        value = value.astimezone(dt_timezone.utc).replace(tzinfo=None)
+    return value.isoformat()
 
 
 def get_optimo_client() -> OptimoClient:

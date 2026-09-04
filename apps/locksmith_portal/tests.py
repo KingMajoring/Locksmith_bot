@@ -546,13 +546,13 @@ class JobVisitWorkflowTests(TestCase):
         self.optimo_patch = patch("apps.locksmith_portal.views.get_optimo_client")
         mock_get_optimo = self.optimo_patch.start()
         self.addCleanup(self.optimo_patch.stop)
-        mock_client = MagicMock()
-        mock_client.list_orders_for_date.return_value = [
+        self.mock_optimo = MagicMock()
+        self.mock_optimo.list_orders_for_date.return_value = [
             OptimoOrderSummary(
                 order_no=self.order_no, driver_serial="011", distance_metres=0, travel_time_seconds=0
             ),
         ]
-        mock_get_optimo.return_value = mock_client
+        mock_get_optimo.return_value = self.mock_optimo
 
         self.handl_patch = patch("apps.locksmith_portal.views.get_handl_client")
         mock_get_handl = self.handl_patch.start()
@@ -607,6 +607,9 @@ class JobVisitWorkflowTests(TestCase):
         args, kwargs = self.mock_handl.add_report_note.call_args
         self.assertEqual(args[0], "496390")
         self.assertIn("on route", args[1])
+        self.mock_optimo.update_completion_status.assert_called_once_with(
+            self.order_no, "on_route", start_time=None, end_time=None
+        )
 
     def test_on_route_get_not_allowed(self):
         url = reverse("locksmith_portal:job_on_route", args=[self.order_no])
@@ -664,6 +667,9 @@ class JobVisitWorkflowTests(TestCase):
         # HTML (confirmed live: an existing note's <strong> tag renders as
         # bold, not literal angle brackets), so this is a clickable link.
         self.assertIn(f'<a href="{visit.photos.first().url}" target="_blank">Photo 1</a>', note_text)
+        self.mock_optimo.update_completion_status.assert_called_once_with(
+            self.order_no, "servicing", start_time=visit.arrived_at, end_time=None
+        )
 
     def test_arrived_rejects_non_image_file_and_does_not_advance(self):
         JobVisit.objects.create(
@@ -747,6 +753,20 @@ class JobVisitWorkflowTests(TestCase):
         self.assertIn("Completed", note_text)
         self.assertIn("Left a spare key.", note_text)
         self.assertIn(f'<a href="{visit.photos.first().url}" target="_blank">Photo 1</a>', note_text)
+        self.mock_optimo.update_completion_status.assert_called_once_with(
+            self.order_no, "success", start_time=visit.arrived_at, end_time=visit.completed_at
+        )
+
+    def test_complete_failed_outcome_pushes_failed_status_to_optimo(self):
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            stage=JobVisit.Stage.PARTS_DONE, parts_done_at=timezone.now(),
+        )
+        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        self.client.post(url, {"photos": [_fake_photo()], "outcome": "failed"})
+        self.mock_optimo.update_completion_status.assert_called_once_with(
+            self.order_no, "failed", start_time=None, end_time=self._visit().completed_at
+        )
 
     def test_complete_notes_are_html_escaped_before_writing_to_handl(self):
         # Handl's Notes field renders raw HTML — a locksmith's free-text
