@@ -19,6 +19,30 @@
 </div>
 
 <div class="card">
+  <h2>Your stats — last 7 days</h2>
+  <div class="stat-row">
+    <div class="stat-tile">
+      <div class="stat-label">Jobs</div>
+      <div class="stat-value">{{ stats.jobs_this_week }}</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-label">Completed</div>
+      <div class="stat-value">{{ stats.completed_this_week }}</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-label">Failed</div>
+      <div class="stat-value">{{ stats.failed_this_week }}</div>
+    </div>
+  </div>
+  {% if stats.own_avg_minutes %}
+    <p class="sub">
+      Your average job (last 90 days): {{ stats.own_avg_minutes }} min
+      {% if stats.company_avg_minutes %} — company average: {{ stats.company_avg_minutes }} min{% endif %}
+    </p>
+  {% endif %}
+</div>
+
+<div class="card">
   <div class="day-nav">
     <a class="day-nav-link" href="?date={{ prev_date|date:'Y-m-d' }}">&larr; {{ prev_date|date:"D j M" }}</a>
     <h2>{% if is_today %}Today's jobs{% else %}Jobs — {{ selected_date|date:"D j M" }}{% endif %}</h2>

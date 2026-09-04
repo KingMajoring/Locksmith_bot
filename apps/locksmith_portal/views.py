@@ -41,7 +41,7 @@ from django.views.decorators.http import require_POST
 from apps.integrations.handl import get_handl_client
 from apps.integrations.optimo import get_optimo_client
 from apps.integrations.photos import get_photo_storage
-from apps.job_completion.models import FailureCategory
+from apps.job_completion.models import CompletedJob, FailureCategory
 from apps.job_completion.services.labels import display_loss_type
 from apps.job_completion.services.pulling import _report_id_from_order_no
 from apps.locksmiths.models import Locksmith
@@ -405,6 +405,37 @@ def _save_visit_photos(request, visit, report_id, stage, kind, files):
     return urls
 
 
+def _avg_duration_minutes(queryset):
+    durations = [job.duration_minutes for job in queryset if job.duration_minutes is not None]
+    return round(sum(durations) / len(durations), 1) if durations else None
+
+
+def _locksmith_stats(locksmith):
+    """This locksmith's own recent numbers for the portal dashboard —
+    a self-visible counterpart to the office-only benchmarking already
+    built for Job Completion (see services/benchmarking.py). Own vs
+    company average duration uses the same 90-day/success-only window
+    that service uses, just aggregated across all loss types rather
+    than one at a time."""
+    today = timezone.localdate()
+    week_start = today - timedelta(days=7)
+    window_start = today - timedelta(days=90)
+
+    this_week = CompletedJob.objects.filter(locksmith=locksmith, job_date__gte=week_start)
+    successful_window = CompletedJob.objects.filter(
+        status=CompletedJob.Status.SUCCESS, job_date__gte=window_start,
+        start_time__isnull=False, end_time__isnull=False,
+    )
+
+    return {
+        "jobs_this_week": this_week.count(),
+        "completed_this_week": this_week.filter(status=CompletedJob.Status.SUCCESS).count(),
+        "failed_this_week": this_week.filter(status=CompletedJob.Status.FAILED).count(),
+        "own_avg_minutes": _avg_duration_minutes(successful_window.filter(locksmith=locksmith)),
+        "company_avg_minutes": _avg_duration_minutes(successful_window),
+    }
+
+
 @login_required
 def dashboard(request):
     locksmith = _locksmith_for_request(request)
@@ -454,6 +485,7 @@ def dashboard(request):
             "prev_date": selected_date - timedelta(days=1),
             "next_date": selected_date + timedelta(days=1) if selected_date < today else None,
             "is_preview": _is_preview(request),
+            "stats": _locksmith_stats(locksmith),
         },
     )
 

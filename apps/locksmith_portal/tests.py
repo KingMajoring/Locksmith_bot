@@ -9,7 +9,7 @@ from django.utils import timezone
 
 from apps.integrations.handl import CurrentStockLine, JobDetails
 from apps.integrations.optimo import OptimoOrderSummary
-from apps.job_completion.models import FailureCategory
+from apps.job_completion.models import CompletedJob, FailureCategory
 from apps.locksmiths.models import Locksmith
 from apps.stock_accuracy.models import WeeklyStockCheck
 from apps.stock_accuracy.services.generation import generate_weekly_check
@@ -207,6 +207,38 @@ class DashboardTests(TestCase):
             reverse("locksmith_portal:dashboard"), {"date": future.isoformat()}
         )
         self.assertEqual(response.context["selected_date"], today)
+
+    def test_dashboard_shows_own_stats(self):
+        today = timezone.localdate()
+        other_locksmith, _ = _make_locksmith_user(email="other@wgtk.co.uk", soter_ids=("999",))
+
+        CompletedJob.objects.create(
+            order_no="1_a", report_id="1", job_date=today, locksmith=self.locksmith,
+            status=CompletedJob.Status.SUCCESS,
+            start_time=timezone.now(), end_time=timezone.now() + timedelta(minutes=30),
+        )
+        CompletedJob.objects.create(
+            order_no="2_a", report_id="2", job_date=today, locksmith=self.locksmith,
+            status=CompletedJob.Status.FAILED,
+        )
+        CompletedJob.objects.create(
+            order_no="3_a", report_id="3", job_date=today - timedelta(days=30), locksmith=self.locksmith,
+            status=CompletedJob.Status.SUCCESS,
+        )  # outside the 7-day window — shouldn't count towards this week
+        CompletedJob.objects.create(
+            order_no="4_a", report_id="4", job_date=today, locksmith=other_locksmith,
+            status=CompletedJob.Status.SUCCESS,
+            start_time=timezone.now(), end_time=timezone.now() + timedelta(minutes=90),
+        )
+
+        response = self.client.get(reverse("locksmith_portal:dashboard"))
+        stats = response.context["stats"]
+        self.assertEqual(stats["jobs_this_week"], 2)
+        self.assertEqual(stats["completed_this_week"], 1)
+        self.assertEqual(stats["failed_this_week"], 1)
+        self.assertEqual(stats["own_avg_minutes"], 30.0)
+        self.assertEqual(stats["company_avg_minutes"], 60.0)
+        self.assertContains(response, "Your stats")
 
 
 class StockCheckEntryTests(TestCase):
