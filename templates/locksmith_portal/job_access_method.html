@@ -63,12 +63,15 @@
       var rect = canvas.getBoundingClientRect();
       var scaleX = canvas.width / rect.width;
       var scaleY = canvas.height / rect.height;
-      var src = e.touches ? e.touches[0] : e;
-      return { x: (src.clientX - rect.left) * scaleX, y: (src.clientY - rect.top) * scaleY };
+      return { x: (e.clientX - rect.left) * scaleX, y: (e.clientY - rect.top) * scaleY };
     }
 
     function start(e) {
       e.preventDefault();
+      // setPointerCapture keeps delivering move/up events to the canvas
+      // even if the finger drifts outside its bounds mid-stroke — without
+      // it, a fast signature on a phone loses the rest of the stroke.
+      canvas.setPointerCapture(e.pointerId);
       drawing = true;
       hasSignature = true;
       var p = point(e);
@@ -86,12 +89,13 @@
 
     function end() { drawing = false; }
 
-    canvas.addEventListener('mousedown', start);
-    canvas.addEventListener('mousemove', move);
-    window.addEventListener('mouseup', end);
-    canvas.addEventListener('touchstart', start);
-    canvas.addEventListener('touchmove', move);
-    canvas.addEventListener('touchend', end);
+    // Pointer Events (not separate mouse/touch listeners) — avoids the
+    // touch/synthetic-mouse-event double-handling that's the usual cause
+    // of a signature pad working on desktop but not on a phone.
+    canvas.addEventListener('pointerdown', start);
+    canvas.addEventListener('pointermove', move);
+    canvas.addEventListener('pointerup', end);
+    canvas.addEventListener('pointercancel', end);
 
     document.getElementById('clear-signature').addEventListener('click', function () {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
