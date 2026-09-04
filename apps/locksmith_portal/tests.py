@@ -660,7 +660,10 @@ class JobVisitWorkflowTests(TestCase):
         )
         note_text = self.mock_handl.add_report_note.call_args[0][1]
         self.assertIn("arrived", note_text)
-        self.assertIn(visit.photos.first().url, note_text)
+        # A real <a> tag, not a bare URL — Handl's Notes field renders raw
+        # HTML (confirmed live: an existing note's <strong> tag renders as
+        # bold, not literal angle brackets), so this is a clickable link.
+        self.assertIn(f'<a href="{visit.photos.first().url}" target="_blank">Photo 1</a>', note_text)
 
     def test_arrived_rejects_non_image_file_and_does_not_advance(self):
         JobVisit.objects.create(
@@ -743,6 +746,24 @@ class JobVisitWorkflowTests(TestCase):
         note_text = self.mock_handl.add_report_note.call_args[0][1]
         self.assertIn("Completed", note_text)
         self.assertIn("Left a spare key.", note_text)
+        self.assertIn(f'<a href="{visit.photos.first().url}" target="_blank">Photo 1</a>', note_text)
+
+    def test_complete_notes_are_html_escaped_before_writing_to_handl(self):
+        # Handl's Notes field renders raw HTML — a locksmith's free-text
+        # notes must be escaped so they can't inject markup into it,
+        # unlike the photo URLs (ours, safe to embed as real <a> tags).
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            stage=JobVisit.Stage.PARTS_DONE, parts_done_at=timezone.now(),
+        )
+        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        self.client.post(
+            url,
+            {"photos": [_fake_photo()], "notes": "<script>alert(1)</script>", "outcome": "completed"},
+        )
+        note_text = self.mock_handl.add_report_note.call_args[0][1]
+        self.assertNotIn("<script>", note_text)
+        self.assertIn("&lt;script&gt;", note_text)
 
     def test_complete_failed_outcome_recorded(self):
         JobVisit.objects.create(

@@ -35,6 +35,7 @@ from django.db.models import Count, Sum
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.html import escape
 from django.views.decorators.http import require_POST
 
 from apps.integrations.handl import get_handl_client
@@ -188,6 +189,19 @@ def _write_handl_note(locksmith, report_id, text):
         handl.add_report_note(report_id, text, actioned_by_user_id=actioned_by)
     except Exception:
         logger.exception("Failed to write Handl note for report %s", report_id)
+
+
+def _photo_links_html(urls):
+    """Handl's own Notes field isn't HTML-escaped on display (confirmed
+    live: an existing "File Closed" note's <strong> tag renders as real
+    bold text, not literal angle brackets) — so a real <a> tag here
+    renders as an actual clickable link in Handl's activity feed,
+    rather than a plain-text URL office staff would have to copy out.
+    urls are always our own generated blob URLs (get_photo_storage()),
+    never locksmith-typed text, so this is safe without escaping."""
+    return ", ".join(
+        f'<a href="{url}" target="_blank">Photo {i}</a>' for i, url in enumerate(urls, start=1)
+    )
 
 
 def _save_visit_photos(request, visit, report_id, stage, kind, files):
@@ -381,7 +395,7 @@ def job_arrived(request, order_no):
                 _write_handl_note(
                     locksmith, report_id,
                     f"'{locksmith.van_soter_display_name}' has arrived on site. "
-                    f"Before-job photos: {', '.join(urls)}",
+                    f"Before-job photos: {_photo_links_html(urls)}",
                 )
                 messages.success(request, "Arrival photos saved.")
                 return redirect(overview_url)
@@ -461,10 +475,13 @@ def job_complete(request, order_no):
 
                 note = (
                     f"'{locksmith.van_soter_display_name}' marked this job as "
-                    f"{visit.get_outcome_display()}. After-job photos: {', '.join(urls)}"
+                    f"{visit.get_outcome_display()}. After-job photos: {_photo_links_html(urls)}"
                 )
                 if notes_text:
-                    note += f" Notes: {notes_text}"
+                    # escape()'d — unlike the photo URLs (our own, safe to
+                    # embed as raw <a> tags), this is locksmith-typed free
+                    # text going into a field Handl renders as live HTML.
+                    note += f" Notes: {escape(notes_text)}"
                 _write_handl_note(locksmith, report_id, note)
 
                 messages.success(request, "Job marked complete.")
