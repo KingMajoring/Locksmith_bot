@@ -12,7 +12,7 @@ from apps.locksmiths.models import Locksmith, OptimoDriverId
 from .models import CompletedJob, FailureCategory, SLATarget
 from .services.benchmarking import duration_benchmark
 from .services.costing import parts_cost_for_jobs
-from .services.daily import day_pills, jobs_for_day, next_offset, prev_offset, summarize_day
+from .services.daily import day_pills, jobs_for_day, next_offset, prev_offset, review_flags, summarize_day
 from .services.job_information import (
     available_services,
     makes_summary,
@@ -893,6 +893,28 @@ class ViewsSmokeTests(TestCase):
         self.assertEqual(response.context["summary"]["total_margin"], 70.0)
         self.assertEqual(response.context["summary"]["job_count"], 1)
 
+    def test_jobs_by_day_highlights_jobs_with_review_flags(self):
+        start = datetime(2026, 1, 1, 9, 0, tzinfo=dt_timezone.utc)
+        CompletedJob.objects.create(
+            order_no="a", report_id="1", job_date=date(2026, 1, 1),
+            locksmith=self.locksmith, status=CompletedJob.Status.SUCCESS,
+            net_cost=100.0, disposed_skus="", start_time=start, end_time=start.replace(minute=5),
+        )
+        response = self.client.get(reverse("job_completion:jobs_by_day"), {"date": "2026-01-01"})
+        self.assertContains(response, "row-warn")
+        self.assertContains(response, "No parts disposed")
+        self.assertContains(response, "Completed in 5 min")
+
+    def test_jobs_by_day_no_highlight_when_nothing_to_flag(self):
+        start = datetime(2026, 1, 1, 9, 0, tzinfo=dt_timezone.utc)
+        CompletedJob.objects.create(
+            order_no="a", report_id="1", job_date=date(2026, 1, 1),
+            locksmith=self.locksmith, status=CompletedJob.Status.SUCCESS,
+            net_cost=100.0, disposed_skus="TK-100", start_time=start, end_time=start.replace(minute=30),
+        )
+        response = self.client.get(reverse("job_completion:jobs_by_day"), {"date": "2026-01-01"})
+        self.assertNotContains(response, "row-warn")
+
     def test_login_required_redirects_anonymous(self):
         self.client.logout()
         response = self.client.get(reverse("job_completion:dashboard"))
@@ -1281,6 +1303,55 @@ class DailyJobsTests(TestCase):
         summary = summarize_day([])
         self.assertEqual(summary["job_count"], 0)
         self.assertEqual(summary["total_miles"], 0)
+
+    def _timed_job(self, minutes, loss_type="Lost Keys", disposed_skus="TK-100", status=CompletedJob.Status.SUCCESS):
+        start = datetime(2026, 9, 1, 9, 0, tzinfo=dt_timezone.utc)
+        end = start.replace(minute=minutes % 60, hour=9 + minutes // 60)
+        return CompletedJob.objects.create(
+            order_no="a", report_id="1", job_date=date(2026, 9, 1),
+            locksmith=_make_locksmith(), status=status, loss_type=loss_type,
+            disposed_skus=disposed_skus, start_time=start, end_time=end,
+        )
+
+    def test_review_flags_no_parts_disposed(self):
+        job = self._timed_job(30, disposed_skus="")
+        self.assertEqual(review_flags(job), ["No parts disposed"])
+
+    def test_review_flags_no_parts_disposed_exempt_for_gain_access(self):
+        job = self._timed_job(10, loss_type="LOCKED IN PROPERTY", disposed_skus="")
+        self.assertEqual(review_flags(job), [])
+
+    def test_review_flags_completed_too_quick_other_service(self):
+        job = self._timed_job(14)
+        self.assertEqual(review_flags(job), ["Completed in 14 min"])
+
+    def test_review_flags_not_too_quick_at_threshold_other_service(self):
+        job = self._timed_job(15)
+        self.assertEqual(review_flags(job), [])
+
+    def test_review_flags_completed_too_quick_gain_access(self):
+        job = self._timed_job(2, loss_type="LOCKED IN PROPERTY", disposed_skus="")
+        self.assertEqual(review_flags(job), ["Completed in 2 min"])
+
+    def test_review_flags_not_too_quick_at_threshold_gain_access(self):
+        job = self._timed_job(3, loss_type="LOCKED IN PROPERTY", disposed_skus="")
+        self.assertEqual(review_flags(job), [])
+
+    def test_review_flags_both_reasons_together(self):
+        job = self._timed_job(5, disposed_skus="")
+        self.assertEqual(review_flags(job), ["No parts disposed", "Completed in 5 min"])
+
+    def test_review_flags_never_set_on_failed_jobs(self):
+        job = self._timed_job(1, disposed_skus="", status=CompletedJob.Status.FAILED)
+        self.assertEqual(review_flags(job), [])
+
+    def test_review_flags_no_duration_flag_when_duration_unknown(self):
+        job = CompletedJob.objects.create(
+            order_no="a", report_id="1", job_date=date(2026, 9, 1),
+            locksmith=_make_locksmith(), status=CompletedJob.Status.SUCCESS,
+            disposed_skus="TK-100",
+        )
+        self.assertEqual(review_flags(job), [])
 
 
 class PartsCostForJobsTests(TestCase):

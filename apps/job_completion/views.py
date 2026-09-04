@@ -18,7 +18,7 @@ from apps.locksmiths.models import Locksmith
 from .models import CompletedJob, FailureCategory
 from .services.benchmarking import duration_benchmark
 from .services.costing import parts_cost_for_jobs
-from .services.daily import day_pills, jobs_for_day, next_offset, prev_offset, summarize_day
+from .services.daily import day_pills, jobs_for_day, next_offset, prev_offset, review_flags, summarize_day
 from .services import job_information
 from .services.model_analysis import (
     MASTER_REASON_LABELS,
@@ -169,6 +169,7 @@ def jobs_by_day(request):
             job.margin = round(job.net_cost - job.parts_cost, 2)
         else:
             job.margin = None
+        job.review_flags = review_flags(job)
 
     return render(
         request,

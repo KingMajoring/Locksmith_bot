@@ -39,9 +39,10 @@
       <th>Net cost (client charge)</th>
       <th>Margin</th>
       <th>Failure category</th>
+      <th>Review</th>
     </tr>
     {% for job in jobs %}
-    <tr>
+    <tr class="{% if job.review_flags %}row-warn{% endif %}">
       <td>{% if job.locksmith %}<a href="{% url 'job_completion:locksmith_report' job.locksmith.pk %}">{{ job.locksmith.name }}</a>{% else %}Unmatched ({{ job.driver_serial }}){% endif %}</td>
       <td>{{ job.order_no }}</td>
       <td>{{ job.get_status_display }}</td>
@@ -55,6 +56,9 @@
       <td class="{% if job.margin and job.margin < 0 %}flag{% endif %}">{% if job.margin is not None %}£{{ job.margin }}{% else %}—{% endif %}</td>
       <td class="{% if job.needs_categorization %}flag{% endif %}">
         {{ job.failure_category|default:"" }}
+      </td>
+      <td>
+        {% for reason in job.review_flags %}<span class="warn-tag">{{ reason }}</span>{% endfor %}
       </td>
     </tr>
     {% endfor %}

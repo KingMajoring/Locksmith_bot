@@ -8,9 +8,38 @@ from __future__ import annotations
 from datetime import date, timedelta
 
 from ..models import CompletedJob
+from .labels import is_gain_access_loss_type
 
 RECENT_DAYS = 7
 PAGE_DAYS = 10
+
+# Worth a second look on the By Day table: a completed job with no
+# parts disposed, or one finished suspiciously fast for the work it
+# claims. Gain access (lock-out/break-in) jobs are exempt from both —
+# genuinely opening a lock can use no parts and take well under a
+# minute, unlike most other services. Only meaningful for jobs that
+# actually finished, so failed jobs are never flagged.
+MIN_MINUTES_GAIN_ACCESS = 3
+MIN_MINUTES_OTHER = 15
+
+
+def review_flags(job) -> list[str]:
+    if job.status != CompletedJob.Status.SUCCESS:
+        return []
+
+    gain_access = is_gain_access_loss_type(job.loss_type)
+    flags = []
+
+    if not job.disposed_skus and not gain_access:
+        flags.append("No parts disposed")
+
+    duration = job.duration_minutes
+    if duration is not None:
+        threshold = MIN_MINUTES_GAIN_ACCESS if gain_access else MIN_MINUTES_OTHER
+        if duration < threshold:
+            flags.append(f"Completed in {duration} min")
+
+    return flags
 
 
 def day_pills(offset: int = 0) -> list[date]:

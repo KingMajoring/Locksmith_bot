@@ -14,7 +14,7 @@ from __future__ import annotations
 from django.db.models import Q
 
 from .costing import parts_cost_for_jobs
-from .labels import display_loss_type, raw_values_for_display_label
+from .labels import display_loss_type, is_gain_access_loss_type, raw_values_for_display_label
 from .model_normalization import normalize_model
 from ..models import CompletedJob
 
@@ -54,11 +54,6 @@ def available_services() -> list[str]:
 # bad clock). Gain access jobs are exempt: a lock-out can genuinely be
 # opened in under 5 minutes, so a short duration there is real.
 MIN_TIMED_DURATION_MINUTES = 5
-_GAIN_ACCESS_RAW_VALUES = {v.upper() for v in raw_values_for_display_label("Gain access")}
-
-
-def _is_gain_access(job) -> bool:
-    return (job.loss_type or "").strip().upper() in _GAIN_ACCESS_RAW_VALUES
 
 
 def _timed_durations(jobs: list) -> list[int]:
@@ -67,7 +62,7 @@ def _timed_durations(jobs: list) -> list[int]:
         duration = job.duration_minutes
         if duration is None:
             continue
-        if duration < MIN_TIMED_DURATION_MINUTES and not _is_gain_access(job):
+        if duration < MIN_TIMED_DURATION_MINUTES and not is_gain_access_loss_type(job.loss_type):
             continue
         durations.append(duration)
     return durations

@@ -23,3 +23,14 @@ def raw_values_for_display_label(label: str) -> list[str]:
     with no override, since those pass through unchanged)."""
     matches = [raw for raw, mapped in _LOSS_TYPE_LABELS.items() if mapped == label]
     return matches or [label]
+
+
+_GAIN_ACCESS_RAW_VALUES = {v.upper() for v in raw_values_for_display_label("Gain access")}
+
+
+def is_gain_access_loss_type(raw: str) -> bool:
+    """True if this raw Handl loss_type value is one that displays as
+    "Gain access" — a lock-out/break-in job, where (unlike most other
+    services) finishing with no parts disposed, or in well under a
+    typical duration, can be perfectly genuine."""
+    return (raw or "").strip().upper() in _GAIN_ACCESS_RAW_VALUES
