@@ -1,0 +1,35 @@
+name: Scheduled - Send Weekly Stock Checks
+
+# Replaces the Azure WebJob of the same name — see
+# scheduled-pull-completed-jobs.yml for why Azure's WebJobs never
+# actually ran on this deployment (confirmed live, and this job shares
+# the exact same broken mechanism, so locksmiths' weekly stock check
+# emails were very likely not going out automatically either). Calls
+# the app's own protected endpoint instead (see
+# job_completion.views.run_scheduled_job).
+
+on:
+  schedule:
+    # 07:00 UTC daily, mirroring the old WebJob's timing.
+    - cron: "0 7 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call run-job endpoint
+        env:
+          SCHEDULED_JOB_TOKEN: ${{ secrets.SCHEDULED_JOB_TOKEN }}
+        run: |
+          response=$(curl -sS -w "\n%{http_code}" -X POST \
+            -H "X-Job-Token: $SCHEDULED_JOB_TOKEN" \
+            "https://wgtk-ops-tool.azurewebsites.net/job-completion/internal/run-job/send_weekly_stock_checks/")
+          http_code=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+          echo "HTTP $http_code"
+          echo "$body"
+          if [ "$http_code" != "200" ]; then
+            echo "::error::send_weekly_stock_checks failed with HTTP $http_code"
+            exit 1
+          fi

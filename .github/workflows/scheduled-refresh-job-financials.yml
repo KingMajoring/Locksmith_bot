@@ -1,0 +1,33 @@
+name: Scheduled - Refresh Job Financials
+
+# Replaces the Azure WebJob of the same name — see
+# scheduled-pull-completed-jobs.yml for why Azure's WebJobs never
+# actually ran on this deployment. Calls the app's own protected
+# endpoint instead (see job_completion.views.run_scheduled_job).
+
+on:
+  schedule:
+    # 04:00 UTC daily — an hour after the pull, mirroring the old
+    # WebJob's timing.
+    - cron: "0 4 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call run-job endpoint
+        env:
+          SCHEDULED_JOB_TOKEN: ${{ secrets.SCHEDULED_JOB_TOKEN }}
+        run: |
+          response=$(curl -sS -w "\n%{http_code}" -X POST \
+            -H "X-Job-Token: $SCHEDULED_JOB_TOKEN" \
+            "https://wgtk-ops-tool.azurewebsites.net/job-completion/internal/run-job/refresh_job_financials/")
+          http_code=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+          echo "HTTP $http_code"
+          echo "$body"
+          if [ "$http_code" != "200" ]; then
+            echo "::error::refresh_job_financials failed with HTTP $http_code"
+            exit 1
+          fi

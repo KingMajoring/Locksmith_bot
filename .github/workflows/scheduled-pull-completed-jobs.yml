@@ -1,0 +1,37 @@
+name: Scheduled - Pull Completed Jobs
+
+# Replaces the Azure WebJob of the same name, which never actually ran:
+# Kudu's WebJobs discovery scans the persistent /home/site/wwwroot, but
+# this app's real code (including App_Data/jobs) only exists in a
+# per-instance temp extraction of the Oryx build artifact, so a WebJob
+# placed there is never picked up (confirmed live — no cron, no webjob
+# process, and Kudu itself reports zero registered jobs even with
+# Always On enabled). This calls the app's own protected endpoint
+# instead (see job_completion.views.run_scheduled_job).
+
+on:
+  schedule:
+    # 03:00 UTC daily — after Optimo's jobs for the previous day have
+    # all had a chance to complete, mirroring the old WebJob's timing.
+    - cron: "0 3 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call run-job endpoint
+        env:
+          SCHEDULED_JOB_TOKEN: ${{ secrets.SCHEDULED_JOB_TOKEN }}
+        run: |
+          response=$(curl -sS -w "\n%{http_code}" -X POST \
+            -H "X-Job-Token: $SCHEDULED_JOB_TOKEN" \
+            "https://wgtk-ops-tool.azurewebsites.net/job-completion/internal/run-job/pull_completed_jobs/")
+          http_code=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+          echo "HTTP $http_code"
+          echo "$body"
+          if [ "$http_code" != "200" ]; then
+            echo "::error::pull_completed_jobs failed with HTTP $http_code"
+            exit 1
+          fi
