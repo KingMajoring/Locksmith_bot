@@ -697,6 +697,70 @@ class JobVisitWorkflowTests(TestCase):
         self.assertEqual(self._visit().on_route_at, first_time)
         self.mock_handl.add_report_note.assert_called_once()
 
+    # --- cancel / couldn't attend -----------------------------------------
+
+    def test_cancel_get_shows_reasons(self):
+        url = reverse("locksmith_portal:job_cancel", args=[self.order_no])
+        response = self.client.get(url)
+        self.assertContains(response, "Client cancelled")
+        self.assertContains(response, "Office pulled the job")
+
+    def test_cancel_requires_a_reason(self):
+        url = reverse("locksmith_portal:job_cancel", args=[self.order_no])
+        response = self.client.post(url, {})
+        self.assertContains(response, "Choose a reason")
+
+    def test_cancel_other_requires_notes(self):
+        url = reverse("locksmith_portal:job_cancel", args=[self.order_no])
+        response = self.client.post(url, {"cancel_reason": "other"})
+        self.assertContains(response, "Say what happened")
+
+    def test_cancel_success_marks_cancelled_and_writes_note(self):
+        url = reverse("locksmith_portal:job_cancel", args=[self.order_no])
+        response = self.client.post(url, {
+            "cancel_reason": "wrong_address", "notes": "Address didn't exist",
+        })
+        self.assertRedirects(
+            response,
+            f"{reverse('locksmith_portal:job_overview', args=[self.order_no])}?date={self.today.isoformat()}",
+        )
+        visit = self._visit()
+        self.assertEqual(visit.stage, JobVisit.Stage.DONE)
+        self.assertEqual(visit.outcome, JobVisit.Outcome.CANCELLED)
+        self.assertEqual(visit.cancel_reason, JobVisit.CancelReason.WRONG_ADDRESS)
+        self.assertEqual(visit.notes, "Address didn't exist")
+        note_text = self.mock_handl.add_report_note.call_args[0][1]
+        self.assertIn("cancelled this job — Wrong address/details.", note_text)
+        self.mock_optimo.update_completion_status.assert_called_once_with(
+            self.order_no, "failed", start_time=None, end_time=visit.completed_at
+        )
+
+    def test_cancel_blocked_once_arrived(self):
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            stage=JobVisit.Stage.ARRIVED, arrived_at=timezone.now(),
+        )
+        url = reverse("locksmith_portal:job_cancel", args=[self.order_no])
+        response = self.client.get(url)
+        self.assertRedirects(
+            response,
+            f"{reverse('locksmith_portal:job_overview', args=[self.order_no])}?date={self.today.isoformat()}",
+        )
+
+    def test_overview_shows_cancel_link_before_arriving(self):
+        url = reverse("locksmith_portal:job_overview", args=[self.order_no])
+        response = self.client.get(url)
+        self.assertContains(response, "Couldn't attend / cancel this job")
+
+    def test_overview_hides_cancel_link_once_arrived(self):
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            stage=JobVisit.Stage.ARRIVED, arrived_at=timezone.now(),
+        )
+        url = reverse("locksmith_portal:job_overview", args=[self.order_no])
+        response = self.client.get(url)
+        self.assertNotContains(response, "cancel this job")
+
     # --- arrived (before photos) ----------------------------------------
 
     def test_arrived_requires_on_route_first(self):
@@ -744,6 +808,36 @@ class JobVisitWorkflowTests(TestCase):
         self.mock_optimo.update_completion_status.assert_called_once_with(
             self.order_no, "servicing", start_time=visit.arrived_at, end_time=None
         )
+
+    def test_arrived_captures_gps_and_includes_maps_link_in_note(self):
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            stage=JobVisit.Stage.ON_ROUTE, on_route_at=timezone.now(),
+        )
+        url = reverse("locksmith_portal:job_arrived", args=[self.order_no])
+        self.client.post(url, {
+            "photo_before": [_fake_photo()],
+            "arrival_latitude": "51.5072", "arrival_longitude": "-0.1276",
+        })
+        visit = self._visit()
+        self.assertEqual(visit.arrival_latitude, 51.5072)
+        self.assertEqual(visit.arrival_longitude, -0.1276)
+        note_text = self.mock_handl.add_report_note.call_args[0][1]
+        self.assertIn('<a href="https://www.google.com/maps?q=51.5072,-0.1276" target="_blank">View location</a>', note_text)
+
+    def test_arrived_without_gps_does_not_error_or_add_maps_link(self):
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            stage=JobVisit.Stage.ON_ROUTE, on_route_at=timezone.now(),
+        )
+        url = reverse("locksmith_portal:job_arrived", args=[self.order_no])
+        response = self.client.post(url, {"photo_before": [_fake_photo()]})
+        self.assertEqual(response.status_code, 302)
+        visit = self._visit()
+        self.assertIsNone(visit.arrival_latitude)
+        self.assertIsNone(visit.arrival_longitude)
+        note_text = self.mock_handl.add_report_note.call_args[0][1]
+        self.assertNotIn("View location", note_text)
 
     def test_arrived_rejects_non_image_file_and_does_not_advance(self):
         JobVisit.objects.create(
@@ -849,6 +943,40 @@ class JobVisitWorkflowTests(TestCase):
         )
         self.assertContains(response, "customer needs to sign")
         self.assertEqual(self._visit().stage, JobVisit.Stage.PARTS_DONE)
+
+    def test_complete_customer_not_present_requires_a_reason(self):
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            stage=JobVisit.Stage.PARTS_DONE, parts_done_at=timezone.now(),
+        )
+        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        response = self.client.post(url, {
+            "photo_after": [_fake_photo()], "outcome": "completed", "customer_not_present": "1",
+        })
+        self.assertContains(response, "Say why the customer isn&#x27;t signing")
+        self.assertEqual(self._visit().stage, JobVisit.Stage.PARTS_DONE)
+
+    def test_complete_customer_not_present_skips_signature(self):
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            stage=JobVisit.Stage.PARTS_DONE, parts_done_at=timezone.now(),
+        )
+        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        response = self.client.post(url, {
+            "photo_after": [_fake_photo()], "outcome": "completed",
+            "customer_not_present": "1", "customer_not_present_reason": "Had to leave for work",
+        })
+        self.assertRedirects(
+            response,
+            f"{reverse('locksmith_portal:job_overview', args=[self.order_no])}?date={self.today.isoformat()}",
+        )
+        visit = self._visit()
+        self.assertEqual(visit.stage, JobVisit.Stage.DONE)
+        self.assertIsNone(visit.completion_signed_at)
+        self.assertEqual(visit.customer_not_present_reason, "Had to leave for work")
+        self.assertEqual(visit.photos.filter(kind=JobVisitPhoto.Kind.COMPLETION_SIGNATURE).count(), 0)
+        note_text = self.mock_handl.add_report_note.call_args[0][1]
+        self.assertIn("Customer not present to sign: Had to leave for work", note_text)
 
     def test_complete_failed_outcome_pushes_failed_status_to_optimo(self):
         JobVisit.objects.create(

@@ -194,6 +194,23 @@ def _decode_data_url(data_url):
         content_type = header[len("data:"):header.index(";")] or content_type
     return content_type, base64.b64decode(encoded)
 
+
+def _parse_coords(raw_lat, raw_lng):
+    """Best-effort float parse for the arrival GPS capture — a denied
+    permission or unsupported browser just posts empty strings, which
+    should silently result in (None, None) rather than a 500."""
+    try:
+        return float(raw_lat), float(raw_lng)
+    except (TypeError, ValueError):
+        return None, None
+
+
+def _maps_link(latitude, longitude):
+    if latitude is None or longitude is None:
+        return ""
+    url = f"https://www.google.com/maps?q={latitude},{longitude}"
+    return f'<a href="{url}" target="_blank">View location</a>'
+
 _PREVIEW_SESSION_KEY = "locksmith_portal_preview_id"
 MAX_PHOTO_BYTES = 15 * 1024 * 1024
 
@@ -541,6 +558,72 @@ def job_on_route(request, order_no):
 
 
 @login_required
+def job_cancel(request, order_no):
+    """Never attended this job at all — cancelled by the client, pulled
+    by office, couldn't get there, wrong details, etc. Only available
+    before arriving: once on site, use the normal Failed outcome in
+    job_complete instead, since a FailureCategory is the right record
+    for a job the locksmith did attend."""
+    ctx, early = _job_visit_context(request, order_no)
+    if ctx is None:
+        return early
+    locksmith, report_id, visit = ctx["locksmith"], ctx["report_id"], ctx["visit"]
+    selected_date = ctx["selected_date"]
+    overview_url = f"{reverse('locksmith_portal:job_overview', args=[order_no])}?date={selected_date.isoformat()}"
+
+    if visit.stage not in (JobVisit.Stage.NOT_STARTED, JobVisit.Stage.ON_ROUTE):
+        messages.error(request, "This job's already been arrived — mark it Failed in Finish job instead.")
+        return redirect(overview_url)
+
+    if request.method == "POST":
+        cancel_reason = request.POST.get("cancel_reason", "")
+        notes_text = request.POST.get("notes", "").strip()
+
+        errors = []
+        if cancel_reason not in JobVisit.CancelReason.values:
+            errors.append("Choose a reason.")
+        elif cancel_reason == JobVisit.CancelReason.OTHER and not notes_text:
+            errors.append("Say what happened.")
+
+        if errors:
+            for error in errors:
+                messages.error(request, error)
+        else:
+            visit.outcome = JobVisit.Outcome.CANCELLED
+            visit.cancel_reason = cancel_reason
+            visit.notes = notes_text
+            visit.stage = JobVisit.Stage.DONE
+            visit.completed_at = timezone.now()
+            visit.save(update_fields=["outcome", "cancel_reason", "notes", "stage", "completed_at"])
+
+            note = (
+                f"'{locksmith.van_soter_display_name}' cancelled this job — "
+                f"{JobVisit.CancelReason(cancel_reason).label}."
+            )
+            if notes_text:
+                note += f" {escape(notes_text)}"
+            _write_handl_note(locksmith, report_id, note)
+            _update_optimo_status(order_no, "failed", end_time=visit.completed_at)
+
+            messages.success(request, "Job cancelled.")
+            return redirect(overview_url)
+
+    return render(
+        request,
+        "locksmith_portal/job_cancel.html",
+        {
+            "order_no": order_no,
+            "report_id": report_id,
+            "action_url": f"{reverse('locksmith_portal:job_cancel', args=[order_no])}?date={selected_date.isoformat()}",
+            "dashboard_url": ctx["dashboard_url"],
+            "back_url": overview_url,
+            "is_preview": _is_preview(request),
+            "cancel_reasons": JobVisit.CancelReason.choices,
+        },
+    )
+
+
+@login_required
 def job_arrived(request, order_no):
     ctx, early = _job_visit_context(request, order_no)
     if ctx is None:
@@ -583,9 +666,17 @@ def job_arrived(request, order_no):
                 # _save_visit_photos) — nothing to advance the stage for.
                 messages.error(request, "Add at least one before-job photo to continue.")
             else:
+                latitude, longitude = _parse_coords(
+                    request.POST.get("arrival_latitude", ""), request.POST.get("arrival_longitude", "")
+                )
+                visit.arrival_latitude = latitude
+                visit.arrival_longitude = longitude
                 visit.stage = JobVisit.Stage.ARRIVED
                 visit.arrived_at = timezone.now()
-                visit.save(update_fields=["stage", "arrived_at"])
+                visit.save(update_fields=["arrival_latitude", "arrival_longitude", "stage", "arrived_at"])
+                maps_link = _maps_link(latitude, longitude)
+                if maps_link:
+                    note_parts.append(f"Location: {maps_link}")
                 _write_handl_note(locksmith, report_id, " ".join(note_parts))
                 _update_optimo_status(order_no, "servicing", start_time=visit.arrived_at)
                 messages.success(request, "Arrival photos saved.")
@@ -763,13 +854,19 @@ def job_complete(request, order_no):
             if failure_category_id else None
         )
         completion_signature_data_url = request.POST.get("completion_signature", "").strip()
+        customer_not_present = request.POST.get("customer_not_present") == "1"
+        customer_not_present_reason = request.POST.get("customer_not_present_reason", "").strip()
 
         errors = []
         if outcome not in (JobVisit.Outcome.COMPLETED, JobVisit.Outcome.FAILED):
             errors.append("Choose Completed or Failed.")
 
-        if outcome == JobVisit.Outcome.COMPLETED and not completion_signature_data_url:
-            errors.append("The customer needs to sign to confirm they're happy with the job.")
+        if outcome == JobVisit.Outcome.COMPLETED:
+            if customer_not_present:
+                if not customer_not_present_reason:
+                    errors.append("Say why the customer isn't signing.")
+            elif not completion_signature_data_url:
+                errors.append("The customer needs to sign to confirm they're happy with the job.")
 
         if outcome == JobVisit.Outcome.FAILED:
             if failure_category is None:
@@ -815,7 +912,11 @@ def job_complete(request, order_no):
                     detail = f" ({JobVisit.ReattendAction(failure_reattend_action).label})"
                 note_parts.append(f"Failure reason: {escape(failure_category.name)}{detail}.")
 
-            if outcome == JobVisit.Outcome.COMPLETED:
+            if outcome == JobVisit.Outcome.COMPLETED and customer_not_present:
+                note_parts.append(
+                    f"Customer not present to sign: {escape(customer_not_present_reason)}"
+                )
+            elif outcome == JobVisit.Outcome.COMPLETED:
                 content_type, signature_bytes = _decode_data_url(completion_signature_data_url)
                 signature_url = get_photo_storage().upload(
                     report_id=report_id, stage="completion", filename="signature.png",
@@ -847,12 +948,16 @@ def job_complete(request, order_no):
                 failure_reattend_action
                 if failure_category and failure_category.name in _FAILURE_CATEGORIES_NEEDING_REATTEND else ""
             )
+            visit.customer_not_present_reason = (
+                customer_not_present_reason
+                if outcome == JobVisit.Outcome.COMPLETED and customer_not_present else ""
+            )
             visit.stage = JobVisit.Stage.DONE
             visit.completed_at = timezone.now()
             visit.save(update_fields=[
                 "notes", "outcome",
                 "failure_category", "failure_sku_needed", "failure_reattend_action",
-                "completion_signed_at", "stage", "completed_at",
+                "completion_signed_at", "customer_not_present_reason", "stage", "completed_at",
             ])
 
             _write_handl_note(locksmith, report_id, " ".join(note_parts))

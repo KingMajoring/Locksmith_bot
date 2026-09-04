@@ -361,6 +361,17 @@ input[type=number] { width: 5rem; }
 
 form input[type=file] { display: block; width: 100%; margin-bottom: 0.5rem; }
 textarea { width: 100%; padding: 0.6rem 0.7rem; font-size: 1rem; font-family: var(--font); border: 1px solid var(--border); border-radius: var(--radius-sm); resize: vertical; }
+
+.notes-input-row { position: relative; }
+.notes-input-row textarea { padding-right: 3rem; }
+.mic-button {
+  position: absolute; top: 0.5rem; right: 0.5rem;
+  width: 2.2rem; height: 2.2rem;
+  border: 1.5px solid var(--border); border-radius: 50%;
+  background: #fff; font-size: 1.1rem; line-height: 1;
+  cursor: pointer;
+}
+.mic-button.mic-listening { background: var(--danger-bg); border-color: var(--danger); }
 .outcome-choice { display: flex; gap: 1.2rem; flex-wrap: wrap; }
 .outcome-choice label { display: flex; align-items: center; gap: 0.4rem; font-weight: 600; }
 

@@ -23,10 +23,22 @@
   </div>
 
   <div class="field-group completed-branch" hidden>
+    <label>
+      <input type="checkbox" id="customer_not_present" name="customer_not_present" value="1">
+      Customer not present to sign
+    </label>
+  </div>
+
+  <div class="field-group completed-branch signature-branch" hidden>
     <label>Customer signature — happy with the completed job</label>
     <canvas id="completion-signature-pad" class="signature-pad" width="600" height="200"></canvas>
     <p><button type="button" class="btn-secondary" id="clear-completion-signature">Clear signature</button></p>
     <input type="hidden" name="completion_signature" id="completion_signature">
+  </div>
+
+  <div class="field-group completed-branch not-present-branch" hidden>
+    <label for="customer_not_present_reason">Why isn't the customer signing?</label>
+    <input type="text" id="customer_not_present_reason" name="customer_not_present_reason" placeholder="e.g. had to leave, left key under mat…" required>
   </div>
 
   <div class="field-group failure-branch" hidden>
@@ -58,7 +70,10 @@
 
   <div class="field-group">
     <label for="notes">Notes</label>
-    <textarea id="notes" name="notes" rows="4" placeholder="Anything worth noting about this job…"></textarea>
+    <div class="notes-input-row">
+      <textarea id="notes" name="notes" rows="4" placeholder="Anything worth noting about this job…"></textarea>
+      <button type="button" class="mic-button" id="notes-mic" hidden aria-label="Dictate notes">🎤</button>
+    </div>
   </div>
 
   <p style="margin-top:1rem;"><button class="btn" type="submit">Save &amp; finish job</button></p>
@@ -68,6 +83,16 @@
   (function () {
     function showBranch(el, show) {
       el.hidden = !show;
+    }
+
+    function updateCustomerPresenceBranches() {
+      var notPresent = document.getElementById('customer_not_present').checked;
+      document.querySelectorAll('.signature-branch').forEach(function (branch) {
+        showBranch(branch, !notPresent);
+      });
+      document.querySelectorAll('.not-present-branch').forEach(function (branch) {
+        showBranch(branch, notPresent);
+      });
     }
 
     document.querySelectorAll('.outcome-input').forEach(function (radio) {
@@ -80,6 +105,7 @@
         document.querySelectorAll('.completed-branch').forEach(function (branch) {
           showBranch(branch, completed);
         });
+        if (completed) updateCustomerPresenceBranches();
         if (!failed) {
           document.querySelectorAll('.failure-category-branch').forEach(function (branch) {
             showBranch(branch, false);
@@ -87,6 +113,8 @@
         }
       });
     });
+
+    document.getElementById('customer_not_present').addEventListener('change', updateCustomerPresenceBranches);
 
     document.querySelectorAll('.failure-category-input').forEach(function (radio) {
       radio.addEventListener('change', function () {
@@ -170,6 +198,51 @@
         document.getElementById('completion_signature').value = completionPad.dataUrl();
       }
     });
+  })();
+
+  (function () {
+    // Dictation for the notes field — the phone's own speech-to-text via
+    // the browser's SpeechRecognition API, so typing one-handed at the
+    // car isn't the only option. Not supported everywhere (notably
+    // desktop Firefox), so the mic button stays hidden unless the API
+    // is actually available.
+    var SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) return;
+
+    var micButton = document.getElementById('notes-mic');
+    var notesField = document.getElementById('notes');
+    if (!micButton || !notesField) return;
+    micButton.hidden = false;
+
+    var recognition = new SpeechRecognition();
+    recognition.lang = 'en-GB';
+    recognition.interimResults = false;
+    recognition.continuous = false;
+    var listening = false;
+
+    function setListening(on) {
+      listening = on;
+      micButton.classList.toggle('mic-listening', on);
+      micButton.textContent = on ? '⏹️' : '🎤';
+    }
+
+    micButton.addEventListener('click', function () {
+      if (listening) {
+        recognition.stop();
+        return;
+      }
+      setListening(true);
+      recognition.start();
+    });
+
+    recognition.addEventListener('result', function (e) {
+      var transcript = e.results[0][0].transcript;
+      var separator = notesField.value && !notesField.value.endsWith(' ') ? ' ' : '';
+      notesField.value += separator + transcript;
+    });
+
+    recognition.addEventListener('end', function () { setListening(false); });
+    recognition.addEventListener('error', function () { setListening(false); });
   })();
 </script>
 {% endblock %}

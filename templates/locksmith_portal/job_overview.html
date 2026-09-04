@@ -70,4 +70,8 @@
     {% endif %}
   </div>
 </div>
+
+{% if visit.stage == "not_started" or visit.stage == "on_route" %}
+<p><a class="back-link" href="{% url 'locksmith_portal:job_cancel' order_no=order_no %}?date={{ selected_date|date:'Y-m-d' }}">Couldn't attend / cancel this job</a></p>
+{% endif %}
 {% endblock %}

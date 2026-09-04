@@ -62,6 +62,16 @@ class JobVisit(models.Model):
     class Outcome(models.TextChoices):
         COMPLETED = "completed", "Completed"
         FAILED = "failed", "Failed"
+        CANCELLED = "cancelled", "Cancelled"
+
+    class CancelReason(models.TextChoices):
+        """Never attended jobs only (see job_cancel) — distinct from a
+        FailureCategory, which is for a job the locksmith did attend."""
+        CLIENT_CANCELLED = "client_cancelled", "Client cancelled"
+        OFFICE_PULLED = "office_pulled", "Office pulled the job"
+        COULDNT_ATTEND = "couldnt_attend", "Couldn't attend — traffic/weather"
+        WRONG_ADDRESS = "wrong_address", "Wrong address/details"
+        OTHER = "other", "Other"
 
     class AccessMethod(models.TextChoices):
         """Gain access jobs only — how the locksmith actually got in."""
@@ -91,8 +101,20 @@ class JobVisit(models.Model):
     parts_done_at = models.DateTimeField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
 
+    # Best-effort browser Geolocation captured when the locksmith submits
+    # arrival photos — never blocks progress (a denied/unavailable
+    # permission just leaves these null); included as a Google Maps
+    # link in the arrival Handl note when present.
+    arrival_latitude = models.FloatField(null=True, blank=True)
+    arrival_longitude = models.FloatField(null=True, blank=True)
+
     notes = models.TextField(blank=True)
     outcome = models.CharField(max_length=20, choices=Outcome.choices, blank=True)
+
+    # Never-attended jobs only (see job_cancel) — cancelled before the
+    # locksmith arrived, so there's nothing to fail. notes carries any
+    # free-text detail, same field the completion flow uses.
+    cancel_reason = models.CharField(max_length=20, choices=CancelReason.choices, blank=True)
 
     # Gain access jobs: how they got in, and the disclaimer the customer
     # signs on the locksmith's phone before an airbag attempt (see
@@ -124,7 +146,10 @@ class JobVisit(models.Model):
     # Every completed (not failed) job: the customer signs on the
     # locksmith's phone to confirm they're happy with the completed
     # work — see JobVisitPhoto.Kind.COMPLETION_SIGNATURE for the image.
+    # If the customer isn't there to sign, completion_signed_at stays
+    # null and customer_not_present_reason explains why instead.
     completion_signed_at = models.DateTimeField(null=True, blank=True)
+    customer_not_present_reason = models.CharField(max_length=200, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

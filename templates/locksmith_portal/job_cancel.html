@@ -1,0 +1,26 @@
+{% extends "locksmith_portal/base.html" %}
+{% block title %}Job {{ report_id }} — WGTK Locksmith Portal{% endblock %}
+{% block content %}
+<a class="back-link" href="{{ back_url }}">&larr; Back</a>
+<h1>Cancel this job</h1>
+
+<form method="post" action="{{ action_url }}" class="card">
+  {% csrf_token %}
+
+  <div class="field-group">
+    <label>Reason</label>
+    <div class="outcome-choice">
+      {% for value, label in cancel_reasons %}
+      <label><input type="radio" name="cancel_reason" value="{{ value }}" required> {{ label }}</label>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="field-group">
+    <label for="notes">Notes</label>
+    <textarea id="notes" name="notes" rows="4" placeholder="Anything worth noting…"></textarea>
+  </div>
+
+  <p style="margin-top:1rem;"><button class="btn" type="submit">Cancel job</button></p>
+</form>
+{% endblock %}

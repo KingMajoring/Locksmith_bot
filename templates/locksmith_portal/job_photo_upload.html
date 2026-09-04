@@ -5,7 +5,7 @@
 <h1>{{ heading }}</h1>
 <p>{{ instructions }}</p>
 
-<form method="post" action="{{ action_url }}" enctype="multipart/form-data" class="card">
+<form method="post" action="{{ action_url }}" enctype="multipart/form-data" class="card" id="photo-upload-form">
   {% csrf_token %}
   {% for slot in photo_slots %}
   <div class="field-group">
@@ -13,6 +13,21 @@
     <input type="file" name="photo_{{ slot.kind }}" accept="image/*" capture="environment" multiple {% if slot.required %}required{% endif %}>
   </div>
   {% endfor %}
+  <input type="hidden" name="arrival_latitude" id="arrival_latitude">
+  <input type="hidden" name="arrival_longitude" id="arrival_longitude">
   <p style="margin-top:1rem;"><button class="btn" type="submit">Save photos &amp; continue</button></p>
 </form>
+
+<script>
+  // Best-effort location capture — never blocks the form. A denied
+  // permission, an unsupported browser, or simply not resolving in
+  // time before the locksmith hits submit all just leave the hidden
+  // fields empty; the server treats that the same as "not captured".
+  if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(function (position) {
+      document.getElementById('arrival_latitude').value = position.coords.latitude;
+      document.getElementById('arrival_longitude').value = position.coords.longitude;
+    }, function () {}, { maximumAge: 60000, timeout: 8000 });
+  }
+</script>
 {% endblock %}
