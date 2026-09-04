@@ -7,43 +7,12 @@
 <form method="post" action="{{ action_url }}" enctype="multipart/form-data" class="card" id="complete-form">
   {% csrf_token %}
 
-  {% if is_gain_access %}
+  {% for slot in photo_slots %}
   <div class="field-group">
-    <label>How did you gain access?</label>
-    <div class="outcome-choice">
-      <label><input type="radio" name="access_method" value="picked" class="access-method-input" required> Picked</label>
-      <label><input type="radio" name="access_method" value="airbag" class="access-method-input"> Airbag</label>
-    </div>
+    <label>{{ slot.label }}{% if not slot.required %} <span class="sub">(if applicable)</span>{% endif %}</label>
+    <input type="file" name="photo_{{ slot.kind }}" accept="image/*" capture="environment" multiple {% if slot.required %}required{% endif %}>
   </div>
-
-  <div class="field-group access-branch" data-branch="picked" hidden>
-    <label for="pick_used">What pick was used</label>
-    <input type="text" id="pick_used" name="pick_used" placeholder="e.g. slim jim, jigglers…">
-  </div>
-
-  <div class="field-group access-branch" data-branch="airbag" hidden>
-    <p class="disclaimer-text">{{ disclaimer_text }}</p>
-    <label>Customer signature</label>
-    <canvas id="signature-pad" class="signature-pad" width="600" height="200"></canvas>
-    <p><button type="button" class="btn-secondary" id="clear-signature">Clear signature</button></p>
-    <input type="hidden" name="disclaimer_signature" id="disclaimer_signature">
-
-    <label>Photos of the door frame</label>
-    <input type="file" name="photo_door_frame" accept="image/*" capture="environment" multiple>
-  </div>
-
-  <div class="field-group access-branch" data-branch="picked" hidden>
-    <label>Photo(s) of the completed job</label>
-    <input type="file" name="photo_after" accept="image/*" capture="environment" multiple>
-  </div>
-  {% else %}
-    {% for slot in photo_slots %}
-    <div class="field-group">
-      <label>{{ slot.label }}{% if not slot.required %} <span class="sub">(if applicable)</span>{% endif %}</label>
-      <input type="file" name="photo_{{ slot.kind }}" accept="image/*" capture="environment" multiple {% if slot.required %}required{% endif %}>
-    </div>
-    {% endfor %}
-  {% endif %}
+  {% endfor %}
 
   <div class="field-group">
     <label>Outcome</label>
@@ -89,15 +58,6 @@
       el.hidden = !show;
     }
 
-    document.querySelectorAll('.access-method-input').forEach(function (radio) {
-      radio.addEventListener('change', function () {
-        var chosen = radio.value;
-        document.querySelectorAll('.access-branch').forEach(function (branch) {
-          showBranch(branch, branch.dataset.branch === chosen);
-        });
-      });
-    });
-
     document.querySelectorAll('.outcome-input').forEach(function (radio) {
       radio.addEventListener('change', function () {
         var failed = radio.value === 'failed';
@@ -119,68 +79,6 @@
           showBranch(branch, branch.dataset.reason === chosen);
         });
       });
-    });
-  })();
-
-  (function () {
-    var canvas = document.getElementById('signature-pad');
-    if (!canvas) return;
-    var ctx = canvas.getContext('2d');
-    ctx.lineWidth = 2;
-    ctx.lineCap = 'round';
-    ctx.strokeStyle = '#16241d';
-    var drawing = false;
-    var hasSignature = false;
-
-    function point(e) {
-      var rect = canvas.getBoundingClientRect();
-      var scaleX = canvas.width / rect.width;
-      var scaleY = canvas.height / rect.height;
-      var src = e.touches ? e.touches[0] : e;
-      return { x: (src.clientX - rect.left) * scaleX, y: (src.clientY - rect.top) * scaleY };
-    }
-
-    function start(e) {
-      e.preventDefault();
-      drawing = true;
-      hasSignature = true;
-      var p = point(e);
-      ctx.beginPath();
-      ctx.moveTo(p.x, p.y);
-    }
-
-    function move(e) {
-      if (!drawing) return;
-      e.preventDefault();
-      var p = point(e);
-      ctx.lineTo(p.x, p.y);
-      ctx.stroke();
-    }
-
-    function end() { drawing = false; }
-
-    canvas.addEventListener('mousedown', start);
-    canvas.addEventListener('mousemove', move);
-    window.addEventListener('mouseup', end);
-    canvas.addEventListener('touchstart', start);
-    canvas.addEventListener('touchmove', move);
-    canvas.addEventListener('touchend', end);
-
-    document.getElementById('clear-signature').addEventListener('click', function () {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      hasSignature = false;
-    });
-
-    document.getElementById('complete-form').addEventListener('submit', function (e) {
-      var airbagBranch = document.querySelector('.access-branch[data-branch="airbag"]');
-      if (airbagBranch && !airbagBranch.hidden) {
-        if (!hasSignature) {
-          e.preventDefault();
-          alert('The customer needs to sign the disclaimer before continuing.');
-          return;
-        }
-        document.getElementById('disclaimer_signature').value = canvas.toDataURL('image/png');
-      }
     });
   })();
 </script>

@@ -16,6 +16,7 @@ urlpatterns = [
     # sub-path would never be reached.
     path("jobs/<path:order_no>/on-route/", views.job_on_route, name="job_on_route"),
     path("jobs/<path:order_no>/arrived/", views.job_arrived, name="job_arrived"),
+    path("jobs/<path:order_no>/access-method/", views.job_access_method, name="job_access_method"),
     path("jobs/<path:order_no>/parts/continue/", views.job_parts_continue, name="job_parts_continue"),
     path("jobs/<path:order_no>/parts/", views.job_detail, name="job_detail"),
     path("jobs/<path:order_no>/complete/", views.job_complete, name="job_complete"),

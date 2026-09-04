@@ -83,7 +83,8 @@ _AFTER_PHOTO_SLOTS_BY_SERVICE = {
 def _loss_label_for(report_id):
     """Handl's loss_type display label (e.g. "Gain access", "AKL",
     "Spare Key") for this job, or "" if it can't be looked up — decides
-    which completion questions/photo slots job_complete shows."""
+    which completion questions/photo slots job_complete (and, for Gain
+    access, job_access_method) shows."""
     try:
         details = get_handl_client().get_job_details([report_id]).get(report_id)
     except Exception:
@@ -92,17 +93,22 @@ def _loss_label_for(report_id):
     return display_loss_type(details.loss_type) if details else ""
 
 
-def _after_photo_slots(loss_label, access_method):
-    """(kind, required) pairs for the completion step's photo prompts —
-    Gain access depends on how they got in (only known once the
-    locksmith answers that question), everything else is fixed per
-    service. Falls back to one generic "after" slot for anything not
-    specifically modelled here."""
-    if loss_label == "Gain access":
-        if access_method == JobVisit.AccessMethod.AIRBAG:
-            return [(JobVisitPhoto.Kind.DOOR_FRAME, True)]
-        return [(JobVisitPhoto.Kind.AFTER, True)]
+def _after_photo_slots(loss_label):
+    """(kind, required) pairs for the completion step's photo prompts.
+    Gain access is handled entirely at the earlier access-method step
+    (see job_access_method — how they got in, and door-frame photos for
+    an airbag entry, both happen before parts disposal), so it just
+    gets the generic fallback here like anything else not specifically
+    modelled."""
     return _AFTER_PHOTO_SLOTS_BY_SERVICE.get(loss_label, [(JobVisitPhoto.Kind.AFTER, True)])
+
+
+def _access_method_photo_slots(access_method):
+    """Door-frame photos are only expected for an airbag entry — picking
+    a lock cleanly doesn't leave anything to photograph there."""
+    if access_method == JobVisit.AccessMethod.AIRBAG:
+        return [(JobVisitPhoto.Kind.DOOR_FRAME, True)]
+    return []
 
 
 def _decode_data_url(data_url):
@@ -344,6 +350,7 @@ def dashboard(request):
         job["make"] = details.make if details else ""
         job["model"] = details.model if details else ""
         job["year"] = details.year if details else ""
+        job["reg"] = details.reg if details else ""
         job["service"] = display_loss_type(details.loss_type) if details else ""
 
     return render(
@@ -411,9 +418,10 @@ def stock_check_entry(request, pk):
 @login_required
 def job_overview(request, order_no):
     """The stepper landing page for one job: on route -> arrived (before
-    photos) -> parts disposed -> complete (after photos, notes,
-    outcome) — each step's action link only shown once the previous one
-    is done, per stage in JobVisit.Stage."""
+    photos) -> [Gain access only: access method + disclaimer] -> parts
+    disposed -> complete (after photos, notes, outcome) — each step's
+    action link only shown once the previous one is done, per stage in
+    JobVisit.Stage."""
     ctx, early = _job_visit_context(request, order_no)
     if ctx is None:
         return early
@@ -435,6 +443,7 @@ def job_overview(request, order_no):
             "is_today": ctx["selected_date"] == timezone.localdate(),
             "dashboard_url": ctx["dashboard_url"],
             "is_preview": _is_preview(request),
+            "is_gain_access": _loss_label_for(ctx["report_id"]) == "Gain access",
         },
     )
 
@@ -511,12 +520,116 @@ def job_arrived(request, order_no):
 
 
 @login_required
+def job_access_method(request, order_no):
+    """Gain access jobs only: how the locksmith got in, and — for an
+    airbag entry — the damage disclaimer (signed on the locksmith's
+    phone) plus door-frame photos. Sits between arrived and parts
+    disposal, not at completion: the disclaimer needs to be agreed
+    before work continues, not retrospectively once the job's done."""
+    ctx, early = _job_visit_context(request, order_no)
+    if ctx is None:
+        return early
+    locksmith, report_id, visit = ctx["locksmith"], ctx["report_id"], ctx["visit"]
+    selected_date = ctx["selected_date"]
+    overview_url = f"{reverse('locksmith_portal:job_overview', args=[order_no])}?date={selected_date.isoformat()}"
+
+    if visit.stage not in (JobVisit.Stage.ARRIVED, JobVisit.Stage.PARTS_DONE, JobVisit.Stage.DONE):
+        messages.error(request, "Mark yourself arrived first.")
+        return redirect(overview_url)
+
+    if _loss_label_for(report_id) != "Gain access":
+        return redirect(overview_url)
+
+    if request.method == "POST":
+        access_method = request.POST.get("access_method", "")
+        pick_used = request.POST.get("pick_used", "").strip()
+        signature_data_url = request.POST.get("disclaimer_signature", "").strip()
+
+        errors = []
+        if access_method not in (JobVisit.AccessMethod.PICKED, JobVisit.AccessMethod.AIRBAG):
+            errors.append("Choose whether you picked the lock or used the airbag.")
+        elif access_method == JobVisit.AccessMethod.PICKED and not pick_used:
+            errors.append("Enter what pick was used.")
+        elif access_method == JobVisit.AccessMethod.AIRBAG and not signature_data_url:
+            errors.append("The customer needs to sign the disclaimer before continuing.")
+
+        slot_pairs = _access_method_photo_slots(access_method)
+        slot_files = {}
+        for kind, required in slot_pairs:
+            files = request.FILES.getlist(f"photo_{kind}")
+            if required and not files:
+                errors.append(f"Add at least one photo: {JobVisitPhoto.Kind(kind).label}.")
+            slot_files[kind] = files
+
+        if errors:
+            for error in errors:
+                messages.error(request, error)
+        else:
+            note_parts = []
+            if access_method == JobVisit.AccessMethod.PICKED:
+                note_parts.append(
+                    f"'{locksmith.van_soter_display_name}' gained access by picking "
+                    f"(pick used: {escape(pick_used)})."
+                )
+            else:
+                content_type, signature_bytes = _decode_data_url(signature_data_url)
+                signature_url = get_photo_storage().upload(
+                    report_id=report_id, stage="disclaimer", filename="signature.png",
+                    content=signature_bytes, content_type=content_type,
+                )
+                JobVisitPhoto.objects.create(
+                    visit=visit, kind=JobVisitPhoto.Kind.DISCLAIMER_SIGNATURE, url=signature_url
+                )
+                visit.disclaimer_signed_at = timezone.now()
+                note_parts.append(
+                    f"'{locksmith.van_soter_display_name}' is attempting access via airbag — "
+                    f"customer signed the damage disclaimer: {_photo_links_html([signature_url])}"
+                )
+
+            for kind, files in slot_files.items():
+                if not files:
+                    continue
+                urls = _save_visit_photos(request, visit, report_id, kind, kind, files)
+                if urls:
+                    note_parts.append(f"{JobVisitPhoto.Kind(kind).label}: {_photo_links_html(urls)}")
+
+            visit.access_method = access_method
+            visit.pick_used = pick_used if access_method == JobVisit.AccessMethod.PICKED else ""
+            visit.save(update_fields=["access_method", "pick_used", "disclaimer_signed_at"])
+
+            _write_handl_note(locksmith, report_id, " ".join(note_parts))
+
+            messages.success(request, "Access method recorded.")
+            return redirect(overview_url)
+
+    return render(
+        request,
+        "locksmith_portal/job_access_method.html",
+        {
+            "order_no": order_no,
+            "report_id": report_id,
+            "action_url": f"{reverse('locksmith_portal:job_access_method', args=[order_no])}?date={selected_date.isoformat()}",
+            "dashboard_url": ctx["dashboard_url"],
+            "back_url": overview_url,
+            "is_preview": _is_preview(request),
+            "disclaimer_text": DISCLAIMER_TEXT,
+        },
+    )
+
+
+@login_required
 @require_POST
 def job_parts_continue(request, order_no):
     ctx, early = _job_visit_context(request, order_no)
     if ctx is None:
         return early
     visit = ctx["visit"]
+
+    if not visit.access_method and _loss_label_for(ctx["report_id"]) == "Gain access":
+        messages.error(request, "Record how you gained access first.")
+        return redirect(
+            f"{reverse('locksmith_portal:job_access_method', args=[order_no])}?date={ctx['selected_date'].isoformat()}"
+        )
 
     if visit.stage == JobVisit.Stage.ARRIVED:
         visit.stage = JobVisit.Stage.PARTS_DONE
@@ -544,14 +657,10 @@ def job_complete(request, order_no):
         return redirect(overview_url)
 
     loss_label = _loss_label_for(report_id)
-    is_gain_access = loss_label == "Gain access"
 
     if request.method == "POST":
         notes_text = request.POST.get("notes", "").strip()
         outcome = request.POST.get("outcome")
-        access_method = request.POST.get("access_method", "") if is_gain_access else ""
-        pick_used = request.POST.get("pick_used", "").strip()
-        signature_data_url = request.POST.get("disclaimer_signature", "").strip()
         failure_reason = request.POST.get("failure_reason", "")
         failure_sku_needed = request.POST.get("failure_sku_needed", "").strip()
         failure_reattend_action = request.POST.get("failure_reattend_action", "")
@@ -559,14 +668,6 @@ def job_complete(request, order_no):
         errors = []
         if outcome not in (JobVisit.Outcome.COMPLETED, JobVisit.Outcome.FAILED):
             errors.append("Choose Completed or Failed.")
-
-        if is_gain_access:
-            if access_method not in (JobVisit.AccessMethod.PICKED, JobVisit.AccessMethod.AIRBAG):
-                errors.append("Choose whether you picked the lock or used the airbag.")
-            elif access_method == JobVisit.AccessMethod.PICKED and not pick_used:
-                errors.append("Enter what pick was used.")
-            elif access_method == JobVisit.AccessMethod.AIRBAG and not signature_data_url:
-                errors.append("The customer needs to sign the disclaimer before continuing.")
 
         if outcome == JobVisit.Outcome.FAILED:
             if failure_reason not in (JobVisit.FailureReason.WRONG_PARTS, JobVisit.FailureReason.PROGRAMMER_ISSUE):
@@ -579,7 +680,7 @@ def job_complete(request, order_no):
             ):
                 errors.append("Choose a reattend option.")
 
-        slot_pairs = _after_photo_slots(loss_label, access_method)
+        slot_pairs = _after_photo_slots(loss_label)
         slot_files = {}
         for kind, required in slot_pairs:
             files = request.FILES.getlist(f"photo_{kind}")
@@ -603,23 +704,6 @@ def job_complete(request, order_no):
                 if urls:
                     note_parts.append(f"{JobVisitPhoto.Kind(kind).label}: {_photo_links_html(urls)}")
 
-            if access_method == JobVisit.AccessMethod.PICKED:
-                note_parts.append(f"Gained access by picking (pick used: {escape(pick_used)}).")
-            elif access_method == JobVisit.AccessMethod.AIRBAG:
-                content_type, signature_bytes = _decode_data_url(signature_data_url)
-                signature_url = get_photo_storage().upload(
-                    report_id=report_id, stage="disclaimer", filename="signature.png",
-                    content=signature_bytes, content_type=content_type,
-                )
-                JobVisitPhoto.objects.create(
-                    visit=visit, kind=JobVisitPhoto.Kind.DISCLAIMER_SIGNATURE, url=signature_url
-                )
-                visit.disclaimer_signed_at = timezone.now()
-                note_parts.append(
-                    "Gained access via airbag — customer signed the damage disclaimer: "
-                    f"{_photo_links_html([signature_url])}"
-                )
-
             if failure_reason == JobVisit.FailureReason.WRONG_PARTS:
                 note_parts.append(f"Failure reason: wrong parts (SKU needed: {escape(failure_sku_needed)}).")
             elif failure_reason == JobVisit.FailureReason.PROGRAMMER_ISSUE:
@@ -636,8 +720,6 @@ def job_complete(request, order_no):
 
             visit.notes = notes_text
             visit.outcome = outcome
-            visit.access_method = access_method
-            visit.pick_used = pick_used if access_method == JobVisit.AccessMethod.PICKED else ""
             visit.failure_reason = failure_reason if outcome == JobVisit.Outcome.FAILED else ""
             visit.failure_sku_needed = (
                 failure_sku_needed if failure_reason == JobVisit.FailureReason.WRONG_PARTS else ""
@@ -649,7 +731,7 @@ def job_complete(request, order_no):
             visit.stage = JobVisit.Stage.DONE
             visit.completed_at = timezone.now()
             visit.save(update_fields=[
-                "notes", "outcome", "access_method", "pick_used", "disclaimer_signed_at",
+                "notes", "outcome",
                 "failure_reason", "failure_sku_needed", "failure_reattend_action",
                 "stage", "completed_at",
             ])
@@ -664,9 +746,9 @@ def job_complete(request, order_no):
             messages.success(request, "Job marked complete.")
             return redirect(overview_url)
 
-    photo_slots = [] if is_gain_access else [
+    photo_slots = [
         {"kind": kind, "label": JobVisitPhoto.Kind(kind).label, "required": required}
-        for kind, required in _after_photo_slots(loss_label, None)
+        for kind, required in _after_photo_slots(loss_label)
     ]
 
     return render(
@@ -680,8 +762,6 @@ def job_complete(request, order_no):
             "back_url": overview_url,
             "is_preview": _is_preview(request),
             "loss_label": loss_label,
-            "is_gain_access": is_gain_access,
-            "disclaimer_text": DISCLAIMER_TEXT,
             "photo_slots": photo_slots,
         },
     )
@@ -702,6 +782,12 @@ def job_detail(request, order_no):
     if visit.stage not in (JobVisit.Stage.ARRIVED, JobVisit.Stage.PARTS_DONE):
         messages.error(request, "Mark yourself arrived (with before photos) first.")
         return redirect(overview_url)
+
+    if not visit.access_method and _loss_label_for(report_id) == "Gain access":
+        messages.error(request, "Record how you gained access first.")
+        return redirect(
+            f"{reverse('locksmith_portal:job_access_method', args=[order_no])}?date={selected_date.isoformat()}"
+        )
 
     handl = get_handl_client()
     soter_ids = locksmith.soter_id_list

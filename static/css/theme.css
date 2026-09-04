@@ -329,7 +329,8 @@ input[type=number] { width: 5rem; }
 .stage-row {
   display: flex;
   align-items: center;
-  gap: 0.85rem;
+  flex-wrap: wrap;
+  gap: 0.6rem 0.85rem;
   padding-bottom: 0.9rem;
   border-bottom: 1px solid var(--border);
 }
@@ -353,9 +354,9 @@ input[type=number] { width: 5rem; }
   border-color: var(--wgtk-green);
   color: #fff;
 }
-.stage-body { flex: 1; min-width: 0; }
+.stage-body { flex: 1 1 140px; min-width: 0; }
 .stage-body strong { display: block; font-size: 0.95rem; }
-.stage-row form, .stage-row a.btn { flex-shrink: 0; width: auto; }
+.stage-row form, .stage-row a.btn { flex-shrink: 0; width: auto; margin-left: auto; }
 .stage-row .btn { padding: 0.5rem 0.9rem; font-size: 0.85rem; }
 
 form input[type=file] { display: block; width: 100%; margin-bottom: 0.5rem; }

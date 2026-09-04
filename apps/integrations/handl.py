@@ -54,6 +54,7 @@ class JobDetails:
     make: str
     model: str
     year: str
+    reg: str
     vin: str
     service_type: str
     loss_type: str
@@ -91,7 +92,7 @@ class HandlClient(ABC):
 
     @abstractmethod
     def get_job_details(self, report_ids: list[str]) -> dict[str, JobDetails]:
-        """Vehicle/claim details (make, model, year, VIN, service_type
+        """Vehicle/claim details (make, model, year, reg, VIN, service_type
         i.e. Lookup_KeyType, loss_type i.e. Lookup_LossEvent_Details,
         supplied_service i.e. Lookup_LocksmithSuppliedServices, net_cost
         i.e. Policy_Financial.NetCost — what the client was charged,
@@ -280,6 +281,7 @@ class MockHandlClient(HandlClient):
         ]
 
     _MAKES = ["Ford", "Vauxhall", "BMW", "Volkswagen", "Audi", "Mercedes-Benz", "Toyota"]
+    _REG_LETTERS = "ABCDEFGHJKLMNOPQRSTUVWXYZ"
     _MODELS = ["Focus", "Corsa", "3 Series", "Golf", "A4", "C-Class", "Yaris"]
     _SERVICE_TYPES = ["Lockout", "Key cutting", "Key programming", "Barrel change", "Boot lockout"]
     _LOSS_TYPES = ["Lost Keys", "Broken Key", "Lockout", "Keys Locked In", "Stolen Keys"]
@@ -297,6 +299,11 @@ class MockHandlClient(HandlClient):
                 make=rng.choice(self._MAKES),
                 model=rng.choice(self._MODELS),
                 year=str(rng.randint(2008, 2025)),
+                reg=(
+                    f"{rng.choice(self._REG_LETTERS)}{rng.choice(self._REG_LETTERS)}"
+                    f"{rng.randint(10, 69):02d} "
+                    f"{rng.choice(self._REG_LETTERS)}{rng.choice(self._REG_LETTERS)}{rng.choice(self._REG_LETTERS)}"
+                ),
                 vin=f"MOCK{rng.randint(10**12, 10**13 - 1)}",
                 service_type=rng.choice(self._SERVICE_TYPES),
                 loss_type=rng.choice(self._LOSS_TYPES),
@@ -605,6 +612,7 @@ class SQLHandlClient(HandlClient):
                     pkc.Make,
                     pkc.Model,
                     pkc.yearOfManufacture,
+                    pkc.VehicleReg,
                     pkc.VehicleVIN,
                     lkt.KeyType,
                     ROW_NUMBER() OVER (PARTITION BY pkc.ReportID ORDER BY pkc.ID) AS rn
@@ -651,7 +659,7 @@ class SQLHandlClient(HandlClient):
                 GROUP BY pf.ReportID
             )
             SELECT
-                v.ReportID, v.Make, v.Model, v.yearOfManufacture, v.VehicleVIN, v.KeyType,
+                v.ReportID, v.Make, v.Model, v.yearOfManufacture, v.VehicleReg, v.VehicleVIN, v.KeyType,
                 lt.LossEvent, ss.SuppliedService, f.NetCost
             FROM VehicleRanked v
             LEFT JOIN LossType lt ON v.ReportID = lt.ReportID
@@ -669,6 +677,7 @@ class SQLHandlClient(HandlClient):
                 make=row["Make"] or "",
                 model=row["Model"] or "",
                 year=str(row["yearOfManufacture"] or ""),
+                reg=row["VehicleReg"] or "",
                 vin=row["VehicleVIN"] or "",
                 service_type=row["KeyType"] or "",
                 loss_type=row["LossEvent"] or "",

@@ -130,7 +130,7 @@ class DashboardTests(TestCase):
         mock_handl = MagicMock()
         mock_handl.get_job_details.return_value = {
             "1001": JobDetails(
-                report_id="1001", make="Ford", model="Focus", year="2020", vin="VIN1",
+                report_id="1001", make="Ford", model="Focus", year="2020", reg="AB20 CDE", vin="VIN1",
                 service_type="Car", loss_type="LOST", supplied_service="", net_cost=100.0,
             )
         }
@@ -141,7 +141,9 @@ class DashboardTests(TestCase):
         self.assertEqual(job["make"], "Ford")
         self.assertEqual(job["model"], "Focus")
         self.assertEqual(job["year"], "2020")
+        self.assertEqual(job["reg"], "AB20 CDE")
         self.assertEqual(job["service"], "AKL")
+        self.assertContains(response, "AB20 CDE")
         self.assertContains(response, "Ford Focus 2020")
         self.assertContains(response, "AKL")
 
@@ -624,6 +626,24 @@ class JobVisitWorkflowTests(TestCase):
             response, f"{reverse('locksmith_portal:dashboard')}?date={self.today.isoformat()}"
         )
 
+    def test_overview_gain_access_shows_access_method_step_before_parts(self):
+        self._set_loss_type("LOCKED IN PROPERTY")
+        self._arrived_visit()
+        url = reverse("locksmith_portal:job_overview", args=[self.order_no])
+        response = self.client.get(url)
+        self.assertTrue(response.context["is_gain_access"])
+        self.assertContains(response, "Record access method")
+        self.assertNotContains(response, "Dispose parts")
+
+    def test_overview_non_gain_access_hides_access_method_step(self):
+        self._set_loss_type("LOST")
+        self._arrived_visit()
+        url = reverse("locksmith_portal:job_overview", args=[self.order_no])
+        response = self.client.get(url)
+        self.assertFalse(response.context["is_gain_access"])
+        self.assertNotContains(response, "Access method")
+        self.assertContains(response, "Dispose parts")
+
     # --- on route -------------------------------------------------------
 
     def test_on_route_advances_stage_and_writes_handl_note(self):
@@ -849,7 +869,7 @@ class JobVisitWorkflowTests(TestCase):
     def _set_loss_type(self, raw_loss_type):
         self.mock_handl.get_job_details.return_value = {
             "496390": JobDetails(
-                report_id="496390", make="Ford", model="Focus", year="2020", vin="VIN1",
+                report_id="496390", make="Ford", model="Focus", year="2020", reg="AB20 CDE", vin="VIN1",
                 service_type="Car", loss_type=raw_loss_type, supplied_service="", net_cost=100.0,
             )
         }
@@ -860,43 +880,44 @@ class JobVisitWorkflowTests(TestCase):
             stage=JobVisit.Stage.PARTS_DONE, parts_done_at=timezone.now(),
         )
 
+    def _arrived_visit(self):
+        return JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            stage=JobVisit.Stage.ARRIVED, arrived_at=timezone.now(),
+        )
+
     def test_gain_access_get_shows_picked_and_airbag_choice(self):
         self._set_loss_type("LOCKED IN PROPERTY")
-        self._parts_done_visit()
-        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        self._arrived_visit()
+        url = reverse("locksmith_portal:job_access_method", args=[self.order_no])
         response = self.client.get(url)
-        self.assertTrue(response.context["is_gain_access"])
         self.assertContains(response, "Picked")
         self.assertContains(response, "Airbag")
         self.assertContains(response, "signature-pad")
 
     def test_gain_access_requires_an_access_method_choice(self):
         self._set_loss_type("LOCKED IN PROPERTY")
-        self._parts_done_visit()
-        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
-        response = self.client.post(url, {"photo_after": [_fake_photo()], "outcome": "completed"})
+        self._arrived_visit()
+        url = reverse("locksmith_portal:job_access_method", args=[self.order_no])
+        response = self.client.post(url, {})
         self.assertContains(response, "Choose whether you picked the lock or used the airbag")
-        self.assertEqual(self._visit().stage, JobVisit.Stage.PARTS_DONE)
+        self.assertEqual(self._visit().stage, JobVisit.Stage.ARRIVED)
+        self.assertEqual(self._visit().access_method, "")
 
     def test_gain_access_picked_requires_pick_used_text(self):
         self._set_loss_type("LOCKED IN PROPERTY")
-        self._parts_done_visit()
-        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
-        response = self.client.post(
-            url, {"access_method": "picked", "photo_after": [_fake_photo()], "outcome": "completed"}
-        )
+        self._arrived_visit()
+        url = reverse("locksmith_portal:job_access_method", args=[self.order_no])
+        response = self.client.post(url, {"access_method": "picked"})
         self.assertContains(response, "Enter what pick was used")
 
     def test_gain_access_picked_success_records_pick_used_and_notes_handl(self):
         self._set_loss_type("LOCKED IN PROPERTY")
-        self._parts_done_visit()
-        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
-        response = self.client.post(url, {
-            "access_method": "picked", "pick_used": "Slim jim",
-            "photo_after": [_fake_photo()], "outcome": "completed",
-        })
+        self._arrived_visit()
+        url = reverse("locksmith_portal:job_access_method", args=[self.order_no])
+        response = self.client.post(url, {"access_method": "picked", "pick_used": "Slim jim"})
         visit = self._visit()
-        self.assertEqual(visit.stage, JobVisit.Stage.DONE)
+        self.assertEqual(visit.stage, JobVisit.Stage.ARRIVED)
         self.assertEqual(visit.access_method, JobVisit.AccessMethod.PICKED)
         self.assertEqual(visit.pick_used, "Slim jim")
         self.assertRedirects(
@@ -908,35 +929,33 @@ class JobVisitWorkflowTests(TestCase):
 
     def test_gain_access_airbag_requires_signature(self):
         self._set_loss_type("LOCKED IN PROPERTY")
-        self._parts_done_visit()
-        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        self._arrived_visit()
+        url = reverse("locksmith_portal:job_access_method", args=[self.order_no])
         response = self.client.post(
-            url, {"access_method": "airbag", "photo_door_frame": [_fake_photo()], "outcome": "completed"}
+            url, {"access_method": "airbag", "photo_door_frame": [_fake_photo()]}
         )
         self.assertContains(response, "customer needs to sign the disclaimer")
 
     def test_gain_access_airbag_requires_door_frame_photo(self):
         self._set_loss_type("LOCKED IN PROPERTY")
-        self._parts_done_visit()
-        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        self._arrived_visit()
+        url = reverse("locksmith_portal:job_access_method", args=[self.order_no])
         response = self.client.post(url, {
             "access_method": "airbag", "disclaimer_signature": "data:image/png;base64,aGVsbG8=",
-            "outcome": "completed",
         })
         self.assertContains(response, "Add at least one photo: Door frame")
 
     def test_gain_access_airbag_success_stores_signature_and_notes_handl(self):
         self._set_loss_type("LOCKED IN PROPERTY")
-        self._parts_done_visit()
-        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        self._arrived_visit()
+        url = reverse("locksmith_portal:job_access_method", args=[self.order_no])
         response = self.client.post(url, {
             "access_method": "airbag",
             "disclaimer_signature": "data:image/png;base64,aGVsbG8=",
             "photo_door_frame": [_fake_photo()],
-            "outcome": "completed",
         })
         visit = self._visit()
-        self.assertEqual(visit.stage, JobVisit.Stage.DONE)
+        self.assertEqual(visit.stage, JobVisit.Stage.ARRIVED)
         self.assertEqual(visit.access_method, JobVisit.AccessMethod.AIRBAG)
         self.assertIsNotNone(visit.disclaimer_signed_at)
         self.assertEqual(visit.photos.filter(kind=JobVisitPhoto.Kind.DISCLAIMER_SIGNATURE).count(), 1)
@@ -948,6 +967,36 @@ class JobVisitWorkflowTests(TestCase):
         note_text = self.mock_handl.add_report_note.call_args[0][1]
         self.assertIn("signed the damage disclaimer", note_text)
         self.assertIn("Door frame:", note_text)
+
+    def test_gain_access_non_gain_access_job_redirects_to_overview(self):
+        self._set_loss_type("LOST")
+        self._arrived_visit()
+        url = reverse("locksmith_portal:job_access_method", args=[self.order_no])
+        response = self.client.get(url)
+        self.assertRedirects(
+            response,
+            f"{reverse('locksmith_portal:job_overview', args=[self.order_no])}?date={self.today.isoformat()}",
+        )
+
+    def test_gain_access_parts_disposal_redirects_until_access_method_recorded(self):
+        self._set_loss_type("LOCKED IN PROPERTY")
+        self._arrived_visit()
+        url = reverse("locksmith_portal:job_detail", args=[self.order_no])
+        response = self.client.get(url)
+        self.assertRedirects(
+            response,
+            f"{reverse('locksmith_portal:job_access_method', args=[self.order_no])}?date={self.today.isoformat()}",
+        )
+
+    def test_gain_access_parts_disposal_allowed_once_access_method_recorded(self):
+        self._set_loss_type("LOCKED IN PROPERTY")
+        visit = self._arrived_visit()
+        visit.access_method = JobVisit.AccessMethod.PICKED
+        visit.pick_used = "Slim jim"
+        visit.save(update_fields=["access_method", "pick_used"])
+        url = reverse("locksmith_portal:job_detail", args=[self.order_no])
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
 
     # --- per-service completion flow: AKL / Spare Key --------------------
 

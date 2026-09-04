@@ -133,11 +133,13 @@ class PullingTests(TestCase):
         self.job_details = {
             "1001": JobDetails(
                 report_id="1001", make="Ford", model="Focus", year="2020",
+                reg="AB20 CDE",
                 vin="VIN1001", service_type="Car", loss_type="Lockout",
                 supplied_service="Non-Destructive Entry", net_cost=120.0,
             ),
             "1002": JobDetails(
                 report_id="1002", make="BMW", model="335D", year="2019",
+                reg="AB20 CDE",
                 vin="VIN1002", service_type="Car", loss_type="Lost Keys",
                 supplied_service="Key Programming", net_cost=None,
             ),
@@ -360,6 +362,7 @@ class RefreshMissingFinancialsTests(TestCase):
         details = {
             "2001": JobDetails(
                 report_id="2001", make="Ford", model="Focus", year="2020",
+                reg="AB20 CDE",
                 vin="VIN2001", service_type="Car", loss_type="Lockout",
                 supplied_service="Non-Destructive Entry", net_cost=145.5,
             ),
@@ -411,6 +414,7 @@ class RefreshMissingFinancialsTests(TestCase):
         details = {
             "2001": JobDetails(
                 report_id="2001", make="Ford", model="Focus", year="2020",
+                reg="AB20 CDE",
                 vin="VIN2001", service_type="Car", loss_type="Lockout",
                 supplied_service="Non-Destructive Entry", net_cost=145.5,
             ),
@@ -447,6 +451,7 @@ class RefreshMissingFinancialsTests(TestCase):
         details = {
             "2001": JobDetails(
                 report_id="2001", make="Vauxhall", model="Astra", year="2014",
+                reg="AB20 CDE",
                 vin="VIN2001", service_type="Car", loss_type="Lockout",
                 supplied_service="Non-Destructive Entry", net_cost=220.0,
             ),
@@ -473,6 +478,7 @@ class RefreshMissingFinancialsTests(TestCase):
                 return {
                     rid: JobDetails(
                         report_id=rid, make="Ford", model="Focus", year="2020",
+                        reg="AB20 CDE",
                         vin="", service_type="Car", loss_type="Lockout",
                         supplied_service="Non-Destructive Entry", net_cost=100.0,
                     )
@@ -504,6 +510,7 @@ class RefreshMissingFinancialsTests(TestCase):
         details = {
             "458155": JobDetails(
                 report_id="458155", make="Ford", model="Focus", year="2020",
+                reg="AB20 CDE",
                 vin="", service_type="Car", loss_type="Lockout",
                 supplied_service="Non-Destructive Entry", net_cost=180.0,
             ),

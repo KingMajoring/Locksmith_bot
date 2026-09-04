@@ -33,19 +33,34 @@
     {% endif %}
   </div>
 
-  <div class="stage-row {% if visit.parts_done_at %}stage-done{% endif %}">
+  {% if is_gain_access %}
+  <div class="stage-row {% if visit.access_method %}stage-done{% endif %}">
     <span class="stage-num">3</span>
+    <div class="stage-body">
+      <strong>Access method — disclaimer</strong>
+      {% if visit.access_method %}<span class="sub">{{ visit.get_access_method_display }}</span>{% endif %}
+    </div>
+    {% if visit.arrived_at and not visit.access_method %}
+    <a class="btn" href="{% url 'locksmith_portal:job_access_method' order_no=order_no %}?date={{ selected_date|date:'Y-m-d' }}">Record access method</a>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <div class="stage-row {% if visit.parts_done_at %}stage-done{% endif %}">
+    <span class="stage-num">{% if is_gain_access %}4{% else %}3{% endif %}</span>
     <div class="stage-body">
       <strong>Parts disposed</strong>
       {% if disposal_count %}<span class="sub">{{ disposal_count }} recorded</span>{% endif %}
     </div>
     {% if visit.stage == "arrived" or visit.stage == "parts_done" %}
-    <a class="btn" href="{% url 'locksmith_portal:job_detail' order_no=order_no %}?date={{ selected_date|date:'Y-m-d' }}">Dispose parts</a>
+      {% if not is_gain_access or visit.access_method %}
+      <a class="btn" href="{% url 'locksmith_portal:job_detail' order_no=order_no %}?date={{ selected_date|date:'Y-m-d' }}">Dispose parts</a>
+      {% endif %}
     {% endif %}
   </div>
 
   <div class="stage-row {% if visit.completed_at %}stage-done{% endif %}">
-    <span class="stage-num">4</span>
+    <span class="stage-num">{% if is_gain_access %}5{% else %}4{% endif %}</span>
     <div class="stage-body">
       <strong>Completed — after photos, notes</strong>
       {% if visit.completed_at %}<span class="sub">{{ visit.get_outcome_display }} at {{ visit.completed_at|date:"H:i" }}</span>{% endif %}

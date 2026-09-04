@@ -298,6 +298,7 @@ class SQLHandlClientTests(TestCase):
                 "Make": "NISSAN",
                 "Model": "X-TRAIL ACENTA DCI 4X4 CVT",
                 "yearOfManufacture": 2017,
+                "VehicleReg": "AB17 CDE",
                 "VehicleVIN": "SJNFAAJ11U1234567",
                 "KeyType": "Car",
                 "LossEvent": "Lost Keys",
@@ -321,6 +322,7 @@ class SQLHandlClientTests(TestCase):
         job = details["496390"]
         self.assertEqual(job.make, "NISSAN")
         self.assertEqual(job.year, "2017")
+        self.assertEqual(job.reg, "AB17 CDE")
         self.assertEqual(job.vin, "SJNFAAJ11U1234567")
         self.assertEqual(job.service_type, "Car")
         self.assertEqual(job.loss_type, "Lost Keys")
@@ -334,6 +336,7 @@ class SQLHandlClientTests(TestCase):
                 "Make": "NISSAN",
                 "Model": "X-TRAIL",
                 "yearOfManufacture": 2017,
+                "VehicleReg": "AB17 CDE",
                 "VehicleVIN": "SJNFAAJ11U1234567",
                 "KeyType": "Car",
                 "LossEvent": "Lost Keys",
