@@ -1,0 +1,24 @@
+{% extends "locksmith_portal/base.html" %}
+{% block title %}Job {{ report_id }} — WGTK Locksmith Portal{% endblock %}
+{% block content %}
+<a class="back-link" href="{{ back_url }}">&larr; Back</a>
+<h1>Finish job</h1>
+<p>Take a photo of the completed job, add any notes, then mark it Completed or Failed.</p>
+
+<form method="post" action="{{ action_url }}" enctype="multipart/form-data" class="card">
+  {% csrf_token %}
+  <label>After-job photos</label>
+  <input type="file" name="photos" accept="image/*" capture="environment" multiple required>
+
+  <label style="margin-top:1rem; display:block;">Notes</label>
+  <textarea name="notes" rows="4" placeholder="Anything worth noting about this job…"></textarea>
+
+  <label style="margin-top:1rem; display:block;">Outcome</label>
+  <div class="outcome-choice">
+    <label><input type="radio" name="outcome" value="completed" required> Completed</label>
+    <label><input type="radio" name="outcome" value="failed"> Failed</label>
+  </div>
+
+  <p style="margin-top:1rem;"><button class="btn" type="submit">Save &amp; finish job</button></p>
+</form>
+{% endblock %}

@@ -8,6 +8,7 @@ from .graph_email_backend import MicrosoftGraphEmailBackend
 from .handl import MockHandlClient, SQLHandlClient, get_handl_client
 from .models import OptimoSettings
 from .optimo import MockOptimoClient, RealOptimoClient, get_optimo_client
+from .photos import AzureBlobPhotoStorage, MockPhotoStorage, get_photo_storage
 
 
 class MockHandlClientTests(TestCase):
@@ -115,6 +116,9 @@ class MockHandlClientTests(TestCase):
 
     def test_list_locksmith_user_ids_returns_empty_dict(self):
         self.assertEqual(self.client.list_locksmith_user_ids(), {})
+
+    def test_add_report_note_does_not_raise(self):
+        self.client.add_report_note("496390", "'Dean S' is on route.", actioned_by_user_id=522)
 
 
 def _fake_connection(rows):
@@ -593,6 +597,23 @@ class SQLHandlClientTests(TestCase):
         self.assertIn("wiki.LocksmithLogin", query)
         self.assertNotIn("password", query.lower())
 
+    def test_add_report_note_inserts_and_commits(self):
+        fake_conn = MagicMock()
+        fake_conn.__enter__.return_value = fake_conn
+        fake_conn.__exit__.return_value = False
+        cursor = fake_conn.cursor.return_value
+
+        client = SQLHandlClient()
+        with patch.object(client, "_write_connection", return_value=fake_conn):
+            client.add_report_note("496390", "'Dean S' is on route.", actioned_by_user_id=517)
+
+        query, params = cursor.execute.call_args[0]
+        self.assertIn("INSERT INTO Policy_History", query)
+        self.assertEqual(params["report_id"], "496390")
+        self.assertEqual(params["notes"], "'Dean S' is on route.")
+        self.assertEqual(params["actioned_by"], 517)
+        fake_conn.commit.assert_called_once()
+
 
 class GetHandlClientTests(TestCase):
     @override_settings(HANDL_SQL_SERVER="")
@@ -747,3 +768,48 @@ class MicrosoftGraphEmailBackendTests(TestCase):
 
         sent = backend.send_messages([self._message()])
         self.assertEqual(sent, 0)
+
+
+class MockPhotoStorageTests(TestCase):
+    def test_upload_saves_file_and_returns_a_url(self):
+        storage = MockPhotoStorage()
+        url = storage.upload(
+            report_id="496390", stage="before", filename="site.jpg",
+            content=b"fake-image-bytes", content_type="image/jpeg",
+        )
+        self.assertIn("job_photos/496390/before/", url)
+        self.assertTrue(url.endswith("site.jpg"))
+
+    def test_upload_namespaces_by_report_and_stage_to_avoid_collisions(self):
+        # Unlike Handl's own flat /Uploads/ folder (confirmed live to
+        # collide on same-named files), two different reports/stages
+        # uploading a same-named photo must not overwrite each other.
+        storage = MockPhotoStorage()
+        url_a = storage.upload(
+            report_id="1", stage="before", filename="photo.jpg",
+            content=b"aaa", content_type="image/jpeg",
+        )
+        url_b = storage.upload(
+            report_id="2", stage="after", filename="photo.jpg",
+            content=b"bbb", content_type="image/jpeg",
+        )
+        self.assertNotEqual(url_a, url_b)
+
+    def test_upload_sanitizes_path_traversal_in_filename(self):
+        storage = MockPhotoStorage()
+        url = storage.upload(
+            report_id="496390", stage="before", filename="../../etc/passwd",
+            content=b"x", content_type="image/jpeg",
+        )
+        self.assertNotIn("..", url)
+        self.assertIn("job_photos/496390/before/", url)
+
+
+class GetPhotoStorageTests(TestCase):
+    @override_settings(AZURE_STORAGE_CONNECTION_STRING="")
+    def test_returns_mock_when_no_connection_string(self):
+        self.assertIsInstance(get_photo_storage(), MockPhotoStorage)
+
+    @override_settings(AZURE_STORAGE_CONNECTION_STRING="DefaultEndpointsProtocol=https;AccountName=x;AccountKey=y")
+    def test_returns_azure_when_connection_string_set(self):
+        self.assertIsInstance(get_photo_storage(), AzureBlobPhotoStorage)

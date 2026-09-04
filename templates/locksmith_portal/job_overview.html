@@ -1,0 +1,58 @@
+{% extends "locksmith_portal/base.html" %}
+{% block title %}Job {{ report_id }} — WGTK Locksmith Portal{% endblock %}
+{% block content %}
+<a class="back-link" href="{{ dashboard_url }}">&larr; Back</a>
+<h1>Job {{ report_id }}</h1>
+{% if not is_today %}
+  <p class="sub">{{ selected_date|date:"D j M Y" }}.</p>
+{% endif %}
+
+<div class="card stage-list">
+  <div class="stage-row {% if visit.on_route_at %}stage-done{% endif %}">
+    <span class="stage-num">1</span>
+    <div class="stage-body">
+      <strong>On route</strong>
+      {% if visit.on_route_at %}<span class="sub">{{ visit.on_route_at|date:"H:i" }}</span>{% endif %}
+    </div>
+    {% if visit.stage == "not_started" %}
+    <form method="post" action="{% url 'locksmith_portal:job_on_route' order_no=order_no %}?date={{ selected_date|date:'Y-m-d' }}">
+      {% csrf_token %}
+      <button class="btn" type="submit">Mark on route</button>
+    </form>
+    {% endif %}
+  </div>
+
+  <div class="stage-row {% if visit.arrived_at %}stage-done{% endif %}">
+    <span class="stage-num">2</span>
+    <div class="stage-body">
+      <strong>Arrived — before photos</strong>
+      {% if visit.arrived_at %}<span class="sub">{{ visit.arrived_at|date:"H:i" }}</span>{% endif %}
+    </div>
+    {% if visit.stage == "on_route" %}
+    <a class="btn" href="{% url 'locksmith_portal:job_arrived' order_no=order_no %}?date={{ selected_date|date:'Y-m-d' }}">Arrived</a>
+    {% endif %}
+  </div>
+
+  <div class="stage-row {% if visit.parts_done_at %}stage-done{% endif %}">
+    <span class="stage-num">3</span>
+    <div class="stage-body">
+      <strong>Parts disposed</strong>
+      {% if disposal_count %}<span class="sub">{{ disposal_count }} recorded</span>{% endif %}
+    </div>
+    {% if visit.stage == "arrived" or visit.stage == "parts_done" %}
+    <a class="btn" href="{% url 'locksmith_portal:job_detail' order_no=order_no %}?date={{ selected_date|date:'Y-m-d' }}">Dispose parts</a>
+    {% endif %}
+  </div>
+
+  <div class="stage-row {% if visit.completed_at %}stage-done{% endif %}">
+    <span class="stage-num">4</span>
+    <div class="stage-body">
+      <strong>Completed — after photos, notes</strong>
+      {% if visit.completed_at %}<span class="sub">{{ visit.get_outcome_display }} at {{ visit.completed_at|date:"H:i" }}</span>{% endif %}
+    </div>
+    {% if visit.stage == "parts_done" %}
+    <a class="btn" href="{% url 'locksmith_portal:job_complete' order_no=order_no %}?date={{ selected_date|date:'Y-m-d' }}">Finish job</a>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

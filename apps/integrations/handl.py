@@ -174,6 +174,22 @@ class HandlClient(ABC):
         are deliberately read-only. Raises if there isn't enough recorded
         stock to satisfy the disposal."""
 
+    @abstractmethod
+    def add_report_note(self, report_id: str, notes: str, *, actioned_by_user_id: int) -> None:
+        """Writes a plain Policy_History note against this report — the
+        same write path record_disposal uses for its own note (StatusID=23,
+        PersonID=NULL, which Handl's own UI renders as authored by
+        "System"), exposed generally so other flows leave a visible trail
+        on the Handl claim too. Used by the locksmith portal's on-route/
+        arrived/completed job tracking (see apps.locksmith_portal.views) to
+        log a link to each stage's photos, since Handl has no API for
+        actually attaching a file (confirmed live: the "Add Note" file
+        upload has no API, and the uploaded file's Policy_History.Notes
+        text carries no path/URL — the real file lands in a flat /Uploads/
+        folder on Handl's own web server with no accessible attachment
+        table, so we store photos ourselves and only leave a link here).
+        WRITES to Handl — same write-capable connection as record_disposal."""
+
 
 class MockHandlClient(HandlClient):
     """Deterministic fake data for local dev/tests, standing in until the
@@ -355,6 +371,25 @@ class MockHandlClient(HandlClient):
         locksmith_display_name: str,
     ) -> None:
         pass
+
+    def add_report_note(self, report_id: str, notes: str, *, actioned_by_user_id: int) -> None:
+        pass
+
+
+def _insert_policy_history_note(cursor, *, report_id: str, notes: str, actioned_by_user_id: int, when) -> None:
+    """Shared by record_disposal and add_report_note — StatusID=23/
+    PersonID=NULL is the exact combination confirmed live against
+    hundreds of real disposal notes to render as authored by "System"
+    in Handl's own UI."""
+    cursor.execute(
+        """
+        INSERT INTO Policy_History
+            (ReportID, StatusID, PersonID, Notes, ActionedBy, ActionedDate, Pinned)
+        VALUES
+            (%(report_id)s, 23, NULL, %(notes)s, %(actioned_by)s, %(now)s, 0)
+        """,
+        {"report_id": report_id, "notes": notes, "actioned_by": actioned_by_user_id, "now": when},
+    )
 
 
 class SQLHandlClient(HandlClient):
@@ -886,19 +921,20 @@ class SQLHandlClient(HandlClient):
                 f"'{locksmith_display_name}' has disposed of {quantity} "
                 f"'{part_name}(s) ({part_code})'."
             )
-            cursor.execute(
-                """
-                INSERT INTO Policy_History
-                    (ReportID, StatusID, PersonID, Notes, ActionedBy, ActionedDate, Pinned)
-                VALUES
-                    (%(report_id)s, 23, NULL, %(notes)s, %(actioned_by)s, %(now)s, 0)
-                """,
-                {
-                    "report_id": report_id,
-                    "notes": notes,
-                    "actioned_by": actioned_by_user_id,
-                    "now": now,
-                },
+            _insert_policy_history_note(
+                cursor, report_id=report_id, notes=notes,
+                actioned_by_user_id=actioned_by_user_id, when=now,
+            )
+            conn.commit()
+
+    def add_report_note(self, report_id: str, notes: str, *, actioned_by_user_id: int) -> None:
+        from datetime import datetime as _datetime
+
+        with self._write_connection() as conn:
+            cursor = conn.cursor()
+            _insert_policy_history_note(
+                cursor, report_id=report_id, notes=notes,
+                actioned_by_user_id=actioned_by_user_id, when=_datetime.utcnow(),
             )
             conn.commit()
 

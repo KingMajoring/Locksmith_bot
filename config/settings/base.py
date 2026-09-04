@@ -103,6 +103,14 @@ HANDL_SQL_WRITE_PASSWORD = env("HANDL_SQL_WRITE_PASSWORD", default="")
 # was added, so their own id isn't known yet.
 HANDL_PORTAL_CREATED_BY_USER_ID = env.int("HANDL_PORTAL_CREATED_BY_USER_ID", default=0)
 
+# Locksmith portal job-visit photos (on-route/arrived/completed — see
+# apps/integrations/photos.py for why this can't just go into Handl).
+# Until set, get_photo_storage() falls back to MockPhotoStorage (local
+# MEDIA_ROOT) so the rest of the app can be built/tested without a real
+# Storage Account.
+AZURE_STORAGE_CONNECTION_STRING = env("AZURE_STORAGE_CONNECTION_STRING", default="")
+AZURE_STORAGE_CONTAINER = env("AZURE_STORAGE_CONTAINER", default="job-photos")
+
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
     {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
@@ -123,6 +131,11 @@ USE_TZ = True
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 STATICFILES_DIRS = [BASE_DIR / "static"]
+
+# Local-dev-only fallback for MockPhotoStorage — production always has
+# AZURE_STORAGE_CONNECTION_STRING set, so nothing is ever served from here.
+MEDIA_URL = "media/"
+MEDIA_ROOT = BASE_DIR / "media"
 STORAGES = {
     "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
     "staticfiles": {"BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"},

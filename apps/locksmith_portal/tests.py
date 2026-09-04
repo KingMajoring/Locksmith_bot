@@ -2,6 +2,7 @@ from datetime import date, timedelta
 from unittest.mock import MagicMock, patch
 
 from django.contrib.auth import get_user_model
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
@@ -12,7 +13,7 @@ from apps.locksmiths.models import Locksmith
 from apps.stock_accuracy.models import WeeklyStockCheck
 from apps.stock_accuracy.services.generation import generate_weekly_check
 
-from .models import PortalDisposal
+from .models import JobVisit, JobVisitPhoto, PortalDisposal
 
 User = get_user_model()
 
@@ -216,6 +217,14 @@ class JobDetailTests(TestCase):
         self.client.force_login(self.user)
         self.today = timezone.localdate()
         self.order_no = f"496390_{self.today.isoformat()}"
+        # The dispose-parts page is gated behind "arrived" (see
+        # JobVisitTests for that gating itself) — most of this class is
+        # about the disposal mechanics, not the gate, so start each test
+        # already past it.
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            stage=JobVisit.Stage.ARRIVED, arrived_at=timezone.now(),
+        )
 
     def _mock_optimo(self, mock_get_optimo):
         mock_client = MagicMock()
@@ -433,6 +442,10 @@ class JobDetailTests(TestCase):
         mock_handl = MagicMock()
         mock_handl.list_current_stock.return_value = []
         mock_get_handl.return_value = mock_handl
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=past_order_no, report_id="555555",
+            stage=JobVisit.Stage.ARRIVED, arrived_at=timezone.now(),
+        )
 
         url = reverse("locksmith_portal:job_detail", args=[past_order_no])
         response = self.client.get(url, {"date": yesterday.isoformat()})
@@ -513,3 +526,259 @@ class StaffPreviewTests(TestCase):
         self.locksmith.save(update_fields=["active"])
         url = reverse("locksmith_portal:start_preview", args=[self.locksmith.pk])
         self.assertEqual(self.client.get(url).status_code, 404)
+
+
+def _fake_photo(name="site.jpg", content=b"fake-bytes", content_type="image/jpeg"):
+    return SimpleUploadedFile(name, content, content_type=content_type)
+
+
+class JobVisitWorkflowTests(TestCase):
+    """On route -> arrived (+ before photos) -> parts disposed ->
+    complete (+ after photos, notes, outcome) — see views._job_visit_context
+    and the JobVisit.Stage gating in job_arrived/job_detail/job_complete."""
+
+    def setUp(self):
+        self.locksmith, self.user = _make_locksmith_user(soter_ids=("885",), driver_serials=("011",))
+        self.client.force_login(self.user)
+        self.today = timezone.localdate()
+        self.order_no = f"496390_{self.today.isoformat()}"
+
+        self.optimo_patch = patch("apps.locksmith_portal.views.get_optimo_client")
+        mock_get_optimo = self.optimo_patch.start()
+        self.addCleanup(self.optimo_patch.stop)
+        mock_client = MagicMock()
+        mock_client.list_orders_for_date.return_value = [
+            OptimoOrderSummary(
+                order_no=self.order_no, driver_serial="011", distance_metres=0, travel_time_seconds=0
+            ),
+        ]
+        mock_get_optimo.return_value = mock_client
+
+        self.handl_patch = patch("apps.locksmith_portal.views.get_handl_client")
+        mock_get_handl = self.handl_patch.start()
+        self.addCleanup(self.handl_patch.stop)
+        self.mock_handl = MagicMock()
+        self.mock_handl.list_current_stock.return_value = []
+        mock_get_handl.return_value = self.mock_handl
+
+        self.storage_patch = patch("apps.locksmith_portal.views.get_photo_storage")
+        mock_get_storage = self.storage_patch.start()
+        self.addCleanup(self.storage_patch.stop)
+        self.mock_storage = MagicMock()
+        self.mock_storage.upload.side_effect = (
+            lambda **kwargs: f"https://example.blob.core.windows.net/job-photos/{kwargs['report_id']}/{kwargs['stage']}/{kwargs['filename']}"
+        )
+        mock_get_storage.return_value = self.mock_storage
+
+    def _visit(self):
+        return JobVisit.objects.get(locksmith=self.locksmith, order_no=self.order_no)
+
+    # --- overview -----------------------------------------------------
+
+    def test_overview_creates_visit_and_shows_on_route_action(self):
+        url = reverse("locksmith_portal:job_overview", args=[self.order_no])
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["visit"].stage, JobVisit.Stage.NOT_STARTED)
+        self.assertContains(response, "Mark on route")
+        self.assertNotContains(response, "Arrived</a>")
+
+    def test_overview_not_on_schedule_redirects(self):
+        url = reverse("locksmith_portal:job_overview", args=[f"999999_{self.today.isoformat()}"])
+        response = self.client.get(url)
+        self.assertRedirects(
+            response, f"{reverse('locksmith_portal:dashboard')}?date={self.today.isoformat()}"
+        )
+
+    # --- on route -------------------------------------------------------
+
+    def test_on_route_advances_stage_and_writes_handl_note(self):
+        url = reverse("locksmith_portal:job_on_route", args=[self.order_no])
+        response = self.client.post(url)
+
+        visit = self._visit()
+        self.assertEqual(visit.stage, JobVisit.Stage.ON_ROUTE)
+        self.assertIsNotNone(visit.on_route_at)
+        self.assertRedirects(
+            response,
+            f"{reverse('locksmith_portal:job_overview', args=[self.order_no])}?date={self.today.isoformat()}",
+        )
+        self.mock_handl.add_report_note.assert_called_once()
+        args, kwargs = self.mock_handl.add_report_note.call_args
+        self.assertEqual(args[0], "496390")
+        self.assertIn("on route", args[1])
+
+    def test_on_route_get_not_allowed(self):
+        url = reverse("locksmith_portal:job_on_route", args=[self.order_no])
+        self.assertEqual(self.client.get(url).status_code, 405)
+
+    def test_on_route_is_idempotent(self):
+        url = reverse("locksmith_portal:job_on_route", args=[self.order_no])
+        self.client.post(url)
+        first_time = self._visit().on_route_at
+        self.client.post(url)
+        self.assertEqual(self._visit().on_route_at, first_time)
+        self.mock_handl.add_report_note.assert_called_once()
+
+    # --- arrived (before photos) ----------------------------------------
+
+    def test_arrived_requires_on_route_first(self):
+        url = reverse("locksmith_portal:job_arrived", args=[self.order_no])
+        response = self.client.get(url)
+        self.assertRedirects(
+            response,
+            f"{reverse('locksmith_portal:job_overview', args=[self.order_no])}?date={self.today.isoformat()}",
+        )
+
+    def test_arrived_requires_at_least_one_photo(self):
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            stage=JobVisit.Stage.ON_ROUTE, on_route_at=timezone.now(),
+        )
+        url = reverse("locksmith_portal:job_arrived", args=[self.order_no])
+        response = self.client.post(url, {})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self._visit().stage, JobVisit.Stage.ON_ROUTE)
+        self.assertContains(response, "Add at least one")
+
+    def test_arrived_uploads_photo_advances_stage_and_writes_note(self):
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            stage=JobVisit.Stage.ON_ROUTE, on_route_at=timezone.now(),
+        )
+        url = reverse("locksmith_portal:job_arrived", args=[self.order_no])
+        response = self.client.post(url, {"photos": [_fake_photo()]})
+
+        visit = self._visit()
+        self.assertEqual(visit.stage, JobVisit.Stage.ARRIVED)
+        self.assertIsNotNone(visit.arrived_at)
+        self.assertEqual(visit.photos.count(), 1)
+        self.assertEqual(visit.photos.first().kind, JobVisitPhoto.Kind.BEFORE)
+        self.assertRedirects(
+            response,
+            f"{reverse('locksmith_portal:job_overview', args=[self.order_no])}?date={self.today.isoformat()}",
+        )
+        note_text = self.mock_handl.add_report_note.call_args[0][1]
+        self.assertIn("arrived", note_text)
+        self.assertIn(visit.photos.first().url, note_text)
+
+    def test_arrived_rejects_non_image_file_and_does_not_advance(self):
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            stage=JobVisit.Stage.ON_ROUTE, on_route_at=timezone.now(),
+        )
+        url = reverse("locksmith_portal:job_arrived", args=[self.order_no])
+        bad_file = SimpleUploadedFile("notes.txt", b"hello", content_type="text/plain")
+        response = self.client.post(url, {"photos": [bad_file]})
+
+        self.assertEqual(self._visit().stage, JobVisit.Stage.ON_ROUTE)
+        self.assertContains(response, "isn&#x27;t an image")
+        self.mock_handl.add_report_note.assert_not_called()
+
+    # --- parts continue ---------------------------------------------------
+
+    def test_parts_continue_advances_to_parts_done(self):
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            stage=JobVisit.Stage.ARRIVED, arrived_at=timezone.now(),
+        )
+        url = reverse("locksmith_portal:job_parts_continue", args=[self.order_no])
+        response = self.client.post(url)
+
+        visit = self._visit()
+        self.assertEqual(visit.stage, JobVisit.Stage.PARTS_DONE)
+        self.assertIsNotNone(visit.parts_done_at)
+        self.assertRedirects(
+            response,
+            f"{reverse('locksmith_portal:job_complete', args=[self.order_no])}?date={self.today.isoformat()}",
+        )
+
+    # --- complete -----------------------------------------------------
+
+    def test_complete_requires_parts_done_first(self):
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            stage=JobVisit.Stage.ARRIVED, arrived_at=timezone.now(),
+        )
+        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        response = self.client.get(url)
+        self.assertRedirects(
+            response,
+            f"{reverse('locksmith_portal:job_overview', args=[self.order_no])}?date={self.today.isoformat()}",
+        )
+
+    def test_complete_requires_photo_and_outcome(self):
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            stage=JobVisit.Stage.PARTS_DONE, parts_done_at=timezone.now(),
+        )
+        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        response = self.client.post(url, {"notes": "all good"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self._visit().stage, JobVisit.Stage.PARTS_DONE)
+        self.assertContains(response, "Add at least one photo")
+        self.assertContains(response, "Choose Completed or Failed")
+
+    def test_complete_success_marks_done_and_writes_note_with_outcome_and_notes(self):
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            stage=JobVisit.Stage.PARTS_DONE, parts_done_at=timezone.now(),
+        )
+        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        response = self.client.post(
+            url, {"photos": [_fake_photo(name="after.jpg")], "notes": "Left a spare key.", "outcome": "completed"}
+        )
+
+        visit = self._visit()
+        self.assertEqual(visit.stage, JobVisit.Stage.DONE)
+        self.assertEqual(visit.outcome, JobVisit.Outcome.COMPLETED)
+        self.assertEqual(visit.notes, "Left a spare key.")
+        self.assertIsNotNone(visit.completed_at)
+        self.assertEqual(visit.photos.filter(kind=JobVisitPhoto.Kind.AFTER).count(), 1)
+        self.assertRedirects(
+            response,
+            f"{reverse('locksmith_portal:job_overview', args=[self.order_no])}?date={self.today.isoformat()}",
+        )
+        note_text = self.mock_handl.add_report_note.call_args[0][1]
+        self.assertIn("Completed", note_text)
+        self.assertIn("Left a spare key.", note_text)
+
+    def test_complete_failed_outcome_recorded(self):
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            stage=JobVisit.Stage.PARTS_DONE, parts_done_at=timezone.now(),
+        )
+        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        self.client.post(url, {"photos": [_fake_photo()], "outcome": "failed"})
+        self.assertEqual(self._visit().outcome, JobVisit.Outcome.FAILED)
+
+    def test_complete_already_done_redirects_with_info(self):
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            stage=JobVisit.Stage.DONE, completed_at=timezone.now(),
+        )
+        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        response = self.client.get(url, follow=True)
+        self.assertContains(response, "already marked done")
+
+    # --- parts (job_detail) gated behind arrived ------------------------
+
+    def test_job_detail_gated_until_arrived(self):
+        url = reverse("locksmith_portal:job_detail", args=[self.order_no])
+        response = self.client.get(url)
+        self.assertRedirects(
+            response,
+            f"{reverse('locksmith_portal:job_overview', args=[self.order_no])}?date={self.today.isoformat()}",
+        )
+
+    # --- login required across the new views -----------------------------
+
+    def test_login_required_on_new_views(self):
+        self.client.logout()
+        for name in ("job_overview", "job_arrived", "job_complete"):
+            url = reverse(f"locksmith_portal:{name}", args=[self.order_no])
+            self.assertEqual(self.client.get(url).status_code, 302, name)
+        for name in ("job_on_route", "job_parts_continue"):
+            url = reverse(f"locksmith_portal:{name}", args=[self.order_no])
+            self.assertEqual(self.client.post(url).status_code, 302, name)

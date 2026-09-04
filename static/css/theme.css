@@ -323,6 +323,44 @@ input[type=number] { width: 5rem; }
 .disposal-list li:last-child { border-bottom: none; }
 .disposal-list .sub { font-weight: 400; }
 
+.stage-list { display: flex; flex-direction: column; gap: 0.9rem; }
+.stage-row {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  padding-bottom: 0.9rem;
+  border-bottom: 1px solid var(--border);
+}
+.stage-row:last-child { padding-bottom: 0; border-bottom: none; }
+.stage-num {
+  flex-shrink: 0;
+  width: 1.7rem;
+  height: 1.7rem;
+  border-radius: 50%;
+  background: var(--bg);
+  border: 2px solid var(--border);
+  color: var(--ink-soft);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 0.85rem;
+}
+.stage-row.stage-done .stage-num {
+  background: var(--wgtk-green);
+  border-color: var(--wgtk-green);
+  color: #fff;
+}
+.stage-body { flex: 1; min-width: 0; }
+.stage-body strong { display: block; font-size: 0.95rem; }
+.stage-row form, .stage-row a.btn { flex-shrink: 0; width: auto; }
+.stage-row .btn { padding: 0.5rem 0.9rem; font-size: 0.85rem; }
+
+form input[type=file] { display: block; width: 100%; margin-bottom: 0.5rem; }
+textarea { width: 100%; padding: 0.6rem 0.7rem; font-size: 1rem; font-family: var(--font); border: 1px solid var(--border); border-radius: var(--radius-sm); resize: vertical; }
+.outcome-choice { display: flex; gap: 1.2rem; }
+.outcome-choice label { display: flex; align-items: center; gap: 0.4rem; font-weight: 600; }
+
 .dispose-row { display: flex; gap: 0.5rem; margin-bottom: 0.6rem; }
 .dispose-row input[type=text] { flex: 1; min-width: 0; padding: 0.55rem 0.7rem; font-size: 1rem; }
 .dispose-row input[type=number] { width: 4.5rem; flex-shrink: 0; }

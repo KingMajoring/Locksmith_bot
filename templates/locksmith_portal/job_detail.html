@@ -1,7 +1,7 @@
 {% extends "locksmith_portal/base.html" %}
 {% block title %}Job {{ report_id }} — WGTK Locksmith Portal{% endblock %}
 {% block content %}
-<a class="back-link" href="{{ dashboard_url }}">&larr; Back</a>
+<a class="back-link" href="{{ overview_url }}">&larr; Back</a>
 <h1>Job {{ report_id }}</h1>
 {% if not is_today %}
   <p class="sub">Adding disposals for {{ selected_date|date:"D j M Y" }}.</p>
@@ -118,4 +118,9 @@
 {% else %}
   <p class="empty">You don't have any parts in stock to dispose.</p>
 {% endif %}
+
+<form method="post" action="{% url 'locksmith_portal:job_parts_continue' order_no=order_no %}?date={{ selected_date|date:'Y-m-d' }}">
+  {% csrf_token %}
+  <button class="btn-secondary" type="submit">Done disposing parts — continue to finish job</button>
+</form>
 {% endblock %}

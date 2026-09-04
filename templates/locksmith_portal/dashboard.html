@@ -33,13 +33,17 @@
   {% endif %}
   {% if jobs %}
     {% for job in jobs %}
-      <a class="job{% if job.disposed_quantity %} job-done{% endif %}"
-         href="{% url 'locksmith_portal:job_detail' order_no=job.order_no %}?date={{ selected_date|date:'Y-m-d' }}">
+      <a class="job{% if job.visit_stage == 'done' or job.disposed_quantity %} job-done{% endif %}"
+         href="{% url 'locksmith_portal:job_overview' order_no=job.order_no %}?date={{ selected_date|date:'Y-m-d' }}">
         <strong>Job {{ job.report_id }}</strong>
-        {% if job.disposed_quantity %}
+        {% if job.visit_stage == 'done' %}
+          <span class="job-tick">&#10003; Done{% if job.disposed_quantity %} — {{ job.disposed_quantity }} part{{ job.disposed_quantity|pluralize }} disposed{% endif %}</span>
+        {% elif job.disposed_quantity %}
           <span class="job-tick">&#10003; {{ job.disposed_quantity }} part{{ job.disposed_quantity|pluralize }} disposed</span>
+        {% elif job.visit_stage != 'not_started' %}
+          <span>{{ job.visit_stage_label }}</span>
         {% else %}
-          <span>Dispose parts used on this job</span>
+          <span>Start this job</span>
         {% endif %}
       </a>
     {% endfor %}

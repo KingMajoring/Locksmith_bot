@@ -1,0 +1,13 @@
+{% extends "locksmith_portal/base.html" %}
+{% block title %}Job {{ report_id }} — WGTK Locksmith Portal{% endblock %}
+{% block content %}
+<a class="back-link" href="{{ back_url }}">&larr; Back</a>
+<h1>{{ heading }}</h1>
+<p>{{ instructions }}</p>
+
+<form method="post" action="{{ action_url }}" enctype="multipart/form-data" class="card">
+  {% csrf_token %}
+  <input type="file" name="photos" accept="image/*" capture="environment" multiple required>
+  <p style="margin-top:1rem;"><button class="btn" type="submit">Save photos &amp; continue</button></p>
+</form>
+{% endblock %}

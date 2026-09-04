@@ -25,6 +25,7 @@ happening — not a sandbox.
 """
 from __future__ import annotations
 
+import logging
 from datetime import date, timedelta
 
 from django.conf import settings
@@ -34,16 +35,21 @@ from django.db.models import Count, Sum
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
+from django.views.decorators.http import require_POST
 
 from apps.integrations.handl import get_handl_client
 from apps.integrations.optimo import get_optimo_client
+from apps.integrations.photos import get_photo_storage
 from apps.job_completion.services.pulling import _report_id_from_order_no
 from apps.locksmiths.models import Locksmith
 from apps.stock_accuracy.models import WeeklyStockCheck
 
-from .models import PortalDisposal
+from .models import JobVisit, JobVisitPhoto, PortalDisposal
+
+logger = logging.getLogger(__name__)
 
 _PREVIEW_SESSION_KEY = "locksmith_portal_preview_id"
+MAX_PHOTO_BYTES = 15 * 1024 * 1024
 
 
 def _locksmith_for_request(request):
@@ -132,6 +138,83 @@ def _disposal_totals(locksmith, order_nos):
     return {row["order_no"]: row for row in rows}
 
 
+def _job_visit_context(request, order_no):
+    """Common setup for every on-route/arrived/parts/complete view:
+    resolves the locksmith, report_id, and selected day, confirms the
+    job is genuinely scheduled for them that day, and gets-or-creates
+    this locksmith's JobVisit for it. Returns (context_dict, None) on
+    success, or (None, redirect_response) — having already set the
+    appropriate message — if any of that fails, so callers just do
+    `ctx, early = _job_visit_context(...); if ctx is None: return early`."""
+    locksmith = _locksmith_for_request(request)
+    if locksmith is None:
+        return None, _no_locksmith_access(request)
+
+    report_id = _report_id_from_order_no(order_no)
+    if report_id is None:
+        messages.error(request, "That job doesn't have a valid job reference.")
+        return None, redirect("locksmith_portal:dashboard")
+
+    selected_date = _selected_date(request)
+    dashboard_url = f"{reverse('locksmith_portal:dashboard')}?date={selected_date.isoformat()}"
+
+    scheduled = {job["order_no"] for job in _jobs_for_date(locksmith, selected_date)}
+    if order_no not in scheduled:
+        messages.error(request, "That job isn't on your schedule for that day.")
+        return None, redirect(dashboard_url)
+
+    visit, _created = JobVisit.objects.get_or_create(
+        locksmith=locksmith, order_no=order_no, defaults={"report_id": report_id}
+    )
+
+    return {
+        "locksmith": locksmith,
+        "report_id": report_id,
+        "selected_date": selected_date,
+        "dashboard_url": dashboard_url,
+        "visit": visit,
+    }, None
+
+
+def _write_handl_note(locksmith, report_id, text):
+    """Best-effort — a Handl note recording a job-visit stage is useful
+    but not critical the way a disposal's stock/financial write is, so
+    a failure here is logged (visible in App Service logs / Application
+    Insights) rather than surfaced to the locksmith or blocking their
+    progress through the job."""
+    handl = get_handl_client()
+    actioned_by = locksmith.soter_user_id or settings.HANDL_PORTAL_CREATED_BY_USER_ID
+    try:
+        handl.add_report_note(report_id, text, actioned_by_user_id=actioned_by)
+    except Exception:
+        logger.exception("Failed to write Handl note for report %s", report_id)
+
+
+def _save_visit_photos(request, visit, report_id, stage, kind, files):
+    """Validates and uploads each file via get_photo_storage(), records
+    a JobVisitPhoto per one, and returns the list of URLs saved (for
+    the Handl note) — a file that fails type/size validation is
+    skipped with an error message rather than aborting the whole
+    batch, so one bad file doesn't lose the rest of a locksmith's
+    photos."""
+    storage = get_photo_storage()
+    urls = []
+    for f in files:
+        if not (f.content_type or "").startswith("image/"):
+            messages.error(request, f"'{f.name}' isn't an image — skipped.")
+            continue
+        if f.size > MAX_PHOTO_BYTES:
+            messages.error(request, f"'{f.name}' is too large ({MAX_PHOTO_BYTES // (1024 * 1024)}MB max) — skipped.")
+            continue
+        url = storage.upload(
+            report_id=report_id, stage=stage, filename=f.name,
+            content=f.read(), content_type=f.content_type,
+        )
+        JobVisitPhoto.objects.create(visit=visit, kind=kind, url=url)
+        urls.append(url)
+    return urls
+
+
 @login_required
 def dashboard(request):
     locksmith = _locksmith_for_request(request)
@@ -143,11 +226,19 @@ def dashboard(request):
 
     latest_check = locksmith.stock_checks.order_by("-week_starting").first()
     jobs = _jobs_for_date(locksmith, selected_date)
-    totals = _disposal_totals(locksmith, [job["order_no"] for job in jobs])
+    order_nos = [job["order_no"] for job in jobs]
+    totals = _disposal_totals(locksmith, order_nos)
+    visits = {
+        v.order_no: v
+        for v in JobVisit.objects.filter(locksmith=locksmith, order_no__in=order_nos)
+    }
     for job in jobs:
         summary = totals.get(job["order_no"])
         job["disposed_quantity"] = summary["quantity"] if summary else 0
         job["disposed_parts"] = summary["parts"] if summary else 0
+        visit = visits.get(job["order_no"])
+        job["visit_stage"] = visit.stage if visit else JobVisit.Stage.NOT_STARTED
+        job["visit_stage_label"] = visit.get_stage_display() if visit else None
 
     return render(
         request,
@@ -212,26 +303,202 @@ def stock_check_entry(request, pk):
 
 
 @login_required
+def job_overview(request, order_no):
+    """The stepper landing page for one job: on route -> arrived (before
+    photos) -> parts disposed -> complete (after photos, notes,
+    outcome) — each step's action link only shown once the previous one
+    is done, per stage in JobVisit.Stage."""
+    ctx, early = _job_visit_context(request, order_no)
+    if ctx is None:
+        return early
+    visit = ctx["visit"]
+
+    disposal_count = PortalDisposal.objects.filter(
+        locksmith=ctx["locksmith"], order_no=order_no
+    ).count()
+
+    return render(
+        request,
+        "locksmith_portal/job_overview.html",
+        {
+            "order_no": order_no,
+            "report_id": ctx["report_id"],
+            "visit": visit,
+            "disposal_count": disposal_count,
+            "selected_date": ctx["selected_date"],
+            "is_today": ctx["selected_date"] == timezone.localdate(),
+            "dashboard_url": ctx["dashboard_url"],
+            "is_preview": _is_preview(request),
+        },
+    )
+
+
+@login_required
+@require_POST
+def job_on_route(request, order_no):
+    ctx, early = _job_visit_context(request, order_no)
+    if ctx is None:
+        return early
+    locksmith, report_id, visit = ctx["locksmith"], ctx["report_id"], ctx["visit"]
+
+    if visit.stage == JobVisit.Stage.NOT_STARTED:
+        visit.stage = JobVisit.Stage.ON_ROUTE
+        visit.on_route_at = timezone.now()
+        visit.save(update_fields=["stage", "on_route_at"])
+        _write_handl_note(
+            locksmith, report_id, f"'{locksmith.van_soter_display_name}' is on route to this job."
+        )
+
+    overview_url = f"{reverse('locksmith_portal:job_overview', args=[order_no])}?date={ctx['selected_date'].isoformat()}"
+    return redirect(overview_url)
+
+
+@login_required
+def job_arrived(request, order_no):
+    ctx, early = _job_visit_context(request, order_no)
+    if ctx is None:
+        return early
+    locksmith, report_id, visit = ctx["locksmith"], ctx["report_id"], ctx["visit"]
+    selected_date = ctx["selected_date"]
+    overview_url = f"{reverse('locksmith_portal:job_overview', args=[order_no])}?date={selected_date.isoformat()}"
+
+    if visit.stage not in (JobVisit.Stage.ON_ROUTE, JobVisit.Stage.ARRIVED):
+        messages.error(request, "Mark yourself on route first.")
+        return redirect(overview_url)
+
+    if request.method == "POST":
+        photos = request.FILES.getlist("photos")
+        if not photos:
+            messages.error(request, "Add at least one before-job photo to continue.")
+        else:
+            urls = _save_visit_photos(
+                request, visit, report_id, "before", JobVisitPhoto.Kind.BEFORE, photos
+            )
+            if urls:
+                visit.stage = JobVisit.Stage.ARRIVED
+                visit.arrived_at = timezone.now()
+                visit.save(update_fields=["stage", "arrived_at"])
+                _write_handl_note(
+                    locksmith, report_id,
+                    f"'{locksmith.van_soter_display_name}' has arrived on site. "
+                    f"Before-job photos: {', '.join(urls)}",
+                )
+                messages.success(request, "Arrival photos saved.")
+                return redirect(overview_url)
+
+    return render(
+        request,
+        "locksmith_portal/job_photo_upload.html",
+        {
+            "order_no": order_no,
+            "report_id": report_id,
+            "heading": "Arrived — before photos",
+            "instructions": "Take a photo of the vehicle/site before you start work.",
+            "action_url": f"{reverse('locksmith_portal:job_arrived', args=[order_no])}?date={selected_date.isoformat()}",
+            "dashboard_url": ctx["dashboard_url"],
+            "back_url": overview_url,
+            "is_preview": _is_preview(request),
+        },
+    )
+
+
+@login_required
+@require_POST
+def job_parts_continue(request, order_no):
+    ctx, early = _job_visit_context(request, order_no)
+    if ctx is None:
+        return early
+    visit = ctx["visit"]
+
+    if visit.stage == JobVisit.Stage.ARRIVED:
+        visit.stage = JobVisit.Stage.PARTS_DONE
+        visit.parts_done_at = timezone.now()
+        visit.save(update_fields=["stage", "parts_done_at"])
+
+    complete_url = f"{reverse('locksmith_portal:job_complete', args=[order_no])}?date={ctx['selected_date'].isoformat()}"
+    return redirect(complete_url)
+
+
+@login_required
+def job_complete(request, order_no):
+    ctx, early = _job_visit_context(request, order_no)
+    if ctx is None:
+        return early
+    locksmith, report_id, visit = ctx["locksmith"], ctx["report_id"], ctx["visit"]
+    selected_date = ctx["selected_date"]
+    overview_url = f"{reverse('locksmith_portal:job_overview', args=[order_no])}?date={selected_date.isoformat()}"
+
+    if visit.stage == JobVisit.Stage.DONE:
+        messages.info(request, "This job is already marked done.")
+        return redirect(overview_url)
+    if visit.stage != JobVisit.Stage.PARTS_DONE:
+        messages.error(request, "Dispose parts (or continue past that step) first.")
+        return redirect(overview_url)
+
+    if request.method == "POST":
+        photos = request.FILES.getlist("photos")
+        notes_text = request.POST.get("notes", "").strip()
+        outcome = request.POST.get("outcome")
+
+        errors = False
+        if not photos:
+            messages.error(request, "Add at least one photo of the completed job.")
+            errors = True
+        if outcome not in (JobVisit.Outcome.COMPLETED, JobVisit.Outcome.FAILED):
+            messages.error(request, "Choose Completed or Failed.")
+            errors = True
+
+        if not errors:
+            urls = _save_visit_photos(
+                request, visit, report_id, "after", JobVisitPhoto.Kind.AFTER, photos
+            )
+            if urls:
+                visit.notes = notes_text
+                visit.outcome = outcome
+                visit.stage = JobVisit.Stage.DONE
+                visit.completed_at = timezone.now()
+                visit.save(update_fields=["notes", "outcome", "stage", "completed_at"])
+
+                note = (
+                    f"'{locksmith.van_soter_display_name}' marked this job as "
+                    f"{visit.get_outcome_display()}. After-job photos: {', '.join(urls)}"
+                )
+                if notes_text:
+                    note += f" Notes: {notes_text}"
+                _write_handl_note(locksmith, report_id, note)
+
+                messages.success(request, "Job marked complete.")
+                return redirect(overview_url)
+
+    return render(
+        request,
+        "locksmith_portal/job_complete.html",
+        {
+            "order_no": order_no,
+            "report_id": report_id,
+            "action_url": f"{reverse('locksmith_portal:job_complete', args=[order_no])}?date={selected_date.isoformat()}",
+            "dashboard_url": ctx["dashboard_url"],
+            "back_url": overview_url,
+            "is_preview": _is_preview(request),
+        },
+    )
+
+
+@login_required
 def job_detail(request, order_no):
-    locksmith = _locksmith_for_request(request)
-    if locksmith is None:
-        return _no_locksmith_access(request)
+    ctx, early = _job_visit_context(request, order_no)
+    if ctx is None:
+        return early
+    locksmith = ctx["locksmith"]
+    report_id = ctx["report_id"]
+    selected_date = ctx["selected_date"]
+    dashboard_url = ctx["dashboard_url"]
+    visit = ctx["visit"]
 
-    report_id = _report_id_from_order_no(order_no)
-    if report_id is None:
-        messages.error(request, "That job doesn't have a valid job reference.")
-        return redirect("locksmith_portal:dashboard")
-
-    selected_date = _selected_date(request)
-    dashboard_url = f"{reverse('locksmith_portal:dashboard')}?date={selected_date.isoformat()}"
-
-    # Confirm this order_no is genuinely one of the selected day's jobs
-    # assigned to this locksmith, rather than trusting whatever's in the
-    # URL.
-    scheduled = {job["order_no"] for job in _jobs_for_date(locksmith, selected_date)}
-    if order_no not in scheduled:
-        messages.error(request, "That job isn't on your schedule for that day.")
-        return redirect(dashboard_url)
+    overview_url = f"{reverse('locksmith_portal:job_overview', args=[order_no])}?date={selected_date.isoformat()}"
+    if visit.stage not in (JobVisit.Stage.ARRIVED, JobVisit.Stage.PARTS_DONE):
+        messages.error(request, "Mark yourself arrived (with before photos) first.")
+        return redirect(overview_url)
 
     handl = get_handl_client()
     soter_ids = locksmith.soter_id_list
@@ -354,6 +621,7 @@ def job_detail(request, order_no):
             "selected_date": selected_date,
             "is_today": selected_date == timezone.localdate(),
             "dashboard_url": dashboard_url,
+            "overview_url": overview_url,
             "is_preview": _is_preview(request),
         },
     )
