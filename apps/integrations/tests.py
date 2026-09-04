@@ -668,6 +668,19 @@ class RealOptimoClientCompletionStatusTests(TestCase):
         self.assertEqual(data["endTime"], {"utcTime": "2026-09-04T09:45:12"})
 
     @patch("requests.post")
+    def test_strips_microseconds_optimo_rejects_as_not_isodatetime(self, mock_post):
+        # Confirmed live: timezone.now() (microsecond precision) got
+        # "'...' is not a 'isodatetime'" back from Optimo.
+        mock_post.return_value = self._mock_response([{"success": True}])
+        client = RealOptimoClient("KEY")
+        start = datetime(2026, 9, 4, 14, 14, 8, 863645, tzinfo=dt_timezone.utc)
+
+        client.update_completion_status("496390", "servicing", start_time=start)
+
+        data = mock_post.call_args.kwargs["json"]["updates"][0]["data"]
+        self.assertEqual(data["startTime"], {"utcTime": "2026-09-04T14:14:08"})
+
+    @patch("requests.post")
     def test_raises_when_optimo_rejects_the_update(self, mock_post):
         response = MagicMock()
         response.json.return_value = {

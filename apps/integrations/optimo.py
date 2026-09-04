@@ -306,10 +306,13 @@ def _parse_optimo_time(time_obj: dict | None) -> datetime | None:
 
 def _format_optimo_time(value: datetime) -> str:
     """Optimo's utcTime fields are a bare ISO datetime string with no
-    offset, interpreted as UTC by convention (per the API reference)."""
+    offset, interpreted as UTC by convention (per the API reference),
+    and no fractional seconds — confirmed live: Django's timezone.now()
+    includes microseconds, and Optimo rejected that with "'...' is not
+    a 'isodatetime'"."""
     if value.tzinfo is not None:
         value = value.astimezone(dt_timezone.utc).replace(tzinfo=None)
-    return value.isoformat()
+    return value.replace(microsecond=0).isoformat()
 
 
 def get_optimo_client() -> OptimoClient:
