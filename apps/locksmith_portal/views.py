@@ -46,9 +46,38 @@ from apps.job_completion.services.pulling import _report_id_from_order_no
 from apps.locksmiths.models import Locksmith
 from apps.stock_accuracy.models import WeeklyStockCheck
 
-from .models import JobVisit, JobVisitPhoto, PortalDisposal, PortalPhotoPrompt, PortalSettings
+from .models import JobVisit, JobVisitPhoto, PortalDisposal
 
 logger = logging.getLogger(__name__)
+
+DISCLAIMER_TEXT = (
+    "We need to attempt to gain access with a rod and airbag. This is by "
+    "placing an airbag in the door frame to provide enough gap to get a rod "
+    "inside to attempt to pull the door handle. Although damage is rare, it "
+    "might cause small bodywork damage that WGTK can't be held liable for."
+)
+
+# Named photo slots for the completion step, by service (Handl loss_type
+# display label — see services/labels.py) — the specific evidence photos
+# the business wants captured per job type, rather than one generic
+# "after" bucket. (label, required) pairs.
+_AFTER_PHOTO_SLOTS_BY_SERVICE = {
+    "AKL": [
+        (JobVisitPhoto.Kind.FRONT_OF_CAR, True),
+        (JobVisitPhoto.Kind.DOOR_LOCK, True),
+        (JobVisitPhoto.Kind.DAMAGE, False),
+        (JobVisitPhoto.Kind.KEYS_SUPPLIED, True),
+        (JobVisitPhoto.Kind.IGNITION_ON, True),
+    ],
+    "Spare Key": [
+        (JobVisitPhoto.Kind.FRONT_OF_CAR, True),
+        (JobVisitPhoto.Kind.DOOR_LOCK, True),
+        (JobVisitPhoto.Kind.DAMAGE, False),
+        (JobVisitPhoto.Kind.KEYS_SUPPLIED, True),
+        (JobVisitPhoto.Kind.CLIENT_KEY, True),
+        (JobVisitPhoto.Kind.IGNITION_ON, True),
+    ],
+}
 
 
 def _loss_label_for(report_id):
@@ -64,37 +93,21 @@ def _loss_label_for(report_id):
     return display_loss_type(details.loss_type) if details else ""
 
 
-def _photo_prompts(service_label, step):
-    """(kind, required, label) tuples, in admin-configured order (see
-    PortalPhotoPrompt in the Django admin), for this service+step —
-    falls back to the "Default" service_label's rows for that step when
-    nothing's configured for this specific service (e.g. a loss_type
-    nobody's added rows for yet), so there's always a sane prompt."""
-    qs = PortalPhotoPrompt.objects.filter(
-        service_label=service_label, step=step, active=True
-    ).order_by("order", "id")
-    if not qs.exists():
-        qs = PortalPhotoPrompt.objects.filter(
-            service_label=PortalPhotoPrompt.DEFAULT_SERVICE_LABEL, step=step, active=True
-        ).order_by("order", "id")
-    return [(p.kind, p.required, p.display_label) for p in qs]
-
-
 def _after_photo_slots(loss_label):
-    """(kind, required, label) tuples for the completion step's photo
-    prompts. Gain access is handled entirely at the earlier access-
-    method step (see job_access_method — how they got in, and door-
-    frame photos for an airbag entry, both happen before parts
-    disposal), so it just gets the Default fallback here like anything
-    else not specifically configured."""
-    return _photo_prompts(loss_label, PortalPhotoPrompt.Step.COMPLETE)
+    """(kind, required) pairs for the completion step's photo prompts.
+    Gain access is handled entirely at the earlier access-method step
+    (see job_access_method — how they got in, and door-frame photos for
+    an airbag entry, both happen before parts disposal), so it just
+    gets the generic fallback here like anything else not specifically
+    modelled."""
+    return _AFTER_PHOTO_SLOTS_BY_SERVICE.get(loss_label, [(JobVisitPhoto.Kind.AFTER, True)])
 
 
 def _access_method_photo_slots(access_method):
     """Door-frame photos are only expected for an airbag entry — picking
     a lock cleanly doesn't leave anything to photograph there."""
     if access_method == JobVisit.AccessMethod.AIRBAG:
-        return _photo_prompts("Gain access", PortalPhotoPrompt.Step.ACCESS_METHOD)
+        return [(JobVisitPhoto.Kind.DOOR_FRAME, True)]
     return []
 
 
@@ -540,13 +553,12 @@ def job_access_method(request, order_no):
         elif access_method == JobVisit.AccessMethod.AIRBAG and not signature_data_url:
             errors.append("The customer needs to sign the disclaimer before continuing.")
 
-        slot_prompts = _access_method_photo_slots(access_method)
-        labels_by_kind = {kind: label for kind, _required, label in slot_prompts}
+        slot_pairs = _access_method_photo_slots(access_method)
         slot_files = {}
-        for kind, required, label in slot_prompts:
+        for kind, required in slot_pairs:
             files = request.FILES.getlist(f"photo_{kind}")
             if required and not files:
-                errors.append(f"Add at least one photo: {label}.")
+                errors.append(f"Add at least one photo: {JobVisitPhoto.Kind(kind).label}.")
             slot_files[kind] = files
 
         if errors:
@@ -579,7 +591,7 @@ def job_access_method(request, order_no):
                     continue
                 urls = _save_visit_photos(request, visit, report_id, kind, kind, files)
                 if urls:
-                    note_parts.append(f"{labels_by_kind[kind]}: {_photo_links_html(urls)}")
+                    note_parts.append(f"{JobVisitPhoto.Kind(kind).label}: {_photo_links_html(urls)}")
 
             visit.access_method = access_method
             visit.pick_used = pick_used if access_method == JobVisit.AccessMethod.PICKED else ""
@@ -589,11 +601,6 @@ def job_access_method(request, order_no):
 
             messages.success(request, "Access method recorded.")
             return redirect(overview_url)
-
-    photo_slots = [
-        {"kind": kind, "label": label, "required": required}
-        for kind, required, label in _photo_prompts("Gain access", PortalPhotoPrompt.Step.ACCESS_METHOD)
-    ]
 
     return render(
         request,
@@ -605,8 +612,7 @@ def job_access_method(request, order_no):
             "dashboard_url": ctx["dashboard_url"],
             "back_url": overview_url,
             "is_preview": _is_preview(request),
-            "disclaimer_text": PortalSettings.load().disclaimer_text,
-            "photo_slots": photo_slots,
+            "disclaimer_text": DISCLAIMER_TEXT,
         },
     )
 
@@ -674,13 +680,12 @@ def job_complete(request, order_no):
             ):
                 errors.append("Choose a reattend option.")
 
-        slot_prompts = _after_photo_slots(loss_label)
-        labels_by_kind = {kind: label for kind, _required, label in slot_prompts}
+        slot_pairs = _after_photo_slots(loss_label)
         slot_files = {}
-        for kind, required, label in slot_prompts:
+        for kind, required in slot_pairs:
             files = request.FILES.getlist(f"photo_{kind}")
             if required and not files:
-                errors.append(f"Add at least one photo: {label}.")
+                errors.append(f"Add at least one photo: {JobVisitPhoto.Kind(kind).label}.")
             slot_files[kind] = files
 
         if errors:
@@ -697,7 +702,7 @@ def job_complete(request, order_no):
                     continue
                 urls = _save_visit_photos(request, visit, report_id, kind, kind, files)
                 if urls:
-                    note_parts.append(f"{labels_by_kind[kind]}: {_photo_links_html(urls)}")
+                    note_parts.append(f"{JobVisitPhoto.Kind(kind).label}: {_photo_links_html(urls)}")
 
             if failure_reason == JobVisit.FailureReason.WRONG_PARTS:
                 note_parts.append(f"Failure reason: wrong parts (SKU needed: {escape(failure_sku_needed)}).")
@@ -742,8 +747,8 @@ def job_complete(request, order_no):
             return redirect(overview_url)
 
     photo_slots = [
-        {"kind": kind, "label": label, "required": required}
-        for kind, required, label in _after_photo_slots(loss_label)
+        {"kind": kind, "label": JobVisitPhoto.Kind(kind).label, "required": required}
+        for kind, required in _after_photo_slots(loss_label)
     ]
 
     return render(
