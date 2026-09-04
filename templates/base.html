@@ -24,6 +24,7 @@
         <div class="section">
           <a class="section-title" href="{% url 'job_completion:job_failures' %}">Job Failures{% if needs_categorization_count %} <span class="badge">{{ needs_categorization_count }}</span>{% endif %}</a>
           <a class="sub-link" href="{% url 'job_completion:model_analysis' %}">Model Analysis</a>
+          <a class="sub-link" href="{% url 'job_completion:failure_trend' %}">Failure Trend</a>
         </div>
         <div class="section">
           <a class="section-title" href="{% url 'job_completion:margin_makes' %}">Job Information</a>

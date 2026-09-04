@@ -35,6 +35,11 @@ from .services.reporting import (
     master_reason_breakdown,
     needs_categorization_queryset,
 )
+from .services.trends import (
+    locksmith_wgtk_fault_trend,
+    make_model_failure_trend,
+    monthly_failure_trend,
+)
 
 
 class FakeOptimoClient:
@@ -670,6 +675,85 @@ class ReportingTests(TestCase):
         )
 
 
+class FailureTrendTests(TestCase):
+    """Month-by-month trends (services/trends.py) — windowed off the
+    real current date (no `today` override on the public functions), so
+    tests anchor jobs to "this month"/"last month" relative to
+    date.today() rather than a fixed date."""
+
+    def setUp(self):
+        self.this_month = date.today().replace(day=1)
+        self.last_month = (self.this_month - timedelta(days=1)).replace(day=1)
+
+    def test_monthly_failure_trend_has_twelve_months_oldest_first(self):
+        rows = monthly_failure_trend()
+        self.assertEqual(len(rows), 12)
+        self.assertEqual(rows[-1]["label"], date.today().strftime("%b %Y"))
+
+    def test_monthly_failure_trend_counts_totals_and_failures_per_month(self):
+        CompletedJob.objects.create(
+            order_no="a", report_id="1", job_date=self.this_month,
+            status=CompletedJob.Status.SUCCESS,
+        )
+        CompletedJob.objects.create(
+            order_no="b", report_id="2", job_date=self.this_month,
+            status=CompletedJob.Status.FAILED,
+        )
+        CompletedJob.objects.create(
+            order_no="c", report_id="3", job_date=self.last_month,
+            status=CompletedJob.Status.FAILED,
+        )
+        rows = monthly_failure_trend()
+        current, previous = rows[-1], rows[-2]
+        self.assertEqual((current["total"], current["failed"], current["failure_rate_pct"]), (2, 1, 50.0))
+        self.assertEqual((previous["total"], previous["failed"]), (1, 1))
+
+    def test_locksmith_wgtk_fault_trend_only_counts_locksmith_master_reason(self):
+        locksmith = _make_locksmith()
+        locksmith_fault = FailureCategory.objects.create(
+            name="Wrong approach", master_reason=FailureCategory.MasterReason.WGTK_LOCKSMITH
+        )
+        client_fault = FailureCategory.objects.create(
+            name="Customer not present", master_reason=FailureCategory.MasterReason.CLIENT
+        )
+        CompletedJob.objects.create(
+            order_no="a", report_id="1", job_date=self.this_month,
+            status=CompletedJob.Status.FAILED, locksmith=locksmith, failure_category=locksmith_fault,
+        )
+        CompletedJob.objects.create(
+            order_no="b", report_id="2", job_date=self.this_month,
+            status=CompletedJob.Status.FAILED, locksmith=locksmith, failure_category=client_fault,
+        )
+        data = locksmith_wgtk_fault_trend()
+        self.assertEqual(len(data["rows"]), 1)
+        self.assertEqual(data["rows"][0]["locksmith_name"], locksmith.name)
+        self.assertEqual(data["rows"][0]["total"], 1)
+        self.assertEqual(data["rows"][0]["month_counts"][-1], 1)
+        self.assertEqual(data["months"][-1], date.today().strftime("%b %Y"))
+
+    def test_make_model_failure_trend_groups_by_normalized_family(self):
+        CompletedJob.objects.create(
+            order_no="a", report_id="1", job_date=self.this_month,
+            status=CompletedJob.Status.FAILED, make="Vauxhall", model="Corsa Sting",
+        )
+        CompletedJob.objects.create(
+            order_no="b", report_id="2", job_date=self.this_month,
+            status=CompletedJob.Status.FAILED, make="Vauxhall", model="Corsa SE Auto",
+        )
+        data = make_model_failure_trend()
+        self.assertEqual(len(data["rows"]), 1)
+        self.assertEqual(data["rows"][0]["model_family"], normalize_model("Vauxhall", "Corsa Sting"))
+        self.assertEqual(data["rows"][0]["total"], 2)
+
+    def test_make_model_failure_trend_excludes_jobs_with_no_model(self):
+        CompletedJob.objects.create(
+            order_no="a", report_id="1", job_date=self.this_month,
+            status=CompletedJob.Status.FAILED, make="", model="",
+        )
+        data = make_model_failure_trend()
+        self.assertEqual(data["rows"], [])
+
+
 class AdminCategorizationTests(TestCase):
     def setUp(self):
         self.user = get_user_model().objects.create_user(
@@ -1095,6 +1179,38 @@ class ModelAnalysisViewTests(TestCase):
     def test_login_required(self):
         self.client.logout()
         response = self.client.get(reverse("job_completion:model_analysis"))
+        self.assertEqual(response.status_code, 302)
+
+
+class FailureTrendViewTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username="office_admin", email="admin@wgtk.co.uk", password="x", is_staff=True
+        )
+        self.client.force_login(self.user)
+
+    def test_month_scope_renders(self):
+        response = self.client.get(reverse("job_completion:failure_trend"))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["scope"], "month")
+
+    def test_locksmith_scope_renders(self):
+        response = self.client.get(reverse("job_completion:failure_trend"), {"scope": "locksmith"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["scope"], "locksmith")
+
+    def test_model_scope_renders(self):
+        response = self.client.get(reverse("job_completion:failure_trend"), {"scope": "model"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["scope"], "model")
+
+    def test_unknown_scope_defaults_to_month(self):
+        response = self.client.get(reverse("job_completion:failure_trend"), {"scope": "bogus"})
+        self.assertEqual(response.context["scope"], "month")
+
+    def test_login_required(self):
+        self.client.logout()
+        response = self.client.get(reverse("job_completion:failure_trend"))
         self.assertEqual(response.status_code, 302)
 
 

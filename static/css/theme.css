@@ -137,6 +137,9 @@ tr:last-child td { border-bottom: none; }
 
 .flag { color: var(--danger); font-weight: 700; }
 
+.trend-bar-track { background: var(--border); border-radius: var(--radius-pill); height: 0.5rem; width: 100%; min-width: 80px; overflow: hidden; }
+.trend-bar { background: var(--wgtk-orange); border-radius: var(--radius-pill); height: 100%; }
+
 .btn {
   display: inline-block;
   background: var(--wgtk-orange);

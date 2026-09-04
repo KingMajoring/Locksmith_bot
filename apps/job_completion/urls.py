@@ -9,6 +9,7 @@ urlpatterns = [
     path("job-failures/", views.job_failures, name="job_failures"),
     path("jobs/categorize/", views.categorize_jobs, name="categorize_jobs"),
     path("model-analysis/", views.model_analysis, name="model_analysis"),
+    path("failure-trend/", views.failure_trend, name="failure_trend"),
     path("by-day/", views.jobs_by_day, name="jobs_by_day"),
     path("locksmiths/<int:pk>/", views.locksmith_report, name="locksmith_report"),
     path("margin/", views.margin_makes, name="margin_makes"),

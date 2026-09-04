@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}Failure Trend — Job Completion{% endblock %}
+{% block content %}
+<h1>Failure Trend</h1>
+<p>Is the failure rate improving or getting worse over time, over the last 12 months.</p>
+
+<ul class="tabs">
+  <li><a href="{% url 'job_completion:failure_trend' %}?scope=month" class="{% if scope == 'month' %}tab-active{% endif %}">Month by month</a></li>
+  <li><a href="{% url 'job_completion:failure_trend' %}?scope=locksmith" class="{% if scope == 'locksmith' %}tab-active{% endif %}">By locksmith</a></li>
+  <li><a href="{% url 'job_completion:failure_trend' %}?scope=model" class="{% if scope == 'model' %}tab-active{% endif %}">By make &amp; model</a></li>
+</ul>
+
+{% if scope == 'month' %}
+<div class="card">
+  <table>
+    <tr><th>Month</th><th>Total jobs</th><th>Failed</th><th>Failure rate</th><th></th></tr>
+    {% for row in monthly_rows %}
+    <tr>
+      <td>{{ row.label }}</td>
+      <td>{{ row.total }}</td>
+      <td class="{% if row.failed %}flag{% endif %}">{{ row.failed }}</td>
+      <td>{{ row.failure_rate_pct }}%</td>
+      <td>
+        <div class="trend-bar-track">
+          <div class="trend-bar" style="width: {% widthratio row.failed max_failed 100 %}%"></div>
+        </div>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+
+{% elif scope == 'locksmith' %}
+<div class="card">
+  <p class="sub">Failures where the master reason is "WGTK Locksmith" — the locksmith's own mistake, not the client, a supplier, or WGTK's office.</p>
+  {% if rows %}
+  <div class="table-wrap">
+  <table>
+    <tr>
+      <th>Locksmith</th>
+      {% for month in months %}<th>{{ month }}</th>{% endfor %}
+      <th>Total</th>
+    </tr>
+    {% for row in rows %}
+    <tr>
+      <td>{{ row.locksmith_name }}</td>
+      {% for count in row.month_counts %}<td>{% if count %}{{ count }}{% else %}—{% endif %}</td>{% endfor %}
+      <td class="flag">{{ row.total }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  </div>
+  {% else %}
+  <p>No locksmith-caused failures on file in the last 12 months.</p>
+  {% endif %}
+</div>
+
+{% else %}
+<div class="card">
+  {% if rows %}
+  <div class="table-wrap">
+  <table>
+    <tr>
+      <th>Make</th>
+      <th>Model family</th>
+      {% for month in months %}<th>{{ month }}</th>{% endfor %}
+      <th>Total</th>
+    </tr>
+    {% for row in rows %}
+    <tr>
+      <td>{{ row.make }}</td>
+      <td>{{ row.model_family }}</td>
+      {% for count in row.month_counts %}<td>{% if count %}{{ count }}{% else %}—{% endif %}</td>{% endfor %}
+      <td class="flag">{{ row.total }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  </div>
+  {% else %}
+  <p>No failures with a model on file in the last 12 months.</p>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

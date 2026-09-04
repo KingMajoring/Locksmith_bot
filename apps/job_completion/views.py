@@ -32,6 +32,11 @@ from .services.reporting import (
     master_reason_breakdown,
     needs_categorization_queryset,
 )
+from .services.trends import (
+    locksmith_wgtk_fault_trend,
+    make_model_failure_trend,
+    monthly_failure_trend,
+)
 
 
 @login_required
@@ -112,6 +117,29 @@ def model_analysis(request):
         "job_completion/model_analysis.html",
         {"breakdown": breakdown, "scope": scope, "master_reason_labels": MASTER_REASON_LABELS},
     )
+
+
+@login_required
+def failure_trend(request):
+    scope = request.GET.get("scope")
+    if scope not in {"locksmith", "model"}:
+        scope = "month"
+
+    context = {"scope": scope}
+    if scope == "month":
+        rows = monthly_failure_trend()
+        context["monthly_rows"] = rows
+        context["max_failed"] = max((r["failed"] for r in rows), default=0)
+    elif scope == "locksmith":
+        data = locksmith_wgtk_fault_trend()
+        context["months"] = data["months"]
+        context["rows"] = data["rows"]
+    else:
+        data = make_model_failure_trend()
+        context["months"] = data["months"]
+        context["rows"] = data["rows"]
+
+    return render(request, "job_completion/failure_trend.html", context)
 
 
 @login_required
