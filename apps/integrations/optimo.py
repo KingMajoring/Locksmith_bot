@@ -279,8 +279,12 @@ class RealOptimoClient(OptimoClient):
             "update_completion_details",
             {"updates": [{"orderNo": order_no, "data": entry_data}]},
         )
-        orders = data.get("orders") or []
-        entry = orders[0] if orders else {}
+        # The API reference's documented response example uses "orders"
+        # as the top-level key, but the live API actually returns
+        # "updates" (confirmed live — a genuinely successful push was
+        # being misread as a rejection because of this).
+        updates = data.get("updates") or []
+        entry = updates[0] if updates else {}
         if not entry.get("success"):
             message = entry.get("message") or data.get("message")
             code = entry.get("code")

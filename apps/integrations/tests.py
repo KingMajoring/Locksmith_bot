@@ -631,9 +631,12 @@ class MockOptimoClientCompletionStatusTests(TestCase):
 
 
 class RealOptimoClientCompletionStatusTests(TestCase):
-    def _mock_response(self, orders):
+    def _mock_response(self, updates):
+        # The API reference's documented response example uses "orders"
+        # as the top-level key, but the live API actually returns
+        # "updates" — confirmed live (see update_completion_status).
         response = MagicMock()
-        response.json.return_value = {"success": True, "orders": orders}
+        response.json.return_value = {"success": True, "updates": updates}
         return response
 
     @patch("requests.post")
@@ -669,7 +672,7 @@ class RealOptimoClientCompletionStatusTests(TestCase):
         response = MagicMock()
         response.json.return_value = {
             "success": False,
-            "orders": [
+            "updates": [
                 {"success": False, "orderNo": "XXX", "message": "not found", "code": "ERR_ORD_NOT_FOUND"}
             ],
         }
@@ -680,7 +683,7 @@ class RealOptimoClientCompletionStatusTests(TestCase):
             client.update_completion_status("XXX", "on_route")
 
     @patch("requests.post")
-    def test_raises_when_no_orders_returned(self, mock_post):
+    def test_raises_when_no_updates_returned(self, mock_post):
         mock_post.return_value = self._mock_response([])
         client = RealOptimoClient("KEY")
         with self.assertRaises(ValueError):
@@ -692,13 +695,13 @@ class RealOptimoClientCompletionStatusTests(TestCase):
         # no message/code at all — the error must still be diagnosable
         # from the logs rather than a dead-end generic string.
         response = MagicMock()
-        response.json.return_value = {"success": False, "orders": [{"success": False}]}
+        response.json.return_value = {"success": False, "updates": [{"success": False}]}
         mock_post.return_value = response
         client = RealOptimoClient("KEY")
 
         with self.assertRaises(ValueError) as ctx:
             client.update_completion_status("496390", "servicing")
-        self.assertIn("orders", str(ctx.exception))
+        self.assertIn("updates", str(ctx.exception))
         self.assertIn("success", str(ctx.exception))
 
 
