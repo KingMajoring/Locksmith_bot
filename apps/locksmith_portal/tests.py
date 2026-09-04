@@ -13,7 +13,13 @@ from apps.locksmiths.models import Locksmith
 from apps.stock_accuracy.models import WeeklyStockCheck
 from apps.stock_accuracy.services.generation import generate_weekly_check
 
-from .models import JobVisit, JobVisitPhoto, PortalDisposal
+from .models import (
+    JobVisit,
+    JobVisitPhoto,
+    PortalDisposal,
+    PortalPhotoPrompt,
+    PortalSettings,
+)
 
 User = get_user_model()
 
@@ -1127,6 +1133,57 @@ class JobVisitWorkflowTests(TestCase):
         note_text = self.mock_handl.add_report_note.call_args[0][1]
         self.assertIn("programmer issue (Reattend with a different locksmith)", note_text)
 
+    # --- admin-configurable photo prompts (PortalPhotoPrompt) ------------
+
+    def test_custom_photo_prompt_overrides_default_for_a_service(self):
+        self._set_loss_type("LOST")  # -> "AKL"
+        PortalPhotoPrompt.objects.filter(service_label="AKL", step="complete").delete()
+        PortalPhotoPrompt.objects.create(
+            service_label="AKL", step="complete", kind=JobVisitPhoto.Kind.FRONT_OF_CAR,
+            label="Custom front photo", required=True, order=0,
+        )
+        self._parts_done_visit()
+        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        response = self.client.get(url)
+        self.assertContains(response, "Custom front photo")
+        self.assertNotContains(response, "Ignition on")
+
+    def test_inactive_photo_prompt_is_excluded(self):
+        self._set_loss_type("LOST")  # -> "AKL"
+        PortalPhotoPrompt.objects.filter(service_label="AKL", kind=JobVisitPhoto.Kind.DAMAGE).update(active=False)
+        self._parts_done_visit()
+        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        response = self.client.get(url)
+        self.assertNotContains(response, "Damage")
+
+    def test_unconfigured_service_falls_back_to_default_prompt(self):
+        self._set_loss_type("Broken key")  # not mapped by display_loss_type -> passes through unchanged
+        self._parts_done_visit()
+        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        response = self.client.get(url)
+        self.assertEqual(
+            [slot["kind"] for slot in response.context["photo_slots"]],
+            [JobVisitPhoto.Kind.AFTER],
+        )
+
+    def test_disclaimer_text_is_admin_editable(self):
+        PortalSettings.objects.update_or_create(pk=1, defaults={"disclaimer_text": "Custom disclaimer wording."})
+        self._set_loss_type("LOCKED IN PROPERTY")
+        self._arrived_visit()
+        url = reverse("locksmith_portal:job_access_method", args=[self.order_no])
+        response = self.client.get(url)
+        self.assertContains(response, "Custom disclaimer wording.")
+
+    def test_custom_access_method_photo_prompt_used_for_airbag(self):
+        self._set_loss_type("LOCKED IN PROPERTY")
+        PortalPhotoPrompt.objects.filter(service_label="Gain access", step="access_method").update(
+            label="Custom door frame label"
+        )
+        self._arrived_visit()
+        url = reverse("locksmith_portal:job_access_method", args=[self.order_no])
+        response = self.client.get(url)
+        self.assertContains(response, "Custom door frame label")
+
     # --- parts (job_detail) gated behind arrived ------------------------
 
     def test_job_detail_gated_until_arrived(self):
@@ -1147,6 +1204,46 @@ class JobVisitWorkflowTests(TestCase):
         for name in ("job_on_route", "job_parts_continue"):
             url = reverse(f"locksmith_portal:{name}", args=[self.order_no])
             self.assertEqual(self.client.post(url).status_code, 302, name)
+
+
+class JobVisitAdminResetActionTests(TestCase):
+    """The admin's "Reset for testing" action on JobVisit — lets office
+    replay a test job through the portal without shelling into the
+    container to delete the row by hand."""
+
+    def setUp(self):
+        self.locksmith, _ = _make_locksmith_user(email="reset-target@wgtk.co.uk")
+        self.admin_user = User.objects.create_superuser(
+            username="office-admin@wgtk.co.uk", email="office-admin@wgtk.co.uk", password="x"
+        )
+        self.client.force_login(self.admin_user)
+
+    def test_reset_for_testing_deletes_selected_visits(self):
+        visit = JobVisit.objects.create(
+            locksmith=self.locksmith, order_no="1234_2026-09-04", report_id="1234",
+            stage=JobVisit.Stage.ARRIVED, arrived_at=timezone.now(),
+        )
+        other_visit = JobVisit.objects.create(
+            locksmith=self.locksmith, order_no="5678_2026-09-04", report_id="5678",
+            stage=JobVisit.Stage.ON_ROUTE, on_route_at=timezone.now(),
+        )
+        url = reverse("admin:locksmith_portal_jobvisit_changelist")
+        response = self.client.post(
+            url, {"action": "reset_for_testing", "_selected_action": [str(visit.pk)]}, follow=True
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(JobVisit.objects.filter(pk=visit.pk).exists())
+        self.assertTrue(JobVisit.objects.filter(pk=other_visit.pk).exists())
+
+    def test_reset_for_testing_also_deletes_its_photos(self):
+        visit = JobVisit.objects.create(
+            locksmith=self.locksmith, order_no="1234_2026-09-04", report_id="1234",
+            stage=JobVisit.Stage.ARRIVED, arrived_at=timezone.now(),
+        )
+        JobVisitPhoto.objects.create(visit=visit, kind=JobVisitPhoto.Kind.BEFORE, url="https://example.com/x.jpg")
+        url = reverse("admin:locksmith_portal_jobvisit_changelist")
+        self.client.post(url, {"action": "reset_for_testing", "_selected_action": [str(visit.pk)]})
+        self.assertFalse(JobVisitPhoto.objects.filter(visit_id=visit.pk).exists())
 
 
 class DecodeDataUrlTests(TestCase):

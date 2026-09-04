@@ -26,8 +26,10 @@
     <p><button type="button" class="btn-secondary" id="clear-signature">Clear signature</button></p>
     <input type="hidden" name="disclaimer_signature" id="disclaimer_signature">
 
-    <label>Photos of the door frame</label>
-    <input type="file" name="photo_door_frame" accept="image/*" capture="environment" multiple>
+    {% for slot in photo_slots %}
+    <label for="photo_{{ slot.kind }}">{{ slot.label }}{% if not slot.required %} <span class="sub">(if applicable)</span>{% endif %}</label>
+    <input type="file" id="photo_{{ slot.kind }}" name="photo_{{ slot.kind }}" accept="image/*" capture="environment" multiple>
+    {% endfor %}
   </div>
 
   <p style="margin-top:1rem;"><button class="btn" type="submit">Continue</button></p>

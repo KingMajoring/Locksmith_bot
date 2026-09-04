@@ -3,6 +3,13 @@ from django.db import models
 
 from apps.locksmiths.models import Locksmith
 
+DEFAULT_DISCLAIMER_TEXT = (
+    "We need to attempt to gain access with a rod and airbag. This is by "
+    "placing an airbag in the door frame to provide enough gap to get a rod "
+    "inside to attempt to pull the door handle. Although damage is rare, it "
+    "might cause small bodywork damage that WGTK can't be held liable for."
+)
+
 
 class PortalDisposal(models.Model):
     """Audit log of every part-disposal attempt made through the
@@ -152,3 +159,93 @@ class JobVisitPhoto(models.Model):
 
     def __str__(self):
         return f"{self.get_kind_display()} photo for {self.visit.order_no}"
+
+
+class PortalPhotoPrompt(models.Model):
+    """Admin-configurable photo checklist for the completion flow —
+    which named photos are asked for, in what order, whether they're
+    required, and at which step (the access-method step or the finish-
+    job step) — per Handl service label (see
+    apps.job_completion.services.labels.display_loss_type: "Gain
+    access", "AKL", "Spare Key", ...). Replaces what used to be
+    hardcoded dicts in views.py, so office can add/reorder/retire a
+    prompt without a code deploy.
+
+    Looked up by (service_label, step); a service with no rows of its
+    own falls back to the DEFAULT_SERVICE_LABEL rows for that step, so
+    a loss_type nobody's configured yet still gets a sane prompt rather
+    than none at all."""
+
+    DEFAULT_SERVICE_LABEL = "Default"
+
+    class Step(models.TextChoices):
+        ACCESS_METHOD = "access_method", "Access method (Gain access airbag step)"
+        COMPLETE = "complete", "Finish job"
+
+    service_label = models.CharField(
+        max_length=50,
+        help_text=(
+            'The Handl service label this applies to — must match exactly '
+            '(e.g. "Gain access", "AKL", "Spare Key"). Use "Default" as the '
+            "catch-all for any service without its own rows."
+        ),
+    )
+    step = models.CharField(max_length=20, choices=Step.choices)
+    kind = models.CharField(
+        max_length=25, choices=JobVisitPhoto.Kind.choices,
+        help_text="Which photo evidence this is — matches up to the uploaded photo's kind.",
+    )
+    label = models.CharField(
+        max_length=100, blank=True,
+        help_text="Shown to the locksmith as the field label. Leave blank to use the photo kind's own label.",
+    )
+    required = models.BooleanField(default=True)
+    order = models.PositiveIntegerField(
+        default=0, help_text="Lower numbers show first, within the same service and step."
+    )
+    active = models.BooleanField(
+        default=True, help_text="Untick to retire a prompt without deleting its history."
+    )
+
+    class Meta:
+        ordering = ["service_label", "step", "order", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["service_label", "step", "kind"],
+                name="one_photo_prompt_per_service_step_kind",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.service_label} / {self.get_step_display()} — {self.display_label}"
+
+    @property
+    def display_label(self):
+        return self.label or JobVisitPhoto.Kind(self.kind).label
+
+
+class PortalSettings(models.Model):
+    """Single-row admin-editable text for the portal's completion flow
+    — currently just the airbag damage disclaimer, kept out of code so
+    office can tweak the wording without a deploy. Always pk=1."""
+
+    disclaimer_text = models.TextField(default=DEFAULT_DISCLAIMER_TEXT)
+
+    class Meta:
+        verbose_name = "Portal settings"
+        verbose_name_plural = "Portal settings"
+
+    def __str__(self):
+        return "Portal settings"
+
+    def save(self, *args, **kwargs):
+        self.pk = 1
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        pass
+
+    @classmethod
+    def load(cls):
+        obj, _ = cls.objects.get_or_create(pk=1, defaults={"disclaimer_text": DEFAULT_DISCLAIMER_TEXT})
+        return obj
