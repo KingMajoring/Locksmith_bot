@@ -242,3 +242,38 @@ OPTIMO_API_KEY = env("OPTIMO_API_KEY", default="")
 # SSO). Left unset by default so the endpoint refuses everything until
 # deliberately configured.
 SCHEDULED_JOB_TOKEN = env("SCHEDULED_JOB_TOKEN", default="")
+
+# --- Logging ------------------------------------------------------------
+# Confirmed live: with no LOGGING config at all, Django's own default
+# only sends application logger output (logger.exception() etc.,
+# scattered throughout apps/* for best-effort Handl/Optimo/photo calls)
+# to console when DEBUG=True — its console handler carries a
+# require_debug_true filter. In production (DEBUG=False) that means
+# every logger.exception() call was silently going nowhere: no
+# exception, no console output, nothing in Azure's Log stream — the
+# record just gets dropped once a handler exists anywhere in the
+# hierarchy (even a filtered-out one), since that's enough for Python's
+# logging module to skip its last-resort stderr fallback. This sends
+# everything at INFO and above to stdout unconditionally, which is what
+# Azure App Service's Log stream (and `az webapp log tail`) actually
+# reads from a Linux app.
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "verbose": {
+            "format": "{asctime} {levelname} {name} {message}",
+            "style": "{",
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "verbose",
+        },
+    },
+    "root": {
+        "handlers": ["console"],
+        "level": "INFO",
+    },
+}
