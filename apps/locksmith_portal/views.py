@@ -62,57 +62,64 @@ DISCLAIMER_TEXT = (
     "might cause small bodywork damage that WGTK can't be held liable for."
 )
 
-# Handl's other "key issue" loss types (everything in its loss-type
-# dropdown besides Locked in Property/Gain access and Spare Key, which
-# have their own distinct flows) — start all of them on the same
-# checklist as AKL/Lost, rather than the generic single before/after
-# photo. Easy to split any one of them out with its own list later once
-# office has seen it in use.
-_AKL_STYLE_SERVICE_LABELS = (
-    "AKL", "Stolen", "Broken", "Ignition/Door Barrel", "Extraction",
+# Handl's "key related" loss types — everything in its loss-type dropdown
+# besides Locked in Property/Gain access, which is its own distinct flow
+# (see _GAIN_ACCESS_SERVICE_LABEL below). All of these share one checklist
+# rather than a generic single before/after photo. Easy to split any one
+# of them out with its own list later once office has seen it in use.
+_KEY_RELATED_SERVICE_LABELS = (
+    "AKL", "Spare Key", "Stolen", "Broken", "Ignition/Door Barrel", "Extraction",
     "Immobiliser", "Key Broken in Lock", "Diagnosis", "Other",
 )
+
+_GAIN_ACCESS_SERVICE_LABEL = "Gain access"
 
 # Named photo slots for the arrival step, by service (Handl loss_type
 # display label — see services/labels.py) — a service not listed here
 # just gets the generic single "before" photo (the pre-existing
 # behaviour). (kind, required) pairs.
 _ARRIVAL_PHOTO_SLOTS_BY_SERVICE = {
-    label: [
+    _GAIN_ACCESS_SERVICE_LABEL: [
         (JobVisitPhoto.Kind.FRONT_OF_CAR, True),
         (JobVisitPhoto.Kind.DOOR_LOCK, True),
-        (JobVisitPhoto.Kind.DAMAGE, False),
-    ]
-    for label in _AKL_STYLE_SERVICE_LABELS
+    ],
+    **{
+        label: [
+            (JobVisitPhoto.Kind.FRONT_OF_CAR, True),
+            (JobVisitPhoto.Kind.DAMAGE, False),
+        ]
+        for label in _KEY_RELATED_SERVICE_LABELS
+    },
 }
 
 # Named photo slots for the completion step, by service (Handl loss_type
 # display label — see services/labels.py) — the specific evidence photos
 # the business wants captured per job type, rather than one generic
-# "after" bucket. (label, required) pairs.
+# "after" bucket. (kind, required) pairs.
 #
 # AKL covers both "Lost - with no spare" and "Lost - with spare" (Handl
 # doesn't have a separate loss_type for these — it's the same "LOST"
 # claim with a true/false spare-key flag) — both need the exact same
 # photos, so one shared list covers it until office asks for them to
 # diverge.
+_KEY_RELATED_AFTER_PHOTO_SLOTS = [
+    (JobVisitPhoto.Kind.BLADE_IN_DOOR, True),
+    (JobVisitPhoto.Kind.BLADE_IN_IGNITION, True),
+    (JobVisitPhoto.Kind.IGNITION_ON, True),
+    (JobVisitPhoto.Kind.KEYS_SUPPLIED, True),
+]
+
 _AFTER_PHOTO_SLOTS_BY_SERVICE = {
-    **{
-        label: [
-            (JobVisitPhoto.Kind.IGNITION_ON, True),
-            (JobVisitPhoto.Kind.KEYS_SUPPLIED, True),
-            (JobVisitPhoto.Kind.DAMAGE, False),
-        ]
-        for label in _AKL_STYLE_SERVICE_LABELS
-    },
-    "Spare Key": [
-        (JobVisitPhoto.Kind.FRONT_OF_CAR, True),
-        (JobVisitPhoto.Kind.DOOR_LOCK, True),
-        (JobVisitPhoto.Kind.DAMAGE, False),
-        (JobVisitPhoto.Kind.KEYS_SUPPLIED, True),
-        (JobVisitPhoto.Kind.CLIENT_KEY, True),
-        (JobVisitPhoto.Kind.IGNITION_ON, True),
+    _GAIN_ACCESS_SERVICE_LABEL: [
+        (JobVisitPhoto.Kind.DOOR_OPEN, True),
+        (JobVisitPhoto.Kind.KEY_IN_HAND, False),
     ],
+    **{label: _KEY_RELATED_AFTER_PHOTO_SLOTS for label in _KEY_RELATED_SERVICE_LABELS},
+    # Only a Spare Key job leaves the client holding a working key of
+    # their own to photograph alongside the new one — for AKL and the
+    # other key-related types every key was lost/broken/stolen, so
+    # there's nothing of the client's left to compare it against.
+    "Spare Key": [*_KEY_RELATED_AFTER_PHOTO_SLOTS, (JobVisitPhoto.Kind.CLIENT_KEY, True)],
 }
 
 
@@ -161,12 +168,11 @@ def _arrival_photo_slots(loss_label):
 
 
 def _after_photo_slots(loss_label):
-    """(kind, required) pairs for the completion step's photo prompts.
-    Gain access is handled entirely at the earlier access-method step
-    (see job_access_method — how they got in, and door-frame photos for
-    an airbag entry, both happen before parts disposal), so it just
-    gets the generic fallback here like anything else not specifically
-    modelled."""
+    """(kind, required) pairs for the completion step's photo prompts. A
+    service not specifically modelled here just gets one generic
+    "after" photo, the original behaviour. Note this is separate from
+    job_access_method's own door-frame photo for an airbag entry, which
+    happens earlier, before parts disposal — see _access_method_photo_slots."""
     return _AFTER_PHOTO_SLOTS_BY_SERVICE.get(loss_label, [(JobVisitPhoto.Kind.AFTER, True)])
 
 
