@@ -161,12 +161,19 @@
 
       function start(e) {
         e.preventDefault();
-        canvas.setPointerCapture(e.pointerId);
+        // Start the actual stroke first — confirmed some Android
+        // browsers can throw on setPointerCapture here (a mid-air
+        // failure mid-gesture, not consistently reproducible), and
+        // since that used to run before any of this, a throw meant the
+        // whole stroke silently never started. Capture is best-effort:
+        // it just keeps delivering move/up events to the canvas if the
+        // finger drifts outside its bounds mid-stroke.
         drawing = true;
         hasSignature = true;
         var p = point(e);
         ctx.beginPath();
         ctx.moveTo(p.x, p.y);
+        try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
       }
 
       function move(e) {

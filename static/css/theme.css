@@ -408,6 +408,15 @@ textarea { width: 100%; padding: 0.6rem 0.7rem; font-size: 1rem; font-family: va
   border-radius: var(--radius-sm);
   background: #fff;
   touch-action: none;
+  /* touch-action:none stops the page panning/zooming under a drag, but
+     iOS Safari separately still offers its text-selection callout
+     (the magnifying-glass/"Copy" popup) on a touch-and-hold over a
+     canvas unless these are also set — without them, a signature drawn
+     slowly/deliberately (exactly how someone signs their name) can get
+     interrupted partway through on an iPhone. */
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .dispose-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-bottom: 0.6rem; }

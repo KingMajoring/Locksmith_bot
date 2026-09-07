@@ -68,15 +68,18 @@
 
     function start(e) {
       e.preventDefault();
-      // setPointerCapture keeps delivering move/up events to the canvas
-      // even if the finger drifts outside its bounds mid-stroke — without
-      // it, a fast signature on a phone loses the rest of the stroke.
-      canvas.setPointerCapture(e.pointerId);
+      // Start the actual stroke first — confirmed some Android browsers
+      // can throw on setPointerCapture here, and since that used to run
+      // before any of this, a throw meant the whole stroke silently
+      // never started. Capture is best-effort: it just keeps delivering
+      // move/up events to the canvas if the finger drifts outside its
+      // bounds mid-stroke.
       drawing = true;
       hasSignature = true;
       var p = point(e);
       ctx.beginPath();
       ctx.moveTo(p.x, p.y);
+      try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
     }
 
     function move(e) {
