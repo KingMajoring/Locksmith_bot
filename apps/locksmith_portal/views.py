@@ -1061,6 +1061,9 @@ def job_detail(request, order_no):
     handl = get_handl_client()
     soter_ids = locksmith.soter_id_list
     stock_lines = handl.list_current_stock(soter_ids)
+    # The full Handl catalogue, not just this locksmith's own van stock —
+    # a client-supplied part is, by definition, one they may not carry.
+    all_parts = handl.list_all_parts()
     previous_disposals = PortalDisposal.objects.filter(
         locksmith=locksmith, order_no=order_no
     ).order_by("-created_at")
@@ -1068,6 +1071,8 @@ def job_detail(request, order_no):
     if request.method == "POST":
         by_code = {line.part_code.upper(): line for line in stock_lines}
         by_name = {line.part_name.lower(): line for line in stock_lines}
+        catalogue_by_code = {code.upper(): (code, name) for code, name in all_parts}
+        catalogue_by_name = {name.lower(): (code, name) for code, name in all_parts}
 
         def _resolve(raw_input):
             # A datalist pick comes back as "SKU — Name"; typing
@@ -1078,6 +1083,22 @@ def job_detail(request, order_no):
                 by_code.get(candidate.upper())
                 or by_name.get(candidate.lower())
                 or by_name.get(raw_input.strip().lower())
+            )
+
+        def _resolve_any_part(raw_input):
+            # Client-supplied rows aren't limited to this locksmith's own
+            # stock — check the full catalogue too, so a part they don't
+            # carry still resolves to its real SKU/name (and, in turn,
+            # can be written as a real Handl disposal — see
+            # record_client_supplied_disposal — instead of just a note).
+            line = _resolve(raw_input)
+            if line is not None:
+                return (line.part_code, line.part_name)
+            candidate = raw_input.split(" — ", 1)[0].strip()
+            return (
+                catalogue_by_code.get(candidate.upper())
+                or catalogue_by_name.get(candidate.lower())
+                or catalogue_by_name.get(raw_input.strip().lower())
             )
 
         # Aggregate by part first, in case the same part was searched
@@ -1105,20 +1126,19 @@ def job_detail(request, order_no):
             if qty <= 0:
                 continue
 
-            line = _resolve(raw_code) if raw_code else None
-
             if is_client_supplied == "1":
-                if line is not None:
-                    client_supplied_rows.append((line.part_code, line.part_name, qty))
+                resolved = _resolve_any_part(raw_code) if raw_code else None
+                if resolved is not None:
+                    client_supplied_rows.append((resolved[0], resolved[1], qty))
                 elif raw_code:
-                    # Not a part in this locksmith's own stock (the
-                    # whole point of "client supplied") — accept the
-                    # typed text as-is; office gets flagged in the
-                    # Handl note if it doesn't match a real SKU so the
-                    # part can be added to the system properly.
+                    # Not a part in Handl's catalogue at all — accept the
+                    # typed text as-is; office gets flagged in the Handl
+                    # note if it doesn't match a real SKU so the part can
+                    # be added to the system properly.
                     client_supplied_rows.append((raw_code.split(" — ", 1)[0].strip(), raw_code, qty))
                 continue
 
+            line = _resolve(raw_code) if raw_code else None
             if line is None:
                 if raw_code:
                     messages.error(request, f"Couldn't find '{raw_code}' in your stock.")
@@ -1182,7 +1202,7 @@ def job_detail(request, order_no):
                 disposed_any = True
 
         for part_code, part_name, qty in client_supplied_rows:
-            PortalDisposal.objects.create(
+            disposal = PortalDisposal.objects.create(
                 locksmith=locksmith,
                 created_by=request.user,
                 order_no=order_no,
@@ -1191,15 +1211,48 @@ def job_detail(request, order_no):
                 part_name=part_name,
                 quantity=qty,
                 client_supplied=True,
-                handl_synced=True,
             )
-            note = (
-                f"'{locksmith.van_soter_display_name}' used {qty} x {escape(part_name)} "
-                f"({escape(part_code)}) supplied by the client — not from WGTK stock."
-            )
-            if part_code.upper() not in by_code:
-                note += " Doesn't match a known SKU — may need adding to the system."
-            _write_handl_note(locksmith, report_id, note)
+            # Written against the same "(V)" van id as a normal disposal
+            # (see record_disposal) purely so it's attributed to this
+            # locksmith in Handl's reporting — record_client_supplied_disposal
+            # never decrements van stock for it either way.
+            soter_id = locksmith.van_soter_id or ""
+            try:
+                recorded = handl.record_client_supplied_disposal(
+                    soter_id,
+                    report_id,
+                    part_code,
+                    part_name,
+                    qty,
+                    actioned_by_user_id=(
+                        locksmith.soter_user_id or settings.HANDL_PORTAL_CREATED_BY_USER_ID
+                    ),
+                    locksmith_display_name=locksmith.van_soter_display_name,
+                )
+            except Exception as exc:
+                disposal.handl_error = str(exc)
+                disposal.save(update_fields=["handl_error"])
+                messages.warning(
+                    request,
+                    f"Recorded {qty} x {part_code} (client supplied), but something "
+                    "went wrong saving it to Soter — the office will follow up.",
+                )
+                continue
+
+            if not recorded:
+                # Doesn't match a known Handl SKU, so there's no
+                # Inventory_Stock batch to link a real disposal row to —
+                # leave a plain note instead, flagged so the office can
+                # add it to the system properly.
+                note = (
+                    f"'{locksmith.van_soter_display_name}' used {qty} x {escape(part_name)} "
+                    f"({escape(part_code)}) supplied by the client — not from WGTK stock. "
+                    "Doesn't match a known SKU — may need adding to the system."
+                )
+                _write_handl_note(locksmith, report_id, note)
+
+            disposal.handl_synced = True
+            disposal.save(update_fields=["handl_synced"])
             disposed_any = True
 
         if disposed_any:
@@ -1214,6 +1267,7 @@ def job_detail(request, order_no):
             "order_no": order_no,
             "report_id": report_id,
             "stock_lines": stock_lines,
+            "all_parts": all_parts,
             "previous_disposals": previous_disposals,
             "locksmith": locksmith,
             "selected_date": selected_date,

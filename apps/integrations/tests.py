@@ -114,6 +114,35 @@ class MockHandlClientTests(TestCase):
             locksmith_display_name="WGTK - Dean S (V)",
         )
 
+    def test_list_all_parts_matches_catalogue(self):
+        self.assertEqual(self.client.list_all_parts(), self.client._CATALOGUE)
+
+    def test_record_client_supplied_disposal_true_for_known_sku(self):
+        self.assertTrue(
+            self.client.record_client_supplied_disposal(
+                "885",
+                "496390",
+                "TK-100",
+                "Transponder key blank",
+                1,
+                actioned_by_user_id=522,
+                locksmith_display_name="WGTK - Dean S (V)",
+            )
+        )
+
+    def test_record_client_supplied_disposal_false_for_unknown_sku(self):
+        self.assertFalse(
+            self.client.record_client_supplied_disposal(
+                "885",
+                "496390",
+                "XYZ-999",
+                "Some client part",
+                1,
+                actioned_by_user_id=522,
+                locksmith_display_name="WGTK - Dean S (V)",
+            )
+        )
+
     def test_list_locksmith_user_ids_returns_empty_dict(self):
         self.assertEqual(self.client.list_locksmith_user_ids(), {})
 
@@ -466,6 +495,21 @@ class SQLHandlClientTests(TestCase):
         client = SQLHandlClient()
         self.assertEqual(client.list_current_stock([]), [])
 
+    def test_list_all_parts_maps_rows_with_no_locksmith_filter(self):
+        rows = [
+            {"part_code": "TK-100", "part_name": "Transponder key blank"},
+            {"part_code": "TK-107", "part_name": "Van lock cylinder"},
+        ]
+        fake_conn = _fake_connection(rows)
+        client = SQLHandlClient()
+        with patch.object(client, "_connection", return_value=fake_conn):
+            parts = client.list_all_parts()
+
+        self.assertEqual(parts, [("TK-100", "Transponder key blank"), ("TK-107", "Van lock cylinder")])
+        query = fake_conn.cursor.return_value.execute.call_args[0][0]
+        self.assertIn("Inventory_Parts", query)
+        self.assertNotIn("Inventory_Locksmith_Stock", query)
+
     def _record_disposal(self, client, quantity, part_code="TK-100"):
         client.record_disposal(
             "885",
@@ -582,6 +626,65 @@ class SQLHandlClientTests(TestCase):
         with patch.object(client, "_write_connection", return_value=fake_conn):
             with self.assertRaises(ValueError):
                 self._record_disposal(client, 5)
+        fake_conn.commit.assert_not_called()
+
+    def _record_client_supplied_disposal(self, client, part_code="TK-100"):
+        return client.record_client_supplied_disposal(
+            "885",
+            "496390",
+            part_code,
+            "Transponder key blank",
+            1,
+            actioned_by_user_id=517,
+            locksmith_display_name="WGTK - Blain H (V)",
+        )
+
+    def test_record_client_supplied_disposal_inserts_without_touching_locksmith_stock(self):
+        fake_conn = MagicMock()
+        fake_conn.__enter__.return_value = fake_conn
+        fake_conn.__exit__.return_value = False
+        cursor = fake_conn.cursor.return_value
+        cursor.fetchone.return_value = {"Id": 555}
+
+        client = SQLHandlClient()
+        with patch.object(client, "_write_connection", return_value=fake_conn):
+            result = self._record_client_supplied_disposal(client)
+
+        self.assertTrue(result)
+        calls = cursor.execute.call_args_list
+        queries = [c[0][0] for c in calls]
+        self.assertFalse(any("Inventory_Locksmith_Stock" in q for q in queries))
+        self.assertFalse(any(q.strip().upper().startswith("UPDATE") for q in queries))
+
+        insert_query, insert_params = next(
+            c[0] for c in calls if "INSERT INTO Inventory_Disposals" in c[0][0]
+        )
+        self.assertIn("NEWID()", insert_query)
+        self.assertEqual(insert_params["lid"], 885)
+        self.assertEqual(insert_params["report_id"], "496390")
+        self.assertEqual(insert_params["stock_id"], 555)
+        self.assertEqual(insert_params["qty"], 1)
+        self.assertEqual(insert_params["created_by"], 517)
+
+        history_query, history_params = next(
+            c[0] for c in calls if "INSERT INTO Policy_History" in c[0][0]
+        )
+        self.assertIn("supplied by the client", history_params["notes"])
+        self.assertEqual(history_params["actioned_by"], 517)
+
+        fake_conn.commit.assert_called_once()
+
+    def test_record_client_supplied_disposal_returns_false_when_sku_unknown(self):
+        fake_conn = MagicMock()
+        fake_conn.__enter__.return_value = fake_conn
+        fake_conn.__exit__.return_value = False
+        fake_conn.cursor.return_value.fetchone.return_value = None
+
+        client = SQLHandlClient()
+        with patch.object(client, "_write_connection", return_value=fake_conn):
+            result = self._record_client_supplied_disposal(client, part_code="XYZ-999")
+
+        self.assertFalse(result)
         fake_conn.commit.assert_not_called()
 
     def test_list_locksmith_user_ids_maps_receipt_name_to_user_id(self):

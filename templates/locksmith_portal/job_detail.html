@@ -22,12 +22,18 @@
 </div>
 {% endif %}
 
-{% if stock_lines %}
+{% if stock_lines or all_parts %}
 <datalist id="parts-catalogue">
   {% for line in stock_lines %}
     <option value="{{ line.part_code }} — {{ line.part_name }}">{{ line.part_code }} — {{ line.part_name }} (have {{ line.qty }})</option>
   {% endfor %}
 </datalist>
+<datalist id="all-parts-catalogue">
+  {% for code, name in all_parts %}
+    <option value="{{ code }} — {{ name }}">{{ code }} — {{ name }}</option>
+  {% endfor %}
+</datalist>
+<p class="sub">Client-supplied parts can be picked from the full parts list, not just what's in your van.</p>
 
 <form method="post" class="card" id="dispose-form" action="{% url 'locksmith_portal:job_detail' order_no=order_no %}?date={{ selected_date|date:'Y-m-d' }}">
   {% csrf_token %}
@@ -77,8 +83,13 @@
 
   document.getElementById('dispose-rows').addEventListener('change', function (e) {
     if (!e.target.classList.contains('client-supplied-checkbox')) return;
-    var hidden = e.target.closest('.dispose-row').querySelector('input[name=client_supplied]');
+    var row = e.target.closest('.dispose-row');
+    var hidden = row.querySelector('input[name=client_supplied]');
     hidden.value = e.target.checked ? '1' : '0';
+    // Client-supplied parts aren't limited to this locksmith's own van
+    // stock, so switch the search to the full parts catalogue.
+    var codeInput = row.querySelector('input[name=part_code]');
+    codeInput.setAttribute('list', e.target.checked ? 'all-parts-catalogue' : 'parts-catalogue');
   });
 
   (function () {
@@ -88,13 +99,17 @@
     var sub = document.getElementById('confirm-sub');
     var confirmed = false;
 
-    function describeRow(raw) {
+    function describeRow(raw, clientSupplied) {
       // Picking a suggestion gives "SKU — Name" already; typing a bare
       // SKU without picking one doesn't — look it up in the catalogue
       // so the confirmation shows the part name, not just a code.
+      // Client-supplied rows search the full parts list (they aren't
+      // limited to this locksmith's own van stock); other rows search
+      // just their own stock.
       if (raw.indexOf(' — ') !== -1) return raw;
+      var selector = clientSupplied ? '#all-parts-catalogue option' : '#parts-catalogue option';
       var match = null;
-      document.querySelectorAll('#parts-catalogue option').forEach(function (opt) {
+      document.querySelectorAll(selector).forEach(function (opt) {
         if (match) return;
         var code = opt.value.split(' — ')[0].trim().toLowerCase();
         if (code === raw.trim().toLowerCase()) match = opt.value;
@@ -112,7 +127,7 @@
         var qty = row.querySelector('input[name=quantity]').value.trim();
         var clientSupplied = row.querySelector('input[name=client_supplied]').value === '1';
         if (code && qty) {
-          rows.push(describeRow(code) + ' — qty ' + qty + (clientSupplied ? ' (client supplied)' : ''));
+          rows.push(describeRow(code, clientSupplied) + ' — qty ' + qty + (clientSupplied ? ' (client supplied)' : ''));
           if (clientSupplied) { hasClientSupplied = true; } else { hasStock = true; }
         }
       });
@@ -126,9 +141,9 @@
         list.appendChild(li);
       });
       if (hasClientSupplied && !hasStock) {
-        sub.textContent = "Client-supplied parts don't come out of your van stock — this just logs a note in Soter for the office.";
+        sub.textContent = "Client-supplied parts are logged in Soter for the office's records, but won't be taken off your van stock.";
       } else if (hasClientSupplied) {
-        sub.textContent = 'This updates your van stock and Soter for the stock items — client-supplied parts are logged as a note only and won\'t change your van numbers.';
+        sub.textContent = "This updates your van stock and Soter for the stock items — client-supplied parts are also logged in Soter but won't affect your van stock.";
       } else {
         sub.textContent = 'This updates your van stock and Soter — check the list before confirming.';
       }
@@ -146,7 +161,7 @@
   })();
 </script>
 {% else %}
-  <p class="empty">You don't have any parts in stock to dispose.</p>
+  <p class="empty">No parts are available to record right now — contact the office.</p>
 {% endif %}
 
 <form method="post" action="{% url 'locksmith_portal:job_parts_continue' order_no=order_no %}?date={{ selected_date|date:'Y-m-d' }}">

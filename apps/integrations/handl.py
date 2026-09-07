@@ -140,6 +140,14 @@ class HandlClient(ABC):
         part codes to ask about."""
 
     @abstractmethod
+    def list_all_parts(self) -> list[tuple[str, str]]:
+        """(part_code, part_name) for every part in Handl's catalogue
+        (Inventory_Parts), regardless of any locksmith's own van stock —
+        for the locksmith portal's "client supplied" part picker, where
+        the whole point is the part may not be something this locksmith
+        carries."""
+
+    @abstractmethod
     def list_locksmith_user_ids(self) -> dict[str, int]:
         """{ReceiptName: UserId} from wiki.LocksmithLogin — each
         locksmith's own personal Soter login id (confirmed live: this is
@@ -174,6 +182,33 @@ class HandlClient(ABC):
         HANDL_SQL_WRITE_USER/PASSWORD) since the main HANDL_SQL_* creds
         are deliberately read-only. Raises if there isn't enough recorded
         stock to satisfy the disposal."""
+
+    @abstractmethod
+    def record_client_supplied_disposal(
+        self,
+        soter_locksmith_id: str,
+        report_id: str,
+        part_code: str,
+        part_name: str,
+        quantity: int,
+        *,
+        actioned_by_user_id: int,
+        locksmith_display_name: str,
+    ) -> bool:
+        """Record a part the *client* supplied (not from WGTK stock) as
+        used on a job. Unlike record_disposal, this deliberately never
+        touches Inventory_Locksmith_Stock — there's no van stock to
+        decrement, since the part didn't come out of it — but it does
+        still insert a real Inventory_Disposals row (so it shows up
+        alongside ordinary disposals in Handl's own reporting) plus a
+        Policy_History note flagging it as client-supplied.
+
+        Returns True if it matched a known Inventory_Parts SKU and wrote
+        the disposal row; returns False (writing nothing here) if
+        part_code doesn't match any known SKU — there's no Inventory_Stock
+        batch to link a disposal row to in that case, so the caller
+        should fall back to a plain note instead. WRITES to Handl — same
+        write-capable connection as record_disposal."""
 
     @abstractmethod
     def add_report_note(self, report_id: str, notes: str, *, actioned_by_user_id: int) -> None:
@@ -363,6 +398,9 @@ class MockHandlClient(HandlClient):
             for code, name in sample
         ]
 
+    def list_all_parts(self) -> list[tuple[str, str]]:
+        return list(self._CATALOGUE)
+
     def list_locksmith_user_ids(self) -> dict[str, int]:
         return {}
 
@@ -378,6 +416,19 @@ class MockHandlClient(HandlClient):
         locksmith_display_name: str,
     ) -> None:
         pass
+
+    def record_client_supplied_disposal(
+        self,
+        soter_locksmith_id: str,
+        report_id: str,
+        part_code: str,
+        part_name: str,
+        quantity: int,
+        *,
+        actioned_by_user_id: int,
+        locksmith_display_name: str,
+    ) -> bool:
+        return any(code == part_code for code, _name in self._CATALOGUE)
 
     def add_report_note(self, report_id: str, notes: str, *, actioned_by_user_id: int) -> None:
         pass
@@ -787,6 +838,17 @@ class SQLHandlClient(HandlClient):
             for row in rows
         ]
 
+    def list_all_parts(self) -> list[tuple[str, str]]:
+        # Unlike list_current_stock, no locksmith/stock join at all — the
+        # client-supplied picker needs the *whole* catalogue, including
+        # parts this locksmith has never carried.
+        query = "SELECT SKU AS part_code, Name AS part_name FROM Inventory_Parts ORDER BY Name"
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query)
+            rows = cursor.fetchall()
+        return [(row["part_code"], row["part_name"] or "") for row in rows]
+
     def record_disposal(
         self,
         soter_locksmith_id: str,
@@ -935,6 +997,79 @@ class SQLHandlClient(HandlClient):
                 actioned_by_user_id=actioned_by_user_id, when=now,
             )
             conn.commit()
+
+    def record_client_supplied_disposal(
+        self,
+        soter_locksmith_id: str,
+        report_id: str,
+        part_code: str,
+        part_name: str,
+        quantity: int,
+        *,
+        actioned_by_user_id: int,
+        locksmith_display_name: str,
+    ) -> bool:
+        # Deliberately the mirror image of record_disposal: it looks up
+        # a real Inventory_Stock batch to link the Inventory_Disposals row
+        # to (so this shows up in Handl's own disposal reporting exactly
+        # like a normal disposal), but it never touches
+        # Inventory_Locksmith_Stock — a client-supplied part didn't come
+        # out of this locksmith's van, so there's nothing to decrement
+        # (record_disposal's table has no trigger doing this
+        # automatically either — confirmed via sys.triggers — so simply
+        # not running that UPDATE is enough).
+        from datetime import datetime as _datetime
+
+        with self._write_connection() as conn:
+            cursor = conn.cursor()
+
+            cursor.execute(
+                """
+                SELECT TOP 1 ist.Id
+                FROM Inventory_Stock ist
+                JOIN Inventory_Parts ipa ON ist.PartId = ipa.Id
+                WHERE ipa.SKU = %(sku)s
+                ORDER BY ist.DateCreated DESC
+                """,
+                {"sku": part_code},
+            )
+            stock_row = cursor.fetchone()
+            if not stock_row:
+                # No known SKU to link a disposal row to — caller falls
+                # back to a plain note instead.
+                return False
+
+            now = _datetime.utcnow()
+            cursor.execute(
+                """
+                INSERT INTO Inventory_Disposals
+                    (Id, LookupLocksmithId, ReportId, StockId, LocksmithStockId,
+                     Quantity, DateCreated, CreatedByUserId)
+                VALUES
+                    (NEWID(), %(lid)s, %(report_id)s, %(stock_id)s, NULL,
+                     %(qty)s, %(now)s, %(created_by)s)
+                """,
+                {
+                    "lid": int(soter_locksmith_id),
+                    "report_id": report_id,
+                    "stock_id": stock_row["Id"],
+                    "qty": quantity,
+                    "now": now,
+                    "created_by": actioned_by_user_id,
+                },
+            )
+
+            notes = (
+                f"'{locksmith_display_name}' used {quantity} "
+                f"'{part_name}(s) ({part_code})' supplied by the client — "
+                "not from WGTK stock."
+            )
+            _insert_policy_history_note(
+                cursor, report_id=report_id, notes=notes,
+                actioned_by_user_id=actioned_by_user_id, when=now,
+            )
+            conn.commit()
+        return True
 
     def add_report_note(self, report_id: str, notes: str, *, actioned_by_user_id: int) -> None:
         from datetime import datetime as _datetime

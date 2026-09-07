@@ -376,6 +376,7 @@ class JobDetailTests(TestCase):
         mock_handl.list_current_stock.return_value = [
             CurrentStockLine(part_code="TK-100", part_name="Transponder key blank", qty=4),
         ]
+        mock_handl.record_client_supplied_disposal.return_value = True
         mock_get_handl.return_value = mock_handl
 
         url = reverse("locksmith_portal:job_detail", args=[self.order_no])
@@ -386,15 +387,28 @@ class JobDetailTests(TestCase):
         self.assertRedirects(response, f"{url}?date={self.today.isoformat()}")
         mock_handl.record_disposal.assert_not_called()
 
+        # Still shows up in Handl's own disposal reporting (SQL queries
+        # against Inventory_Disposals) via record_client_supplied_disposal
+        # — it just never decrements Inventory_Locksmith_Stock the way
+        # record_disposal does.
+        mock_handl.record_client_supplied_disposal.assert_called_once_with(
+            "885",
+            "496390",
+            "TK-100",
+            "Transponder key blank",
+            1,
+            actioned_by_user_id=0,
+            locksmith_display_name="Dean S",
+        )
+        # No fallback note needed — record_client_supplied_disposal
+        # already writes its own Handl note for a matched SKU.
+        mock_handl.add_report_note.assert_not_called()
+
         disposal = PortalDisposal.objects.get()
         self.assertEqual(disposal.part_code, "TK-100")
         self.assertEqual(disposal.quantity, 1)
         self.assertTrue(disposal.client_supplied)
         self.assertTrue(disposal.handl_synced)
-
-        note_text = mock_handl.add_report_note.call_args[0][1]
-        self.assertIn("supplied by the client — not from WGTK stock", note_text)
-        self.assertNotIn("may need adding to the system", note_text)
 
     @patch("apps.locksmith_portal.views.get_handl_client")
     @patch("apps.locksmith_portal.views.get_optimo_client")
@@ -402,6 +416,8 @@ class JobDetailTests(TestCase):
         self._mock_optimo(mock_get_optimo)
         mock_handl = MagicMock()
         mock_handl.list_current_stock.return_value = []
+        mock_handl.list_all_parts.return_value = []
+        mock_handl.record_client_supplied_disposal.return_value = False
         mock_get_handl.return_value = mock_handl
 
         url = reverse("locksmith_portal:job_detail", args=[self.order_no])
@@ -411,13 +427,56 @@ class JobDetailTests(TestCase):
 
         self.assertRedirects(response, f"{url}?date={self.today.isoformat()}")
         mock_handl.record_disposal.assert_not_called()
+        mock_handl.record_client_supplied_disposal.assert_called_once_with(
+            "885",
+            "496390",
+            "XYZ-999",
+            "XYZ-999",
+            1,
+            actioned_by_user_id=0,
+            locksmith_display_name="Dean S",
+        )
 
         disposal = PortalDisposal.objects.get()
         self.assertEqual(disposal.part_code, "XYZ-999")
         self.assertTrue(disposal.client_supplied)
 
+        # No known SKU to link a real disposal row to, so falls back to
+        # a plain note flagged for the office instead.
         note_text = mock_handl.add_report_note.call_args[0][1]
+        self.assertIn("supplied by the client — not from WGTK stock", note_text)
         self.assertIn("may need adding to the system", note_text)
+
+    @patch("apps.locksmith_portal.views.get_handl_client")
+    @patch("apps.locksmith_portal.views.get_optimo_client")
+    def test_client_supplied_can_pick_a_part_not_in_van_stock(self, mock_get_optimo, mock_get_handl):
+        self._mock_optimo(mock_get_optimo)
+        mock_handl = MagicMock()
+        mock_handl.list_current_stock.return_value = []
+        mock_handl.list_all_parts.return_value = [("TK-200", "Smart key case")]
+        mock_handl.record_client_supplied_disposal.return_value = True
+        mock_get_handl.return_value = mock_handl
+
+        url = reverse("locksmith_portal:job_detail", args=[self.order_no])
+        response = self.client.post(url, {
+            "part_code": ["TK-200 — Smart key case"], "quantity": ["1"], "client_supplied": ["1"],
+        })
+
+        self.assertRedirects(response, f"{url}?date={self.today.isoformat()}")
+        mock_handl.record_client_supplied_disposal.assert_called_once_with(
+            "885",
+            "496390",
+            "TK-200",
+            "Smart key case",
+            1,
+            actioned_by_user_id=0,
+            locksmith_display_name="Dean S",
+        )
+
+        disposal = PortalDisposal.objects.get()
+        self.assertEqual(disposal.part_code, "TK-200")
+        self.assertEqual(disposal.part_name, "Smart key case")
+        self.assertTrue(disposal.client_supplied)
 
     @patch("apps.locksmith_portal.views.get_handl_client")
     @patch("apps.locksmith_portal.views.get_optimo_client")
