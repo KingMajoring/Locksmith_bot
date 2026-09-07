@@ -515,7 +515,6 @@ def dashboard(request):
         job["reg"] = details.reg if details else ""
         job["service"] = display_loss_type(details.loss_type) if details else ""
         job["postcode"] = details.postcode if details else ""
-        job["maps_url"], job["waze_url"] = _navigation_urls(job["postcode"])
 
     return render(
         request,

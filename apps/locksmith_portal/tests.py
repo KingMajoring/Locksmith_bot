@@ -157,7 +157,7 @@ class DashboardTests(TestCase):
 
     @patch("apps.locksmith_portal.views.get_handl_client")
     @patch("apps.locksmith_portal.views.get_optimo_client")
-    def test_dashboard_shows_postcode_and_navigation_links(self, mock_get_optimo, mock_get_handl):
+    def test_dashboard_shows_postcode(self, mock_get_optimo, mock_get_handl):
         today = timezone.localdate()
         order_no = f"1001_{today.isoformat()}"
         mock_optimo = MagicMock()
@@ -180,15 +180,14 @@ class DashboardTests(TestCase):
         response = self.client.get(reverse("locksmith_portal:dashboard"))
         job = response.context["jobs"][0]
         self.assertEqual(job["postcode"], "NR14 8PL")
-        self.assertEqual(job["maps_url"], "https://www.google.com/maps/search/?api=1&query=NR14%208PL")
-        self.assertEqual(job["waze_url"], "https://waze.com/ul?q=NR14%208PL&navigate=yes")
         self.assertContains(response, "NR14 8PL")
-        self.assertContains(response, "https://www.google.com/maps/search/?api=1&amp;query=NR14%208PL")
-        self.assertContains(response, "https://waze.com/ul?q=NR14%208PL&amp;navigate=yes")
+        # Maps/Waze are only offered once a locksmith opens the job, not on
+        # the dashboard card itself.
+        self.assertNotContains(response, "job-nav-link")
 
     @patch("apps.locksmith_portal.views.get_handl_client")
     @patch("apps.locksmith_portal.views.get_optimo_client")
-    def test_dashboard_hides_navigation_links_without_postcode(self, mock_get_optimo, mock_get_handl):
+    def test_dashboard_hides_location_without_postcode(self, mock_get_optimo, mock_get_handl):
         today = timezone.localdate()
         order_no = f"1001_{today.isoformat()}"
         mock_optimo = MagicMock()
@@ -202,8 +201,7 @@ class DashboardTests(TestCase):
 
         response = self.client.get(reverse("locksmith_portal:dashboard"))
         job = response.context["jobs"][0]
-        self.assertEqual(job["maps_url"], "")
-        self.assertEqual(job["waze_url"], "")
+        self.assertEqual(job["postcode"], "")
         self.assertNotContains(response, "job-nav-link")
 
     @patch("apps.locksmith_portal.views.get_optimo_client")

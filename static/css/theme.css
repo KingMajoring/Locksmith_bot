@@ -333,21 +333,6 @@ input[type=number] { width: 5rem; }
 .job-done { border-color: var(--wgtk-green-light); }
 .job-tick { color: var(--wgtk-green-dark); font-weight: 700; }
 
-.job-nav-links { display: flex; gap: 0.5rem; padding: 0 1.1rem 0.85rem; }
-.job-nav-link {
-  flex: 1;
-  text-align: center;
-  padding: 0.4rem 0.6rem;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--ink-soft);
-  text-decoration: none;
-  font-size: 0.82rem;
-  font-weight: 600;
-}
-.job-nav-link:active { transform: scale(0.98); }
-
 .nav-icon { vertical-align: -3px; margin-right: 0.3rem; }
 
 .day-nav { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.9rem; }
