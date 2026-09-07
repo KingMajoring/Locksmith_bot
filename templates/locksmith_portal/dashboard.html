@@ -65,8 +65,8 @@
             {% if job.reg or job.make or job.model or job.service %}
               <span class="job-meta">{% if job.reg %}{{ job.reg }} · {% endif %}{{ job.make }} {{ job.model }} {{ job.year }}{% if job.service %} · {{ job.service }}{% endif %}</span>
             {% endif %}
-            {% if job.location_address %}
-              <span class="job-location">{{ job.location_address }}</span>
+            {% if job.postcode %}
+              <span class="job-location">{{ job.postcode }}</span>
             {% endif %}
           </span>
           {% if job.visit_stage == 'done' %}

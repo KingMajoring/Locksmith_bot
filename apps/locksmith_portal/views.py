@@ -28,6 +28,7 @@ from __future__ import annotations
 import itertools
 import logging
 from datetime import date, timedelta
+from urllib.parse import quote
 
 from django.conf import settings
 from django.contrib import messages
@@ -237,6 +238,21 @@ def _maps_link(latitude, longitude):
         return ""
     url = f"https://www.google.com/maps?q={latitude},{longitude}"
     return f'<a href="{url}" target="_blank">View location</a>'
+
+
+def _navigation_urls(postcode):
+    """(maps_url, waze_url) for one-tap navigation to a job, from the
+    postcode Handl holds against the claim (Policy_HolderDetails.PostCode
+    — confirmed live). Both Maps and Waze accept a plain free-text
+    query, so no lat/lng lookup is needed."""
+    if not postcode:
+        return "", ""
+    query = quote(postcode)
+    return (
+        f"https://www.google.com/maps/search/?api=1&query={query}",
+        f"https://waze.com/ul?q={query}&navigate=yes",
+    )
+
 
 _PREVIEW_SESSION_KEY = "locksmith_portal_preview_id"
 MAX_PHOTO_BYTES = 15 * 1024 * 1024
@@ -498,6 +514,8 @@ def dashboard(request):
         job["year"] = details.year if details else ""
         job["reg"] = details.reg if details else ""
         job["service"] = display_loss_type(details.loss_type) if details else ""
+        job["postcode"] = details.postcode if details else ""
+        job["maps_url"], job["waze_url"] = _navigation_urls(job["postcode"])
 
     return render(
         request,

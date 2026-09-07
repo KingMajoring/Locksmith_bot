@@ -155,6 +155,58 @@ class DashboardTests(TestCase):
         self.assertContains(response, "Ford Focus 2020")
         self.assertContains(response, "AKL")
 
+    @patch("apps.locksmith_portal.views.get_handl_client")
+    @patch("apps.locksmith_portal.views.get_optimo_client")
+    def test_dashboard_shows_postcode_and_navigation_links(self, mock_get_optimo, mock_get_handl):
+        today = timezone.localdate()
+        order_no = f"1001_{today.isoformat()}"
+        mock_optimo = MagicMock()
+        mock_optimo.list_orders_for_date.return_value = [
+            OptimoOrderSummary(
+                order_no=order_no, driver_serial="011", distance_metres=0, travel_time_seconds=0
+            ),
+        ]
+        mock_get_optimo.return_value = mock_optimo
+        mock_handl = MagicMock()
+        mock_handl.get_job_details.return_value = {
+            "1001": JobDetails(
+                report_id="1001", make="Ford", model="Focus", year="2020", reg="AB20 CDE", vin="VIN1",
+                service_type="Car", loss_type="LOST", supplied_service="", net_cost=100.0,
+                postcode="NR14 8PL",
+            )
+        }
+        mock_get_handl.return_value = mock_handl
+
+        response = self.client.get(reverse("locksmith_portal:dashboard"))
+        job = response.context["jobs"][0]
+        self.assertEqual(job["postcode"], "NR14 8PL")
+        self.assertEqual(job["maps_url"], "https://www.google.com/maps/search/?api=1&query=NR14%208PL")
+        self.assertEqual(job["waze_url"], "https://waze.com/ul?q=NR14%208PL&navigate=yes")
+        self.assertContains(response, "NR14 8PL")
+        self.assertContains(response, "https://www.google.com/maps/search/?api=1&amp;query=NR14%208PL")
+        self.assertContains(response, "https://waze.com/ul?q=NR14%208PL&amp;navigate=yes")
+
+    @patch("apps.locksmith_portal.views.get_handl_client")
+    @patch("apps.locksmith_portal.views.get_optimo_client")
+    def test_dashboard_hides_navigation_links_without_postcode(self, mock_get_optimo, mock_get_handl):
+        today = timezone.localdate()
+        order_no = f"1001_{today.isoformat()}"
+        mock_optimo = MagicMock()
+        mock_optimo.list_orders_for_date.return_value = [
+            OptimoOrderSummary(
+                order_no=order_no, driver_serial="011", distance_metres=0, travel_time_seconds=0
+            ),
+        ]
+        mock_get_optimo.return_value = mock_optimo
+        mock_get_handl.return_value = MagicMock(get_job_details=MagicMock(return_value={}))
+
+        response = self.client.get(reverse("locksmith_portal:dashboard"))
+        job = response.context["jobs"][0]
+        self.assertEqual(job["maps_url"], "")
+        self.assertEqual(job["waze_url"], "")
+        self.assertNotContains(response, "📍 Maps")
+        self.assertNotContains(response, "🚗 Waze")
+
     @patch("apps.locksmith_portal.views.get_optimo_client")
     def test_dashboard_shows_disposed_tick_and_count(self, mock_get_optimo):
         today = timezone.localdate()
@@ -312,6 +364,7 @@ class JobDetailTests(TestCase):
     @patch("apps.locksmith_portal.views.get_optimo_client")
     def test_job_not_on_todays_schedule_redirects(self, mock_get_optimo, mock_get_handl):
         self._mock_optimo(mock_get_optimo)
+        mock_get_handl.return_value.get_job_details.return_value = {}
         url = reverse("locksmith_portal:job_detail", args=[f"999999_{self.today.isoformat()}"])
         response = self.client.get(url)
         self.assertRedirects(
@@ -683,6 +736,7 @@ class JobDetailTests(TestCase):
     ):
         yesterday = self.today - timedelta(days=1)
         self._mock_optimo(mock_get_optimo)  # only self.order_no is scheduled, any date
+        mock_get_handl.return_value.get_job_details.return_value = {}
 
         other_order_no = f"999999_{yesterday.isoformat()}"
         url = reverse("locksmith_portal:job_detail", args=[other_order_no])

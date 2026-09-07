@@ -66,6 +66,10 @@ class JobDetails:
     # property lockout. None when there's no key claim row to read this
     # from at all (e.g. a non-vehicle job).
     spare_key: bool | None = None
+    # Policy_HolderDetails.PostCode (confirmed live against the same
+    # AKL job — NR14 8PL) — the job's actual location, for the
+    # locksmith portal's dashboard and one-tap Maps/Waze navigation.
+    postcode: str = ""
 
 
 @dataclass(frozen=True)
@@ -326,6 +330,7 @@ class MockHandlClient(HandlClient):
     _MODELS = ["Focus", "Corsa", "3 Series", "Golf", "A4", "C-Class", "Yaris"]
     _SERVICE_TYPES = ["Lockout", "Key cutting", "Key programming", "Barrel change", "Boot lockout"]
     _LOSS_TYPES = ["Lost Keys", "Broken Key", "Lockout", "Keys Locked In", "Stolen Keys"]
+    _POSTCODES = ["NR14 8PL", "NR1 3QE", "IP1 2AB", "CO1 1AA", "CB1 2CD", "PE1 3EF"]
     _SUPPLIED_SERVICES = [
         "Non-Destructive Entry", "Key Cutting", "Key Programming",
         "Lock Change", "Boot Entry",
@@ -351,6 +356,7 @@ class MockHandlClient(HandlClient):
                 supplied_service=rng.choice(self._SUPPLIED_SERVICES),
                 net_cost=round(rng.uniform(60, 350), 2),
                 spare_key=rng.choice([True, False]),
+                postcode=rng.choice(self._POSTCODES),
             )
         return result
 
@@ -716,14 +722,29 @@ class SQLHandlClient(HandlClient):
                 FROM Policy_Financial pf
                 WHERE pf.ReportID IN ({id_placeholders})
                 GROUP BY pf.ReportID
+            ),
+            HolderPostcode AS (
+                -- The job's actual location (confirmed live against a
+                -- real AKL job — NR14 8PL), for the portal's dashboard
+                -- and Maps/Waze navigation. Deliberately MAX()'d rather
+                -- than ranked by an ID column (unlike the CTEs above) —
+                -- Policy_HolderDetails' own row-uniqueness per ReportID
+                -- isn't confirmed, and grouping avoids any risk of
+                -- fanning VehicleRanked's rows out via the join below if
+                -- it turns out not to be one row per ReportID.
+                SELECT ReportID, MAX(PostCode) AS PostCode
+                FROM Policy_HolderDetails
+                WHERE ReportID IN ({id_placeholders})
+                GROUP BY ReportID
             )
             SELECT
                 v.ReportID, v.Make, v.Model, v.yearOfManufacture, v.VehicleReg, v.VehicleVIN, v.KeyType,
-                v.SpareKey, lt.LossEvent, ss.SuppliedService, f.NetCost
+                v.SpareKey, lt.LossEvent, ss.SuppliedService, f.NetCost, hp.PostCode
             FROM VehicleRanked v
             LEFT JOIN LossType lt ON v.ReportID = lt.ReportID
             LEFT JOIN SuppliedServiceRanked ss ON v.ReportID = ss.ReportID AND ss.rn = 1
             LEFT JOIN Finance f ON v.ReportID = f.ReportID
+            LEFT JOIN HolderPostcode hp ON v.ReportID = hp.ReportID
             WHERE v.rn = 1
         """
         with self._connection() as conn:
@@ -743,6 +764,7 @@ class SQLHandlClient(HandlClient):
                 supplied_service=row["SuppliedService"] or "",
                 net_cost=float(row["NetCost"]) if row["NetCost"] is not None else None,
                 spare_key=bool(row["SpareKey"]) if row["SpareKey"] is not None else None,
+                postcode=row["PostCode"] or "",
             )
             for row in rows
         }

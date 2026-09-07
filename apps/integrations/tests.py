@@ -54,6 +54,7 @@ class MockHandlClientTests(TestCase):
             self.assertTrue(job.year)
             self.assertTrue(job.vin)
             self.assertTrue(job.service_type)
+            self.assertTrue(job.postcode)
 
     def test_get_job_details_is_deterministic_per_report_id(self):
         first = self.client.get_job_details(["1001"])["1001"]
@@ -334,6 +335,7 @@ class SQLHandlClientTests(TestCase):
                 "LossEvent": "Lost Keys",
                 "SuppliedService": "Key Programming",
                 "NetCost": 145.5,
+                "PostCode": "NR14 8PL",
             }
         ]
         fake_conn = _fake_connection(rows)
@@ -348,6 +350,7 @@ class SQLHandlClientTests(TestCase):
         self.assertIn("Lookup_LossEvent_Details", query)
         self.assertIn("Lookup_LocksmithSuppliedServices", query)
         self.assertIn("Policy_Financial", query)
+        self.assertIn("Policy_HolderDetails", query)
 
         job = details["496390"]
         self.assertEqual(job.make, "NISSAN")
@@ -359,6 +362,30 @@ class SQLHandlClientTests(TestCase):
         self.assertEqual(job.supplied_service, "Key Programming")
         self.assertEqual(job.net_cost, 145.5)
         self.assertIs(job.spare_key, False)
+        self.assertEqual(job.postcode, "NR14 8PL")
+
+    def test_get_job_details_null_postcode_maps_to_empty_string(self):
+        rows = [
+            {
+                "ReportID": "496390",
+                "Make": "NISSAN",
+                "Model": "X-TRAIL",
+                "yearOfManufacture": 2017,
+                "VehicleReg": "AB17 CDE",
+                "VehicleVIN": "SJNFAAJ11U1234567",
+                "KeyType": "Car",
+                "SpareKey": False,
+                "LossEvent": "Lost Keys",
+                "SuppliedService": "Key Programming",
+                "NetCost": 100.0,
+                "PostCode": None,
+            }
+        ]
+        fake_conn = _fake_connection(rows)
+        client = SQLHandlClient()
+        with patch.object(client, "_connection", return_value=fake_conn):
+            details = client.get_job_details(["496390"])
+        self.assertEqual(details["496390"].postcode, "")
 
     def test_get_job_details_null_net_cost_maps_to_none(self):
         rows = [
@@ -374,6 +401,7 @@ class SQLHandlClientTests(TestCase):
                 "LossEvent": "Lost Keys",
                 "SuppliedService": "Key Programming",
                 "NetCost": None,
+                "PostCode": "NR14 8PL",
             }
         ]
         fake_conn = _fake_connection(rows)
@@ -397,6 +425,7 @@ class SQLHandlClientTests(TestCase):
                 "LossEvent": "Lost Keys",
                 "SuppliedService": "Key Programming",
                 "NetCost": 100.0,
+                "PostCode": "NR14 8PL",
             }
         ]
         fake_conn = _fake_connection(rows)
