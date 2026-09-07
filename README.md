@@ -114,10 +114,11 @@ group `wgtk-ops-tool-rg`):
    checked in the last `STOCK_CHECK_NO_REPEAT_WEEKS` weeks, and randomly
    draws `STOCK_CHECK_LINES_PER_WEEK` (default 10). Expected quantity and
    unit cost are frozen onto the `StockCheckItem` rows at this point.
-3. `send_weekly_check` emails an Excel sheet (part code + description
-   only — no expected quantity) to the locksmith via Microsoft 365 SMTP.
-4. Office staff use the entry queue at `/stock-accuracy/` to type in the
-   returned counts once the locksmith replies.
+3. The locksmith sees it on their portal dashboard (no email — it's just
+   there once generated) and enters the counted quantities themselves at
+   `/locksmith/stock-check/<pk>/`.
+4. Office staff can also enter counts on the locksmith's behalf via the
+   entry queue at `/stock-accuracy/`.
 5. Variance/leakage flagging (units, %, £ impact, repeat offender) is
    configured in `/admin/` under **Variance threshold configuration**,
    and shown on the dashboard and per-locksmith report.

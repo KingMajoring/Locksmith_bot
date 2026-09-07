@@ -186,7 +186,7 @@ SOCIALACCOUNT_PROVIDERS = {
     }
 }
 
-# --- Email (weekly stock check to locksmiths, Area 1) ----------------------
+# --- Email (general-purpose — not currently wired to any feature) ----------
 # Default: console backend (prints instead of sending). Two real options:
 # - SMTP: EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend +
 #   EMAIL_HOST_USER/PASSWORD (needs SMTP AUTH enabled on the mailbox).
@@ -199,7 +199,7 @@ EMAIL_PORT = env.int("EMAIL_PORT", default=587)
 EMAIL_USE_TLS = env.bool("EMAIL_USE_TLS", default=True)
 EMAIL_HOST_USER = env("EMAIL_HOST_USER", default="")
 EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD", default="")
-DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="stock-checks@wgtk.co.uk")
+DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="noreply@wgtk.co.uk")
 
 # Microsoft Graph sendMail (see apps/integrations/graph_email_backend.py).
 # MS_GRAPH_MAIL_SENDER is whose mailbox the app-only Graph call acts as
@@ -218,12 +218,6 @@ STOCK_CHECK_LINES_PER_WEEK = env.int("STOCK_CHECK_LINES_PER_WEEK", default=10)
 STOCK_CHECK_POOL_SIZE = env.int("STOCK_CHECK_POOL_SIZE", default=30)
 STOCK_CHECK_USAGE_WINDOW_DAYS = env.int("STOCK_CHECK_USAGE_WINDOW_DAYS", default=90)
 STOCK_CHECK_NO_REPEAT_WEEKS = env.int("STOCK_CHECK_NO_REPEAT_WEEKS", default=4)
-
-# Pre-go-live safety net: while set, every stock-check email is
-# redirected here instead of the real locksmith (subject line still
-# says who it would really have gone to). Leave unset once confident
-# in real SMTP delivery and ready for locksmiths to receive them.
-STOCK_CHECK_TEST_REDIRECT_EMAIL = env("STOCK_CHECK_TEST_REDIRECT_EMAIL", default="")
 
 # --- Optimo API (Area 2+, wired up in a later phase) ------------------------
 OPTIMO_API_BASE_URL = env("OPTIMO_API_BASE_URL", default="")

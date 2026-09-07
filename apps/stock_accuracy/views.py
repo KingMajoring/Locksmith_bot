@@ -5,14 +5,14 @@ from django.utils import timezone
 
 from apps.locksmiths.models import Locksmith
 
-from .models import EmailSettings, WeeklyStockCheck
+from .models import WeeklyStockCheck
 from .services.reporting import flagged_items_queryset, line_summary, locksmith_summary
 
 
 @login_required
 def dashboard(request):
     pending = (
-        WeeklyStockCheck.objects.filter(sent_at__isnull=False, completed_at__isnull=True)
+        WeeklyStockCheck.objects.filter(completed_at__isnull=True)
         .select_related("locksmith")
         .order_by("week_starting")
     )
@@ -26,27 +26,8 @@ def dashboard(request):
             "pending": pending,
             "summaries": summaries,
             "top_lines": top_lines,
-            "emails_live": EmailSettings.current().emails_live,
         },
     )
-
-
-@login_required
-def toggle_emails_live(request):
-    if request.method != "POST":
-        return redirect("stock_accuracy:dashboard")
-
-    email_settings = EmailSettings.current()
-    email_settings.emails_live = not email_settings.emails_live
-    email_settings.save(update_fields=["emails_live"])
-
-    if email_settings.emails_live:
-        messages.warning(
-            request, "Emails are now LIVE — locksmiths will receive real stock-check emails."
-        )
-    else:
-        messages.success(request, "Emails are now in test mode — nothing goes to real locksmiths.")
-    return redirect("stock_accuracy:dashboard")
 
 
 @login_required

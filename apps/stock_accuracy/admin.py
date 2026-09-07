@@ -1,24 +1,11 @@
 from django.contrib import admin
 
 from .models import (
-    EmailSettings,
     StockCheckItem,
     StockCheckSchedule,
     VarianceThreshold,
     WeeklyStockCheck,
 )
-
-
-@admin.register(EmailSettings)
-class EmailSettingsAdmin(admin.ModelAdmin):
-    list_display = ("__str__", "updated_at")
-
-    def has_add_permission(self, request):
-        # Single row, tool-wide — same pattern as OptimoSettings/VarianceThreshold.
-        return not EmailSettings.objects.exists()
-
-    def has_delete_permission(self, request, obj=None):
-        return False
 
 
 @admin.register(StockCheckSchedule)
@@ -49,7 +36,7 @@ class StockCheckItemInline(admin.TabularInline):
 
 @admin.register(WeeklyStockCheck)
 class WeeklyStockCheckAdmin(admin.ModelAdmin):
-    list_display = ("locksmith", "week_starting", "status", "sent_at", "completed_at")
+    list_display = ("locksmith", "week_starting", "status", "generated_at", "completed_at")
     list_filter = ("status", "week_starting")
     search_fields = ("locksmith__name",)
     inlines = [StockCheckItemInline]

@@ -1,15 +1,12 @@
 from datetime import date, timedelta
 
 from django.contrib.auth import get_user_model
-from django.core import mail
 from django.test import TestCase, override_settings
 from django.urls import reverse
-from django.utils import timezone
 
 from apps.locksmiths.models import Locksmith
 
-from .models import EmailSettings, StockCheckItem, VarianceThreshold, WeeklyStockCheck
-from .services.emailing import send_weekly_check
+from .models import StockCheckItem, VarianceThreshold, WeeklyStockCheck
 from .services.generation import generate_weekly_check
 from .services.reporting import locksmith_summary
 
@@ -62,57 +59,6 @@ class GenerationTests(TestCase):
         # catalogue, some overlap is unavoidable once the pool is
         # exhausted — but the two draws should still differ.
         self.assertNotEqual(week1_codes, week2_codes)
-
-
-class EmailingTests(TestCase):
-    def setUp(self):
-        self.locksmith = _make_locksmith("Bob Jones", "bob@example.com", ["ENG-002"])
-        self.weekly_check = generate_weekly_check(self.locksmith, date(2026, 9, 7))
-
-    def test_send_attaches_excel_and_marks_sent_when_live(self):
-        EmailSettings.objects.create(emails_live=True)
-        send_weekly_check(self.weekly_check)
-        self.weekly_check.refresh_from_db()
-
-        self.assertEqual(len(mail.outbox), 1)
-        self.assertEqual(mail.outbox[0].to, ["bob@example.com"])
-        self.assertEqual(len(mail.outbox[0].attachments), 1)
-        self.assertEqual(self.weekly_check.status, WeeklyStockCheck.Status.SENT)
-        self.assertIsNotNone(self.weekly_check.sent_at)
-
-    def test_send_without_email_raises(self):
-        self.locksmith.email = ""
-        self.locksmith.save()
-        with self.assertRaises(ValueError):
-            send_weekly_check(self.weekly_check)
-
-    @override_settings(STOCK_CHECK_TEST_REDIRECT_EMAIL="richard.king@wgtk.co.uk")
-    def test_redirects_to_test_address_when_not_live(self):
-        send_weekly_check(self.weekly_check)
-
-        self.assertEqual(mail.outbox[0].to, ["richard.king@wgtk.co.uk"])
-        self.assertIn("bob@example.com", mail.outbox[0].subject)
-        self.assertIn("TEST", mail.outbox[0].subject)
-
-    def test_default_refuses_to_send_when_not_live_and_no_test_address(self):
-        """Safety default: EmailSettings.emails_live starts False, and
-        with no STOCK_CHECK_TEST_REDIRECT_EMAIL configured either,
-        sending must refuse outright rather than silently falling
-        through to the real locksmith."""
-        with self.assertRaises(ValueError):
-            send_weekly_check(self.weekly_check)
-        self.assertEqual(len(mail.outbox), 0)
-
-    @override_settings(STOCK_CHECK_TEST_REDIRECT_EMAIL="richard.king@wgtk.co.uk")
-    def test_emails_live_overrides_test_redirect(self):
-        """Going live is an explicit choice — once emails_live is on,
-        real locksmiths get their emails even if a test redirect
-        address happens to still be configured."""
-        EmailSettings.objects.create(emails_live=True)
-        send_weekly_check(self.weekly_check)
-
-        self.assertEqual(mail.outbox[0].to, ["bob@example.com"])
-        self.assertNotIn("TEST", mail.outbox[0].subject)
 
 
 class VarianceFlaggingTests(TestCase):
@@ -205,36 +151,16 @@ class ViewsSmokeTests(TestCase):
         self.client.force_login(self.user)
         self.locksmith = _make_locksmith("Sam Lee", "sam@example.com", ["ENG-010"])
         self.weekly_check = generate_weekly_check(self.locksmith, date(2026, 9, 7))
-        self.weekly_check.status = WeeklyStockCheck.Status.SENT
-        self.weekly_check.sent_at = timezone.now()
-        self.weekly_check.save()
 
     def test_dashboard_renders(self):
         response = self.client.get(reverse("stock_accuracy:dashboard"))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Sam Lee")
 
-    def test_dashboard_shows_emails_not_live_by_default(self):
+    def test_dashboard_lists_generated_check_as_pending(self):
         response = self.client.get(reverse("stock_accuracy:dashboard"))
-        self.assertFalse(response.context["emails_live"])
-        self.assertContains(response, "OFF: all stock-check emails redirect")
-
-    def test_toggle_emails_live_flips_setting(self):
-        self.assertFalse(EmailSettings.current().emails_live)
-        self.client.post(reverse("stock_accuracy:toggle_emails_live"))
-        self.assertTrue(EmailSettings.current().emails_live)
-        self.client.post(reverse("stock_accuracy:toggle_emails_live"))
-        self.assertFalse(EmailSettings.current().emails_live)
-
-    def test_toggle_emails_live_requires_post(self):
-        self.client.get(reverse("stock_accuracy:toggle_emails_live"))
-        self.assertFalse(EmailSettings.current().emails_live)
-
-    def test_toggle_emails_live_requires_login(self):
-        self.client.logout()
-        response = self.client.post(reverse("stock_accuracy:toggle_emails_live"))
-        self.assertEqual(response.status_code, 302)
-        self.assertFalse(EmailSettings.current().emails_live)
+        self.assertContains(response, "Sam Lee")
+        self.assertEqual(list(response.context["pending"]), [self.weekly_check])
 
     def test_locksmith_report_renders(self):
         response = self.client.get(
