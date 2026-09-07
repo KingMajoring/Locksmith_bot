@@ -204,8 +204,7 @@ class DashboardTests(TestCase):
         job = response.context["jobs"][0]
         self.assertEqual(job["maps_url"], "")
         self.assertEqual(job["waze_url"], "")
-        self.assertNotContains(response, "📍 Maps")
-        self.assertNotContains(response, "🚗 Waze")
+        self.assertNotContains(response, "job-nav-link")
 
     @patch("apps.locksmith_portal.views.get_optimo_client")
     def test_dashboard_shows_disposed_tick_and_count(self, mock_get_optimo):
@@ -1073,8 +1072,8 @@ class JobVisitWorkflowTests(TestCase):
         url = reverse("locksmith_portal:job_overview", args=[self.order_no])
         response = self.client.get(url)
         self.assertTrue(response.context["offer_nav_choice"])
-        self.assertContains(response, "📍 Maps")
-        self.assertContains(response, "🚗 Waze")
+        self.assertContains(response, "Maps</button>")
+        self.assertContains(response, "Waze</button>")
         self.assertContains(response, 'name="nav_app" value="maps"')
         self.assertContains(response, 'name="nav_app" value="waze"')
 
@@ -1083,8 +1082,8 @@ class JobVisitWorkflowTests(TestCase):
         url = reverse("locksmith_portal:job_overview", args=[self.order_no])
         response = self.client.get(url)
         self.assertFalse(response.context["offer_nav_choice"])
-        self.assertNotContains(response, "📍 Maps")
-        self.assertNotContains(response, "🚗 Waze")
+        self.assertNotContains(response, "Maps</button>")
+        self.assertNotContains(response, "Waze</button>")
         self.assertContains(response, "Mark on route")
 
     def test_overview_hides_nav_choice_once_preference_saved(self):

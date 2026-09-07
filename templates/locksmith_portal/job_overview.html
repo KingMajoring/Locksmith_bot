@@ -24,7 +24,7 @@
                   action="{% url 'locksmith_portal:job_on_route' order_no=order_no %}?date={{ selected_date|date:'Y-m-d' }}">
               {% csrf_token %}
               <input type="hidden" name="nav_app" value="maps">
-              <button class="btn-secondary" type="submit">📍 Maps</button>
+              <button class="btn-secondary" type="submit">{% include "locksmith_portal/_icon_maps.html" %} Maps</button>
             </form>
             {% endif %}
             {% if waze_url %}
@@ -32,7 +32,7 @@
                   action="{% url 'locksmith_portal:job_on_route' order_no=order_no %}?date={{ selected_date|date:'Y-m-d' }}">
               {% csrf_token %}
               <input type="hidden" name="nav_app" value="waze">
-              <button class="btn-secondary" type="submit">🚗 Waze</button>
+              <button class="btn-secondary" type="submit">{% include "locksmith_portal/_icon_waze.html" %} Waze</button>
             </form>
             {% endif %}
           </div>

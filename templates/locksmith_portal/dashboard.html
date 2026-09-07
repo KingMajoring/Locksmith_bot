@@ -81,8 +81,8 @@
         </a>
         {% if job.maps_url or job.waze_url %}
           <div class="job-nav-links">
-            {% if job.maps_url %}<a class="job-nav-link" href="{{ job.maps_url }}" target="_blank" rel="noopener">📍 Maps</a>{% endif %}
-            {% if job.waze_url %}<a class="job-nav-link" href="{{ job.waze_url }}" target="_blank" rel="noopener">🚗 Waze</a>{% endif %}
+            {% if job.maps_url %}<a class="job-nav-link" href="{{ job.maps_url }}" target="_blank" rel="noopener">{% include "locksmith_portal/_icon_maps.html" %} Maps</a>{% endif %}
+            {% if job.waze_url %}<a class="job-nav-link" href="{{ job.waze_url }}" target="_blank" rel="noopener">{% include "locksmith_portal/_icon_waze.html" %} Waze</a>{% endif %}
           </div>
         {% endif %}
       </div>

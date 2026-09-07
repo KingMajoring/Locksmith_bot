@@ -348,6 +348,8 @@ input[type=number] { width: 5rem; }
 }
 .job-nav-link:active { transform: scale(0.98); }
 
+.nav-icon { vertical-align: -3px; margin-right: 0.3rem; }
+
 .day-nav { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.9rem; }
 .day-nav h2 { margin: 0; font-size: 1rem; text-align: center; }
 .day-nav-link { color: var(--wgtk-orange); text-decoration: none; font-weight: 700; font-size: 0.85rem; white-space: nowrap; flex-shrink: 0; }
