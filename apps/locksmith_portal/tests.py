@@ -1039,6 +1039,55 @@ class JobVisitWorkflowTests(TestCase):
         self.assertNotContains(response, "Access method")
         self.assertContains(response, "Dispose parts")
 
+    def test_overview_akl_with_no_spare_key_shows_access_method_step(self):
+        # An AKL ("LOST") job isn't itself Handl's "Gain access" loss
+        # type, but with no spare key held anywhere the locksmith still
+        # has no way in without picking/forcing entry — confirmed live
+        # against Policy_KeyClaims.SpareKey on a real AKL job.
+        self._set_loss_type("LOST", spare_key=False)
+        self._arrived_visit()
+        url = reverse("locksmith_portal:job_overview", args=[self.order_no])
+        response = self.client.get(url)
+        self.assertTrue(response.context["is_gain_access"])
+        self.assertContains(response, "Record access method")
+
+    def test_overview_akl_with_spare_key_hides_access_method_step(self):
+        # A spare key held elsewhere means the customer (or the
+        # locksmith via that spare) already has a way in — no need to
+        # pick/force entry.
+        self._set_loss_type("LOST", spare_key=True)
+        self._arrived_visit()
+        url = reverse("locksmith_portal:job_overview", args=[self.order_no])
+        response = self.client.get(url)
+        self.assertFalse(response.context["is_gain_access"])
+
+    def test_overview_akl_with_unknown_spare_key_hides_access_method_step(self):
+        # spare_key=None (no Policy_KeyClaims row to read it from, or
+        # not yet confirmed) must never be treated as "definitely no
+        # spare" — only an explicit False triggers this.
+        self._set_loss_type("LOST", spare_key=None)
+        self._arrived_visit()
+        url = reverse("locksmith_portal:job_overview", args=[self.order_no])
+        response = self.client.get(url)
+        self.assertFalse(response.context["is_gain_access"])
+
+    def test_job_detail_redirects_to_access_method_for_akl_with_no_spare_key(self):
+        self._set_loss_type("LOST", spare_key=False)
+        self._arrived_visit()
+        url = reverse("locksmith_portal:job_detail", args=[self.order_no])
+        response = self.client.get(url)
+        self.assertRedirects(
+            response,
+            f"{reverse('locksmith_portal:job_access_method', args=[self.order_no])}?date={self.today.isoformat()}",
+        )
+
+    def test_job_access_method_reachable_for_akl_with_no_spare_key(self):
+        self._set_loss_type("LOST", spare_key=False)
+        self._arrived_visit()
+        url = reverse("locksmith_portal:job_access_method", args=[self.order_no])
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+
     # --- on route -------------------------------------------------------
 
     def test_on_route_advances_stage_and_writes_handl_note(self):
@@ -1411,11 +1460,12 @@ class JobVisitWorkflowTests(TestCase):
 
     # --- per-service completion flow: Gain access ------------------------
 
-    def _set_loss_type(self, raw_loss_type):
+    def _set_loss_type(self, raw_loss_type, spare_key=None):
         self.mock_handl.get_job_details.return_value = {
             "496390": JobDetails(
                 report_id="496390", make="Ford", model="Focus", year="2020", reg="AB20 CDE", vin="VIN1",
                 service_type="Car", loss_type=raw_loss_type, supplied_service="", net_cost=100.0,
+                spare_key=spare_key,
             )
         }
 

@@ -60,6 +60,12 @@ class JobDetails:
     loss_type: str
     supplied_service: str
     net_cost: float | None
+    # Policy_KeyClaims.SpareKey (confirmed live against a real AKL job)
+    # — False means the customer has no spare key anywhere, so the
+    # locksmith has no way in without picking/forcing entry, same as a
+    # property lockout. None when there's no key claim row to read this
+    # from at all (e.g. a non-vehicle job).
+    spare_key: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -344,6 +350,7 @@ class MockHandlClient(HandlClient):
                 loss_type=rng.choice(self._LOSS_TYPES),
                 supplied_service=rng.choice(self._SUPPLIED_SERVICES),
                 net_cost=round(rng.uniform(60, 350), 2),
+                spare_key=rng.choice([True, False]),
             )
         return result
 
@@ -665,6 +672,7 @@ class SQLHandlClient(HandlClient):
                     pkc.yearOfManufacture,
                     pkc.VehicleReg,
                     pkc.VehicleVIN,
+                    pkc.SpareKey,
                     lkt.KeyType,
                     ROW_NUMBER() OVER (PARTITION BY pkc.ReportID ORDER BY pkc.ID) AS rn
                 FROM Policy_KeyClaims pkc
@@ -711,7 +719,7 @@ class SQLHandlClient(HandlClient):
             )
             SELECT
                 v.ReportID, v.Make, v.Model, v.yearOfManufacture, v.VehicleReg, v.VehicleVIN, v.KeyType,
-                lt.LossEvent, ss.SuppliedService, f.NetCost
+                v.SpareKey, lt.LossEvent, ss.SuppliedService, f.NetCost
             FROM VehicleRanked v
             LEFT JOIN LossType lt ON v.ReportID = lt.ReportID
             LEFT JOIN SuppliedServiceRanked ss ON v.ReportID = ss.ReportID AND ss.rn = 1
@@ -734,6 +742,7 @@ class SQLHandlClient(HandlClient):
                 loss_type=row["LossEvent"] or "",
                 supplied_service=row["SuppliedService"] or "",
                 net_cost=float(row["NetCost"]) if row["NetCost"] is not None else None,
+                spare_key=bool(row["SpareKey"]) if row["SpareKey"] is not None else None,
             )
             for row in rows
         }

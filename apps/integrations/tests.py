@@ -330,6 +330,7 @@ class SQLHandlClientTests(TestCase):
                 "VehicleReg": "AB17 CDE",
                 "VehicleVIN": "SJNFAAJ11U1234567",
                 "KeyType": "Car",
+                "SpareKey": False,
                 "LossEvent": "Lost Keys",
                 "SuppliedService": "Key Programming",
                 "NetCost": 145.5,
@@ -357,6 +358,7 @@ class SQLHandlClientTests(TestCase):
         self.assertEqual(job.loss_type, "Lost Keys")
         self.assertEqual(job.supplied_service, "Key Programming")
         self.assertEqual(job.net_cost, 145.5)
+        self.assertIs(job.spare_key, False)
 
     def test_get_job_details_null_net_cost_maps_to_none(self):
         rows = [
@@ -368,6 +370,7 @@ class SQLHandlClientTests(TestCase):
                 "VehicleReg": "AB17 CDE",
                 "VehicleVIN": "SJNFAAJ11U1234567",
                 "KeyType": "Car",
+                "SpareKey": None,
                 "LossEvent": "Lost Keys",
                 "SuppliedService": "Key Programming",
                 "NetCost": None,
@@ -378,6 +381,29 @@ class SQLHandlClientTests(TestCase):
         with patch.object(client, "_connection", return_value=fake_conn):
             details = client.get_job_details(["496390"])
         self.assertIsNone(details["496390"].net_cost)
+        self.assertIsNone(details["496390"].spare_key)
+
+    def test_get_job_details_spare_key_true_maps_to_true(self):
+        rows = [
+            {
+                "ReportID": "496390",
+                "Make": "NISSAN",
+                "Model": "X-TRAIL",
+                "yearOfManufacture": 2017,
+                "VehicleReg": "AB17 CDE",
+                "VehicleVIN": "SJNFAAJ11U1234567",
+                "KeyType": "Car",
+                "SpareKey": True,
+                "LossEvent": "Lost Keys",
+                "SuppliedService": "Key Programming",
+                "NetCost": 100.0,
+            }
+        ]
+        fake_conn = _fake_connection(rows)
+        client = SQLHandlClient()
+        with patch.object(client, "_connection", return_value=fake_conn):
+            details = client.get_job_details(["496390"])
+        self.assertIs(details["496390"].spare_key, True)
 
     def test_get_job_details_empty_input_returns_empty_without_querying(self):
         client = SQLHandlClient()

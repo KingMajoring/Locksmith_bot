@@ -118,14 +118,38 @@ _AFTER_PHOTO_SLOTS_BY_SERVICE = {
 def _loss_label_for(report_id):
     """Handl's loss_type display label (e.g. "Gain access", "AKL",
     "Spare Key") for this job, or "" if it can't be looked up — decides
-    which arrival/completion questions/photo slots job_arrived,
-    job_complete (and, for Gain access, job_access_method) show."""
+    which arrival/completion questions/photo slots job_arrived and
+    job_complete show (see _needs_access_method for whether
+    job_access_method itself is needed)."""
     try:
         details = get_handl_client().get_job_details([report_id]).get(report_id)
     except Exception:
         logger.exception("Failed to fetch Handl job details for report %s", report_id)
         return ""
     return display_loss_type(details.loss_type) if details else ""
+
+
+def _needs_access_method(report_id):
+    """True if this job needs the "how did you gain access" step
+    (job_access_method — Picked/Airbag, and for an airbag entry the
+    damage disclaimer): either a genuine property lockout (Handl's
+    "Gain access" loss type, i.e. LOCKED IN PROPERTY), or ANY job where
+    Handl's own Policy_KeyClaims.SpareKey flag is explicitly False — no
+    spare key held anywhere means the locksmith has no way in without
+    picking/forcing entry, regardless of loss type (confirmed against a
+    real AKL job that skipped this step before this was added: AKL
+    ("LOST") isn't itself in Handl's Gain access loss type, but with no
+    spare key it needs the exact same access-method record). spare_key
+    of None (no key claim row to read it from) never triggers this on
+    its own."""
+    try:
+        details = get_handl_client().get_job_details([report_id]).get(report_id)
+    except Exception:
+        logger.exception("Failed to fetch Handl job details for report %s", report_id)
+        return False
+    if details is None:
+        return False
+    return display_loss_type(details.loss_type) == "Gain access" or details.spare_key is False
 
 
 def _arrival_photo_slots(loss_label):
@@ -566,7 +590,7 @@ def job_overview(request, order_no):
             "is_today": ctx["selected_date"] == timezone.localdate(),
             "dashboard_url": ctx["dashboard_url"],
             "is_preview": _is_preview(request),
-            "is_gain_access": _loss_label_for(ctx["report_id"]) == "Gain access",
+            "is_gain_access": _needs_access_method(ctx["report_id"]),
         },
     )
 
@@ -757,7 +781,7 @@ def job_access_method(request, order_no):
         messages.error(request, "Mark yourself arrived first.")
         return redirect(overview_url)
 
-    if _loss_label_for(report_id) != "Gain access":
+    if not _needs_access_method(report_id):
         return redirect(overview_url)
 
     if request.method == "POST":
@@ -845,7 +869,7 @@ def job_parts_continue(request, order_no):
         return early
     visit = ctx["visit"]
 
-    if not visit.access_method and _loss_label_for(ctx["report_id"]) == "Gain access":
+    if not visit.access_method and _needs_access_method(ctx["report_id"]):
         messages.error(request, "Record how you gained access first.")
         return redirect(
             f"{reverse('locksmith_portal:job_access_method', args=[order_no])}?date={ctx['selected_date'].isoformat()}"
@@ -1052,7 +1076,7 @@ def job_detail(request, order_no):
         messages.error(request, "Mark yourself arrived (with before photos) first.")
         return redirect(overview_url)
 
-    if not visit.access_method and _loss_label_for(report_id) == "Gain access":
+    if not visit.access_method and _needs_access_method(report_id):
         messages.error(request, "Record how you gained access first.")
         return redirect(
             f"{reverse('locksmith_portal:job_access_method', args=[order_no])}?date={selected_date.isoformat()}"
