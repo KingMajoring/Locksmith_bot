@@ -298,27 +298,31 @@ input[type=number] { width: 5rem; }
 .preview-banner a { color: var(--wgtk-green-dark); font-weight: 700; }
 
 .job {
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 0.65rem;
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow 0.15s;
+}
+.job:hover { box-shadow: var(--shadow-md); }
+.job-link {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
-  background: #fff;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
   padding: 1rem 1.1rem;
-  margin-bottom: 0.65rem;
   text-decoration: none;
   color: var(--ink);
-  box-shadow: var(--shadow-sm);
-  transition: box-shadow 0.15s, transform 0.05s;
+  transition: transform 0.05s;
 }
-.job:hover { box-shadow: var(--shadow-md); }
-.job:active { transform: scale(0.99); }
-.job strong { display: block; font-size: 1rem; }
-.job span { color: var(--ink-soft); font-size: 0.85rem; }
+.job-link:active { transform: scale(0.99); }
+.job-link strong { display: block; font-size: 1rem; }
+.job-link span { color: var(--ink-soft); font-size: 0.85rem; }
 .job-main { display: flex; flex-direction: column; gap: 0.15rem; min-width: 0; }
 .job-meta { font-size: 0.8rem; }
-.job::after {
+.job-location { font-size: 0.8rem; }
+.job-link::after {
   content: "→";
   color: var(--wgtk-orange);
   font-weight: 700;
@@ -328,6 +332,21 @@ input[type=number] { width: 5rem; }
 
 .job-done { border-color: var(--wgtk-green-light); }
 .job-tick { color: var(--wgtk-green-dark); font-weight: 700; }
+
+.job-nav-links { display: flex; gap: 0.5rem; padding: 0 1.1rem 0.85rem; }
+.job-nav-link {
+  flex: 1;
+  text-align: center;
+  padding: 0.4rem 0.6rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--ink-soft);
+  text-decoration: none;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+.job-nav-link:active { transform: scale(0.98); }
 
 .day-nav { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.9rem; }
 .day-nav h2 { margin: 0; font-size: 1rem; text-align: center; }
