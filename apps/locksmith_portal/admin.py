@@ -72,12 +72,16 @@ class JobVisitPhotoInline(admin.TabularInline):
 @admin.register(JobVisit)
 class JobVisitAdmin(admin.ModelAdmin):
     """Read-only — written by the portal's job-progress views only;
-    office use is for review, same as PortalDisposal."""
+    office use is for review, same as PortalDisposal. The one exception
+    is reset_for_testing below, so a test job can be replayed through
+    the portal without shelling into the container to delete the row
+    by hand."""
 
     list_display = ("updated_at", "locksmith", "order_no", "stage", "outcome")
     list_filter = ("stage", "outcome", "locksmith")
     search_fields = ("order_no", "report_id", "locksmith__name")
     inlines = [JobVisitPhotoInline]
+    actions = ["reset_for_testing"]
 
     def has_add_permission(self, request):
         return False
@@ -87,3 +91,13 @@ class JobVisitAdmin(admin.ModelAdmin):
 
     def has_delete_permission(self, request, obj=None):
         return False
+
+    @admin.action(description="Reset for testing (clears all steps — deletes the visit)")
+    def reset_for_testing(self, request, queryset):
+        count = queryset.count()
+        queryset.delete()
+        self.message_user(
+            request,
+            f"Reset {count} job visit(s) — next time that locksmith opens the job "
+            "in the portal, it starts fresh from \"Mark on route\".",
+        )

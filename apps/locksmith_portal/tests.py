@@ -872,6 +872,70 @@ class StaffPreviewTests(TestCase):
         self.assertEqual(self.client.get(url).status_code, 404)
 
 
+class JobVisitResetForTestingActionTests(TestCase):
+    """Job visits admin is otherwise read-only (see JobVisitAdmin) —
+    reset_for_testing is the one deliberate exception, so office/QA can
+    replay a test job through the portal without shelling into the
+    container to delete the row by hand."""
+
+    def setUp(self):
+        # Mirrors the real access model: every WGTK SSO login is a full
+        # superuser (apps/accounts/adapter.py), not just is_staff.
+        self.admin_user = User.objects.create_user(
+            username="office_admin", email="admin@wgtk.co.uk", password="x",
+            is_staff=True, is_superuser=True,
+        )
+        self.client.force_login(self.admin_user)
+        self.locksmith, _user = _make_locksmith_user()
+
+    def _run_action(self, visits):
+        return self.client.post(
+            reverse("admin:locksmith_portal_jobvisit_changelist"),
+            {"action": "reset_for_testing", "_selected_action": [str(v.pk) for v in visits]},
+            follow=True,
+        )
+
+    def test_deletes_the_selected_visit(self):
+        visit = JobVisit.objects.create(
+            locksmith=self.locksmith, order_no="496390_2026-09-07", report_id="496390",
+            stage=JobVisit.Stage.PARTS_DONE,
+        )
+        self._run_action([visit])
+        self.assertFalse(JobVisit.objects.filter(pk=visit.pk).exists())
+
+    def test_deletes_the_visits_photos_too(self):
+        visit = JobVisit.objects.create(
+            locksmith=self.locksmith, order_no="496390_2026-09-07", report_id="496390",
+            stage=JobVisit.Stage.ARRIVED,
+        )
+        JobVisitPhoto.objects.create(visit=visit, kind=JobVisitPhoto.Kind.BEFORE, url="/media/before.jpg")
+        self._run_action([visit])
+        self.assertEqual(JobVisitPhoto.objects.count(), 0)
+
+    def test_does_not_touch_other_visits(self):
+        visit = JobVisit.objects.create(
+            locksmith=self.locksmith, order_no="496390_2026-09-07", report_id="496390",
+        )
+        other = JobVisit.objects.create(
+            locksmith=self.locksmith, order_no="111111_2026-09-07", report_id="111111",
+        )
+        self._run_action([visit])
+        self.assertTrue(JobVisit.objects.filter(pk=other.pk).exists())
+
+    def test_reopening_the_job_after_reset_starts_from_not_started(self):
+        order_no = "496390_2026-09-07"
+        visit = JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=order_no, report_id="496390",
+            stage=JobVisit.Stage.DONE,
+        )
+        self._run_action([visit])
+        new_visit, created = JobVisit.objects.get_or_create(
+            locksmith=self.locksmith, order_no=order_no, defaults={"report_id": "496390"},
+        )
+        self.assertTrue(created)
+        self.assertEqual(new_visit.stage, JobVisit.Stage.NOT_STARTED)
+
+
 def _fake_photo(name="site.jpg", content=b"fake-bytes", content_type="image/jpeg"):
     return SimpleUploadedFile(name, content, content_type=content_type)
 
