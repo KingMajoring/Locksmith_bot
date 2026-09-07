@@ -85,6 +85,14 @@
       el.hidden = !show;
     }
 
+    // customer_not_present_reason is `required` in the HTML, but only
+    // meaningful while its branch is actually shown — a `required` field
+    // left behind on a hidden (display:none) branch still counts toward
+    // the form's native validation, and since the browser can't focus an
+    // invisible field to show the usual "please fill this in" bubble, it
+    // just silently blocks submission instead (confirmed live: a console
+    // error — "not focusable" — with no visible feedback at all). Keep
+    // `required` in sync with visibility so this can't happen.
     function updateCustomerPresenceBranches() {
       var notPresent = document.getElementById('customer_not_present').checked;
       document.querySelectorAll('.signature-branch').forEach(function (branch) {
@@ -93,6 +101,7 @@
       document.querySelectorAll('.not-present-branch').forEach(function (branch) {
         showBranch(branch, notPresent);
       });
+      document.getElementById('customer_not_present_reason').required = notPresent;
     }
 
     document.querySelectorAll('.outcome-input').forEach(function (radio) {
@@ -105,7 +114,11 @@
         document.querySelectorAll('.completed-branch').forEach(function (branch) {
           showBranch(branch, completed);
         });
-        if (completed) updateCustomerPresenceBranches();
+        if (completed) {
+          updateCustomerPresenceBranches();
+        } else {
+          document.getElementById('customer_not_present_reason').required = false;
+        }
         if (!failed) {
           document.querySelectorAll('.failure-category-branch').forEach(function (branch) {
             showBranch(branch, false);
