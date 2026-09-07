@@ -591,24 +591,49 @@ def job_overview(request, order_no):
     if ctx is None:
         return early
     visit = ctx["visit"]
+    locksmith = ctx["locksmith"]
+    report_id = ctx["report_id"]
 
     disposal_count = PortalDisposal.objects.filter(
-        locksmith=ctx["locksmith"], order_no=order_no
+        locksmith=locksmith, order_no=order_no
     ).count()
+
+    # For the "Mark on route" step's navigation offer/auto-open — best
+    # effort, same as every other Handl job-details lookup on this page.
+    try:
+        details = get_handl_client().get_job_details([report_id]).get(report_id)
+    except Exception:
+        logger.exception("Failed to fetch Handl job details for job overview %s", order_no)
+        details = None
+    maps_url, waze_url = _navigation_urls(details.postcode if details else "")
+    preferred_nav_url = {
+        Locksmith.NavigationApp.MAPS: maps_url,
+        Locksmith.NavigationApp.WAZE: waze_url,
+    }.get(locksmith.preferred_navigation_app, "")
+    # Ask which app only when there's somewhere to navigate to AND this
+    # locksmith hasn't already picked one before — computed here rather
+    # than composed from `and`/`or` in the template, where Django's
+    # precedence (and binds tighter than or) would silently do the
+    # wrong thing.
+    offer_nav_choice = bool(not locksmith.preferred_navigation_app and (maps_url or waze_url))
 
     return render(
         request,
         "locksmith_portal/job_overview.html",
         {
             "order_no": order_no,
-            "report_id": ctx["report_id"],
+            "report_id": report_id,
             "visit": visit,
             "disposal_count": disposal_count,
             "selected_date": ctx["selected_date"],
             "is_today": ctx["selected_date"] == timezone.localdate(),
             "dashboard_url": ctx["dashboard_url"],
             "is_preview": _is_preview(request),
-            "is_gain_access": _needs_access_method(ctx["report_id"]),
+            "is_gain_access": _needs_access_method(report_id),
+            "offer_nav_choice": offer_nav_choice,
+            "maps_url": maps_url,
+            "waze_url": waze_url,
+            "preferred_nav_url": preferred_nav_url,
         },
     )
 
@@ -620,6 +645,15 @@ def job_on_route(request, order_no):
     if ctx is None:
         return early
     locksmith, report_id, visit = ctx["locksmith"], ctx["report_id"], ctx["visit"]
+
+    # First time this locksmith picks Maps or Waze on the "Mark on
+    # route" step, remember it so they're not asked again on every
+    # future job — only office/admin resets it from here on (Locksmith
+    # admin page), not the locksmith themselves.
+    nav_app = request.POST.get("nav_app", "")
+    if not locksmith.preferred_navigation_app and nav_app in Locksmith.NavigationApp.values:
+        locksmith.preferred_navigation_app = nav_app
+        locksmith.save(update_fields=["preferred_navigation_app"])
 
     if visit.stage == JobVisit.Stage.NOT_STARTED:
         visit.stage = JobVisit.Stage.ON_ROUTE

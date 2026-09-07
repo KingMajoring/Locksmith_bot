@@ -48,9 +48,11 @@ def assign_stock_check_schedule(modeladmin, request, queryset):
 class LocksmithAdmin(admin.ModelAdmin):
     list_display = (
         "name", "soter_ids_display", "soter_user_id", "email", "has_schedule",
-        "portal_linked", "sees_all_jobs_for_testing", "active", "preview_link",
+        "portal_linked", "preferred_navigation_app", "sees_all_jobs_for_testing",
+        "active", "preview_link",
     )
-    list_filter = ("active", "sees_all_jobs_for_testing")
+    list_filter = ("active", "sees_all_jobs_for_testing", "preferred_navigation_app")
+    list_editable = ("preferred_navigation_app",)
     search_fields = ("name", "email", "soter_ids__soter_locksmith_id")
     inlines = [SoterLocksmithIdInline, OptimoDriverIdInline]
     actions = [assign_stock_check_schedule]

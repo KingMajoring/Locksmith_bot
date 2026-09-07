@@ -42,6 +42,19 @@ class Locksmith(models.Model):
         "attribute portal disposals to them individually, matching how "
         "Soter already attributes real disposals (not a shared account).",
     )
+
+    class NavigationApp(models.TextChoices):
+        MAPS = "maps", "Google Maps"
+        WAZE = "waze", "Waze"
+
+    preferred_navigation_app = models.CharField(
+        max_length=10, choices=NavigationApp.choices, blank=True,
+        help_text="Which app the portal's \"Mark on route\" step opens "
+        "automatically for turn-by-turn navigation — set the first time this "
+        "locksmith picks Maps or Waze there, so they aren't asked again on "
+        "every job. Clear this to have them asked again next time.",
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

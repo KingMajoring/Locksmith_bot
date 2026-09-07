@@ -15,10 +15,35 @@
       {% if visit.on_route_at %}<span class="sub">{{ visit.on_route_at|date:"H:i" }}</span>{% endif %}
     </div>
     {% if visit.stage == "not_started" %}
-    <form method="post" action="{% url 'locksmith_portal:job_on_route' order_no=order_no %}?date={{ selected_date|date:'Y-m-d' }}">
-      {% csrf_token %}
-      <button class="btn" type="submit">Mark on route</button>
-    </form>
+      {% if offer_nav_choice %}
+        <div class="on-route-nav-choice">
+          <p class="sub">Navigate there with:</p>
+          <div class="on-route-nav-buttons">
+            {% if maps_url %}
+            <form method="post" class="nav-route-form" data-nav-url="{{ maps_url }}"
+                  action="{% url 'locksmith_portal:job_on_route' order_no=order_no %}?date={{ selected_date|date:'Y-m-d' }}">
+              {% csrf_token %}
+              <input type="hidden" name="nav_app" value="maps">
+              <button class="btn-secondary" type="submit">📍 Maps</button>
+            </form>
+            {% endif %}
+            {% if waze_url %}
+            <form method="post" class="nav-route-form" data-nav-url="{{ waze_url }}"
+                  action="{% url 'locksmith_portal:job_on_route' order_no=order_no %}?date={{ selected_date|date:'Y-m-d' }}">
+              {% csrf_token %}
+              <input type="hidden" name="nav_app" value="waze">
+              <button class="btn-secondary" type="submit">🚗 Waze</button>
+            </form>
+            {% endif %}
+          </div>
+        </div>
+      {% else %}
+        <form method="post" class="nav-route-form" {% if preferred_nav_url %}data-nav-url="{{ preferred_nav_url }}"{% endif %}
+              action="{% url 'locksmith_portal:job_on_route' order_no=order_no %}?date={{ selected_date|date:'Y-m-d' }}">
+          {% csrf_token %}
+          <button class="btn" type="submit">Mark on route</button>
+        </form>
+      {% endif %}
     {% endif %}
   </div>
 
@@ -74,4 +99,16 @@
 {% if visit.stage == "not_started" or visit.stage == "on_route" %}
 <p><a class="back-link" href="{% url 'locksmith_portal:job_cancel' order_no=order_no %}?date={{ selected_date|date:'Y-m-d' }}">Couldn't attend / cancel this job</a></p>
 {% endif %}
+
+<script>
+  // Marking on route also opens turn-by-turn navigation in a new tab —
+  // the form itself still submits normally in this tab so the stage
+  // actually advances.
+  document.querySelectorAll('.nav-route-form').forEach(function (form) {
+    form.addEventListener('submit', function () {
+      var url = form.dataset.navUrl;
+      if (url) window.open(url, '_blank', 'noopener');
+    });
+  });
+</script>
 {% endblock %}

@@ -1068,6 +1068,39 @@ class JobVisitWorkflowTests(TestCase):
         self.assertContains(response, "Mark on route")
         self.assertNotContains(response, "Arrived</a>")
 
+    def test_overview_offers_nav_choice_when_postcode_known_and_unset(self):
+        self._set_loss_type("LOST", postcode="NR14 8PL")
+        url = reverse("locksmith_portal:job_overview", args=[self.order_no])
+        response = self.client.get(url)
+        self.assertTrue(response.context["offer_nav_choice"])
+        self.assertContains(response, "📍 Maps")
+        self.assertContains(response, "🚗 Waze")
+        self.assertContains(response, 'name="nav_app" value="maps"')
+        self.assertContains(response, 'name="nav_app" value="waze"')
+
+    def test_overview_hides_nav_choice_without_postcode(self):
+        self._set_loss_type("LOST")  # no postcode
+        url = reverse("locksmith_portal:job_overview", args=[self.order_no])
+        response = self.client.get(url)
+        self.assertFalse(response.context["offer_nav_choice"])
+        self.assertNotContains(response, "📍 Maps")
+        self.assertNotContains(response, "🚗 Waze")
+        self.assertContains(response, "Mark on route")
+
+    def test_overview_hides_nav_choice_once_preference_saved(self):
+        self._set_loss_type("LOST", postcode="NR14 8PL")
+        self.locksmith.preferred_navigation_app = Locksmith.NavigationApp.WAZE
+        self.locksmith.save(update_fields=["preferred_navigation_app"])
+
+        url = reverse("locksmith_portal:job_overview", args=[self.order_no])
+        response = self.client.get(url)
+        self.assertFalse(response.context["offer_nav_choice"])
+        self.assertEqual(
+            response.context["preferred_nav_url"], "https://waze.com/ul?q=NR14%208PL&navigate=yes"
+        )
+        self.assertContains(response, "Mark on route")
+        self.assertContains(response, "https://waze.com/ul?q=NR14%208PL&amp;navigate=yes")
+
     def test_overview_not_on_schedule_redirects(self):
         url = reverse("locksmith_portal:job_overview", args=[f"999999_{self.today.isoformat()}"])
         response = self.client.get(url)
@@ -1174,6 +1207,27 @@ class JobVisitWorkflowTests(TestCase):
         self.client.post(url)
         self.assertEqual(self._visit().on_route_at, first_time)
         self.mock_handl.add_report_note.assert_called_once()
+
+    def test_on_route_saves_chosen_nav_app_as_locksmith_preference(self):
+        url = reverse("locksmith_portal:job_on_route", args=[self.order_no])
+        self.client.post(url, {"nav_app": "waze"})
+        self.locksmith.refresh_from_db()
+        self.assertEqual(self.locksmith.preferred_navigation_app, Locksmith.NavigationApp.WAZE)
+
+    def test_on_route_does_not_overwrite_an_existing_nav_preference(self):
+        self.locksmith.preferred_navigation_app = Locksmith.NavigationApp.MAPS
+        self.locksmith.save(update_fields=["preferred_navigation_app"])
+
+        url = reverse("locksmith_portal:job_on_route", args=[self.order_no])
+        self.client.post(url, {"nav_app": "waze"})
+        self.locksmith.refresh_from_db()
+        self.assertEqual(self.locksmith.preferred_navigation_app, Locksmith.NavigationApp.MAPS)
+
+    def test_on_route_without_nav_app_leaves_preference_unset(self):
+        url = reverse("locksmith_portal:job_on_route", args=[self.order_no])
+        self.client.post(url)
+        self.locksmith.refresh_from_db()
+        self.assertEqual(self.locksmith.preferred_navigation_app, "")
 
     # --- cancel / couldn't attend -----------------------------------------
 
@@ -1514,12 +1568,12 @@ class JobVisitWorkflowTests(TestCase):
 
     # --- per-service completion flow: Gain access ------------------------
 
-    def _set_loss_type(self, raw_loss_type, spare_key=None):
+    def _set_loss_type(self, raw_loss_type, spare_key=None, postcode=""):
         self.mock_handl.get_job_details.return_value = {
             "496390": JobDetails(
                 report_id="496390", make="Ford", model="Focus", year="2020", reg="AB20 CDE", vin="VIN1",
                 service_type="Car", loss_type=raw_loss_type, supplied_service="", net_cost=100.0,
-                spare_key=spare_key,
+                spare_key=spare_key, postcode=postcode,
             )
         }
 
