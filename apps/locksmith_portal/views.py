@@ -460,26 +460,28 @@ def _avg_duration_minutes(queryset):
 
 
 def _locksmith_stats(locksmith):
-    """This locksmith's own recent numbers for the portal dashboard —
-    a self-visible counterpart to the office-only benchmarking already
-    built for Job Completion (see services/benchmarking.py). Own vs
-    company average duration uses the same 90-day/success-only window
-    that service uses, just aggregated across all loss types rather
-    than one at a time."""
+    """This locksmith's own numbers for the portal dashboard — a
+    self-visible counterpart to the office-only benchmarking already
+    built for Job Completion (see services/benchmarking.py). Job count
+    and van earnings are month-to-date; own vs company average duration
+    uses the same 90-day/success-only window that service uses, just
+    aggregated across all loss types rather than one at a time."""
     today = timezone.localdate()
-    week_start = today - timedelta(days=7)
+    month_start = today.replace(day=1)
     window_start = today - timedelta(days=90)
 
-    this_week = CompletedJob.objects.filter(locksmith=locksmith, job_date__gte=week_start)
+    month_to_date = CompletedJob.objects.filter(locksmith=locksmith, job_date__gte=month_start)
     successful_window = CompletedJob.objects.filter(
         status=CompletedJob.Status.SUCCESS, job_date__gte=window_start,
         start_time__isnull=False, end_time__isnull=False,
     )
+    completed_mtd = month_to_date.filter(status=CompletedJob.Status.SUCCESS)
 
     return {
-        "jobs_this_week": this_week.count(),
-        "completed_this_week": this_week.filter(status=CompletedJob.Status.SUCCESS).count(),
-        "failed_this_week": this_week.filter(status=CompletedJob.Status.FAILED).count(),
+        "jobs_mtd": month_to_date.count(),
+        "completed_mtd": completed_mtd.count(),
+        "failed_mtd": month_to_date.filter(status=CompletedJob.Status.FAILED).count(),
+        "van_earnings_mtd": completed_mtd.aggregate(total=Sum("net_cost"))["total"] or 0,
         "own_avg_minutes": _avg_duration_minutes(successful_window.filter(locksmith=locksmith)),
         "company_avg_minutes": _avg_duration_minutes(successful_window),
     }

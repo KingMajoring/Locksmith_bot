@@ -19,19 +19,23 @@
 </div>
 
 <div class="card">
-  <h2>Your stats — last 7 days</h2>
+  <h2>Your stats — month to date</h2>
   <div class="stat-row">
     <div class="stat-tile">
       <div class="stat-label">Jobs</div>
-      <div class="stat-value">{{ stats.jobs_this_week }}</div>
+      <div class="stat-value">{{ stats.jobs_mtd }}</div>
     </div>
     <div class="stat-tile">
       <div class="stat-label">Completed</div>
-      <div class="stat-value">{{ stats.completed_this_week }}</div>
+      <div class="stat-value">{{ stats.completed_mtd }}</div>
     </div>
     <div class="stat-tile">
       <div class="stat-label">Failed</div>
-      <div class="stat-value">{{ stats.failed_this_week }}</div>
+      <div class="stat-value">{{ stats.failed_mtd }}</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-label">Van earnings</div>
+      <div class="stat-value">£{{ stats.van_earnings_mtd|floatformat:2 }}</div>
     </div>
   </div>
   {% if stats.own_avg_minutes %}

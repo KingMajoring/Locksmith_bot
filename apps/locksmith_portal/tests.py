@@ -266,21 +266,23 @@ class DashboardTests(TestCase):
 
     def test_dashboard_shows_own_stats(self):
         today = timezone.localdate()
+        month_start = today.replace(day=1)
+        last_month = month_start - timedelta(days=1)
         other_locksmith, _ = _make_locksmith_user(email="other@wgtk.co.uk", soter_ids=("999",))
 
         CompletedJob.objects.create(
             order_no="1_a", report_id="1", job_date=today, locksmith=self.locksmith,
-            status=CompletedJob.Status.SUCCESS,
+            status=CompletedJob.Status.SUCCESS, net_cost=100.0,
             start_time=timezone.now(), end_time=timezone.now() + timedelta(minutes=30),
         )
         CompletedJob.objects.create(
             order_no="2_a", report_id="2", job_date=today, locksmith=self.locksmith,
-            status=CompletedJob.Status.FAILED,
-        )
+            status=CompletedJob.Status.FAILED, net_cost=75.0,
+        )  # a failed job's net_cost shouldn't count towards van earnings
         CompletedJob.objects.create(
-            order_no="3_a", report_id="3", job_date=today - timedelta(days=30), locksmith=self.locksmith,
-            status=CompletedJob.Status.SUCCESS,
-        )  # outside the 7-day window — shouldn't count towards this week
+            order_no="3_a", report_id="3", job_date=last_month, locksmith=self.locksmith,
+            status=CompletedJob.Status.SUCCESS, net_cost=200.0,
+        )  # outside the month-to-date window — shouldn't count
         CompletedJob.objects.create(
             order_no="4_a", report_id="4", job_date=today, locksmith=other_locksmith,
             status=CompletedJob.Status.SUCCESS,
@@ -289,12 +291,20 @@ class DashboardTests(TestCase):
 
         response = self.client.get(reverse("locksmith_portal:dashboard"))
         stats = response.context["stats"]
-        self.assertEqual(stats["jobs_this_week"], 2)
-        self.assertEqual(stats["completed_this_week"], 1)
-        self.assertEqual(stats["failed_this_week"], 1)
+        self.assertEqual(stats["jobs_mtd"], 2)
+        self.assertEqual(stats["completed_mtd"], 1)
+        self.assertEqual(stats["failed_mtd"], 1)
+        self.assertEqual(stats["van_earnings_mtd"], 100.0)
         self.assertEqual(stats["own_avg_minutes"], 30.0)
         self.assertEqual(stats["company_avg_minutes"], 60.0)
         self.assertContains(response, "Your stats")
+        self.assertContains(response, "£100.00")
+
+    def test_dashboard_shows_zero_van_earnings_with_no_completed_jobs(self):
+        response = self.client.get(reverse("locksmith_portal:dashboard"))
+        stats = response.context["stats"]
+        self.assertEqual(stats["van_earnings_mtd"], 0)
+        self.assertContains(response, "£0.00")
 
 
 class StockCheckEntryTests(TestCase):
