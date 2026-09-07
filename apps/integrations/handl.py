@@ -751,9 +751,29 @@ class SQLHandlClient(HandlClient):
             cursor = conn.cursor()
             cursor.execute(query, params)
             rows = cursor.fetchall()
-        return {
-            str(row["ReportID"]): JobDetails(
-                report_id=str(row["ReportID"]),
+        # Keyed by numeric ReportID first, then mapped back onto the
+        # caller's own report_id strings — not str(row["ReportID"])
+        # directly. Policy_KeyClaims.ReportID is a plain int column, so
+        # WHERE ... IN (...) already matches a zero-padded value like
+        # "039364" correctly via SQL Server's own implicit conversion,
+        # but re-stringifying the int column for the dict key silently
+        # drops that leading zero — confirmed live: a real dashboard job
+        # (whose report_id came from an Optimo order_no keeping the
+        # zero) went completely blank because of exactly this, with no
+        # exception and nothing logged, just a plain dict-key miss on
+        # job_details.get(report_id).
+        by_numeric_id = {int(row["ReportID"]): row for row in rows}
+        result = {}
+        for report_id in report_ids:
+            try:
+                numeric_id = int(report_id)
+            except ValueError:
+                continue
+            row = by_numeric_id.get(numeric_id)
+            if row is None:
+                continue
+            result[report_id] = JobDetails(
+                report_id=report_id,
                 make=row["Make"] or "",
                 model=row["Model"] or "",
                 year=str(row["yearOfManufacture"] or ""),
@@ -766,8 +786,7 @@ class SQLHandlClient(HandlClient):
                 spare_key=bool(row["SpareKey"]) if row["SpareKey"] is not None else None,
                 postcode=row["PostCode"] or "",
             )
-            for row in rows
-        }
+        return result
 
     def get_disposed_skus(self, report_ids: list[str]) -> dict[str, list[str]]:
         if not report_ids:

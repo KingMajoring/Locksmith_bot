@@ -387,6 +387,42 @@ class SQLHandlClientTests(TestCase):
             details = client.get_job_details(["496390"])
         self.assertEqual(details["496390"].postcode, "")
 
+    def test_get_job_details_keys_result_by_the_requested_report_id_string(self):
+        # Regression test: confirmed live against a real dashboard job
+        # left completely blank (no exception, nothing logged) because
+        # ReportID is a plain int column — the DB happily matches a
+        # zero-padded WHERE ... IN (...) value via its own implicit
+        # conversion, but re-stringifying the returned int for the
+        # result dict's key (str(row["ReportID"])) silently drops the
+        # leading zero, so a caller looking the same zero-padded string
+        # back up (job_details.get("039364")) got a plain dict miss.
+        rows = [
+            {
+                "ReportID": 39364,
+                "Make": "FORD",
+                "Model": "TRANSIT",
+                "yearOfManufacture": 2008,
+                "VehicleReg": "YA08 LCJ",
+                "VehicleVIN": "WF0XXXTTFX8C84491",
+                "KeyType": "Car",
+                "SpareKey": False,
+                "LossEvent": "Lost",
+                "SuppliedService": "",
+                "NetCost": None,
+                "PostCode": "NR14 8PL",
+            }
+        ]
+        fake_conn = _fake_connection(rows)
+        client = SQLHandlClient()
+        with patch.object(client, "_connection", return_value=fake_conn):
+            details = client.get_job_details(["039364"])
+
+        self.assertIn("039364", details)
+        job = details["039364"]
+        self.assertEqual(job.report_id, "039364")
+        self.assertEqual(job.make, "FORD")
+        self.assertEqual(job.postcode, "NR14 8PL")
+
     def test_get_job_details_null_net_cost_maps_to_none(self):
         rows = [
             {
