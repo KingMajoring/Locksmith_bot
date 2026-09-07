@@ -63,7 +63,7 @@
     <h2>Confirm disposal</h2>
     <p>You're about to record these parts as used/disposed on this job:</p>
     <ul id="confirm-list"></ul>
-    <p class="sub">This updates your van stock and Soter — check the list before confirming.</p>
+    <p class="sub" id="confirm-sub">This updates your van stock and Soter — check the list before confirming.</p>
     <button type="button" class="btn" id="confirm-yes">Confirm &amp; save</button>
     <button type="button" class="btn-secondary" id="confirm-no">Go back and check</button>
   </div>
@@ -85,6 +85,7 @@
     var form = document.getElementById('dispose-form');
     var overlay = document.getElementById('confirm-overlay');
     var list = document.getElementById('confirm-list');
+    var sub = document.getElementById('confirm-sub');
     var confirmed = false;
 
     function describeRow(raw) {
@@ -104,12 +105,15 @@
     form.addEventListener('submit', function (e) {
       if (confirmed) return;
       var rows = [];
+      var hasStock = false;
+      var hasClientSupplied = false;
       form.querySelectorAll('.dispose-row').forEach(function (row) {
         var code = row.querySelector('input[name=part_code]').value.trim();
         var qty = row.querySelector('input[name=quantity]').value.trim();
         var clientSupplied = row.querySelector('input[name=client_supplied]').value === '1';
         if (code && qty) {
           rows.push(describeRow(code) + ' — qty ' + qty + (clientSupplied ? ' (client supplied)' : ''));
+          if (clientSupplied) { hasClientSupplied = true; } else { hasStock = true; }
         }
       });
       if (rows.length === 0) return; // nothing entered — let the server show its own message
@@ -121,6 +125,13 @@
         li.textContent = text;
         list.appendChild(li);
       });
+      if (hasClientSupplied && !hasStock) {
+        sub.textContent = "Client-supplied parts don't come out of your van stock — this just logs a note in Soter for the office.";
+      } else if (hasClientSupplied) {
+        sub.textContent = 'This updates your van stock and Soter for the stock items — client-supplied parts are logged as a note only and won\'t change your van numbers.';
+      } else {
+        sub.textContent = 'This updates your van stock and Soter — check the list before confirming.';
+      }
       overlay.hidden = false;
     });
 
