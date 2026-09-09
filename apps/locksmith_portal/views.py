@@ -982,6 +982,8 @@ def job_complete(request, order_no):
         completion_signature_data_url = request.POST.get("completion_signature", "").strip()
         customer_not_present = request.POST.get("customer_not_present") == "1"
         customer_not_present_reason = request.POST.get("customer_not_present_reason", "").strip()
+        further_work_required = request.POST.get("further_work_required") == "1"
+        further_work_details = request.POST.get("further_work_details", "").strip()
 
         errors = []
         if outcome not in (JobVisit.Outcome.COMPLETED, JobVisit.Outcome.FAILED):
@@ -993,6 +995,8 @@ def job_complete(request, order_no):
                     errors.append("Say why the customer isn't signing.")
             elif not completion_signature_data_url:
                 errors.append("The customer needs to sign to confirm they're happy with the job.")
+            if further_work_required and not further_work_details:
+                errors.append("Say what further work is needed.")
 
         if outcome == JobVisit.Outcome.FAILED:
             if failure_category is None:
@@ -1057,6 +1061,9 @@ def job_complete(request, order_no):
                     f"{_photo_links_html([signature_url])}"
                 )
 
+            if outcome == JobVisit.Outcome.COMPLETED and further_work_required:
+                note_parts.append(f"Further work required: {escape(further_work_details)}")
+
             if notes_text:
                 # escape()'d — unlike the photo/signature URLs (our own,
                 # safe to embed as raw <a> tags), this is locksmith-typed
@@ -1078,12 +1085,19 @@ def job_complete(request, order_no):
                 customer_not_present_reason
                 if outcome == JobVisit.Outcome.COMPLETED and customer_not_present else ""
             )
+            visit.further_work_required = (
+                outcome == JobVisit.Outcome.COMPLETED and further_work_required
+            )
+            visit.further_work_details = (
+                further_work_details if visit.further_work_required else ""
+            )
             visit.stage = JobVisit.Stage.DONE
             visit.completed_at = timezone.now()
             visit.save(update_fields=[
                 "notes", "outcome",
                 "failure_category", "failure_sku_needed", "failure_reattend_action",
-                "completion_signed_at", "customer_not_present_reason", "stage", "completed_at",
+                "completion_signed_at", "customer_not_present_reason",
+                "further_work_required", "further_work_details", "stage", "completed_at",
             ])
 
             _write_handl_note(locksmith, report_id, " ".join(note_parts))

@@ -159,6 +159,12 @@ class JobVisit(models.Model):
     completion_signed_at = models.DateTimeField(null=True, blank=True)
     customer_not_present_reason = models.CharField(max_length=200, blank=True)
 
+    # Completed jobs only: is there more work needed here that this
+    # visit doesn't cover (e.g. a second fault found on-site) — for
+    # office to action, same spirit as failure_sku_needed.
+    further_work_required = models.BooleanField(default=False)
+    further_work_details = models.CharField(max_length=500, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

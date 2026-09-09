@@ -41,6 +41,18 @@
     <input type="text" id="customer_not_present_reason" name="customer_not_present_reason" placeholder="e.g. had to leave, left key under mat…" required>
   </div>
 
+  <div class="field-group completed-branch" hidden>
+    <label>
+      <input type="checkbox" id="further_work_required" name="further_work_required" value="1">
+      Further work required?
+    </label>
+  </div>
+
+  <div class="field-group completed-branch further-work-branch" hidden>
+    <label for="further_work_details">What work?</label>
+    <input type="text" id="further_work_details" name="further_work_details" placeholder="e.g. needs a new ignition barrel ordering">
+  </div>
+
   <div class="field-group failure-branch" hidden>
     <label>Reason for failure</label>
     <div class="outcome-choice">
@@ -104,6 +116,15 @@
       document.getElementById('customer_not_present_reason').required = notPresent;
     }
 
+    // Same required-field-on-a-hidden-branch trap as above applies here.
+    function updateFurtherWorkBranch() {
+      var required = document.getElementById('further_work_required').checked;
+      document.querySelectorAll('.further-work-branch').forEach(function (branch) {
+        showBranch(branch, required);
+      });
+      document.getElementById('further_work_details').required = required;
+    }
+
     document.querySelectorAll('.outcome-input').forEach(function (radio) {
       radio.addEventListener('change', function () {
         var failed = radio.value === 'failed';
@@ -116,8 +137,10 @@
         });
         if (completed) {
           updateCustomerPresenceBranches();
+          updateFurtherWorkBranch();
         } else {
           document.getElementById('customer_not_present_reason').required = false;
+          document.getElementById('further_work_details').required = false;
         }
         if (!failed) {
           document.querySelectorAll('.failure-category-branch').forEach(function (branch) {
@@ -128,6 +151,7 @@
     });
 
     document.getElementById('customer_not_present').addEventListener('change', updateCustomerPresenceBranches);
+    document.getElementById('further_work_required').addEventListener('change', updateFurtherWorkBranch);
 
     document.querySelectorAll('.failure-category-input').forEach(function (radio) {
       radio.addEventListener('change', function () {

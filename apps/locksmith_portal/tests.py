@@ -1564,6 +1564,83 @@ class JobVisitWorkflowTests(TestCase):
         self.mock_handl.add_report_note.assert_called_once()
         self.mock_optimo.update_completion_status.assert_not_called()
 
+    def test_complete_further_work_required_needs_details(self):
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            stage=JobVisit.Stage.PARTS_DONE, parts_done_at=timezone.now(),
+        )
+        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        response = self.client.post(
+            url,
+            {
+                "photo_after": [_fake_photo()], "outcome": "completed",
+                "completion_signature": "data:image/png;base64,aGVsbG8=",
+                "further_work_required": "1",
+            },
+        )
+        self.assertContains(response, "Say what further work is needed")
+        self.assertEqual(self._visit().stage, JobVisit.Stage.PARTS_DONE)
+
+    def test_complete_records_further_work_required_and_details(self):
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            stage=JobVisit.Stage.PARTS_DONE, parts_done_at=timezone.now(),
+        )
+        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        response = self.client.post(
+            url,
+            {
+                "photo_after": [_fake_photo()], "outcome": "completed",
+                "completion_signature": "data:image/png;base64,aGVsbG8=",
+                "further_work_required": "1",
+                "further_work_details": "Needs a new ignition barrel ordering.",
+            },
+        )
+        self.assertRedirects(
+            response,
+            f"{reverse('locksmith_portal:job_overview', args=[self.order_no])}?date={self.today.isoformat()}",
+        )
+        visit = self._visit()
+        self.assertTrue(visit.further_work_required)
+        self.assertEqual(visit.further_work_details, "Needs a new ignition barrel ordering.")
+        note_text = self.mock_handl.add_report_note.call_args[0][1]
+        self.assertIn("Further work required: Needs a new ignition barrel ordering.", note_text)
+
+    def test_complete_without_further_work_leaves_it_unset(self):
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            stage=JobVisit.Stage.PARTS_DONE, parts_done_at=timezone.now(),
+        )
+        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        self.client.post(
+            url,
+            {
+                "photo_after": [_fake_photo()], "outcome": "completed",
+                "completion_signature": "data:image/png;base64,aGVsbG8=",
+            },
+        )
+        visit = self._visit()
+        self.assertFalse(visit.further_work_required)
+        self.assertEqual(visit.further_work_details, "")
+
+    def test_complete_failed_outcome_ignores_further_work_fields(self):
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            stage=JobVisit.Stage.PARTS_DONE, parts_done_at=timezone.now(),
+        )
+        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        self.client.post(
+            url,
+            {
+                "photo_after": [_fake_photo()], "outcome": "failed",
+                "failure_category": self.category_wrong_parts.pk,
+                "further_work_required": "1", "further_work_details": "Should be ignored",
+            },
+        )
+        visit = self._visit()
+        self.assertFalse(visit.further_work_required)
+        self.assertEqual(visit.further_work_details, "")
+
     def test_complete_requires_completion_signature(self):
         JobVisit.objects.create(
             locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
