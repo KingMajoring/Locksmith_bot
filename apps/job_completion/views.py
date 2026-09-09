@@ -27,6 +27,7 @@ from .services.model_analysis import (
 )
 from .services.reporting import (
     all_locksmith_summaries,
+    failed_jobs_list as failed_jobs_list_service,
     failure_category_breakdown,
     loss_types_for_locksmith,
     master_reason_breakdown,
@@ -47,6 +48,67 @@ def dashboard(request):
         "job_completion/dashboard.html",
         {
             "summaries": summaries,
+        },
+    )
+
+
+@login_required
+def failed_jobs_list(request):
+    """Drill-down from Job Failures' category/master-reason breakdowns
+    (and, filtered by locksmith too, from the locksmith report) to the
+    actual failed jobs behind a count — same 90-day window those
+    breakdowns use. "category" is either a FailureCategory pk or the
+    literal "uncategorized"; same for "master_reason"."""
+    category_param = request.GET.get("category", "")
+    master_reason_param = request.GET.get("master_reason", "")
+    locksmith_param = request.GET.get("locksmith", "")
+
+    category_id = None
+    uncategorized = category_param == "uncategorized"
+    if category_param and not uncategorized:
+        try:
+            category_id = int(category_param)
+        except ValueError:
+            category_id = None
+
+    locksmith_id = None
+    if locksmith_param:
+        try:
+            locksmith_id = int(locksmith_param)
+        except ValueError:
+            locksmith_id = None
+
+    jobs = list(
+        failed_jobs_list_service(
+            category_id=category_id,
+            uncategorized=uncategorized,
+            master_reason=master_reason_param or None,
+            locksmith_id=locksmith_id,
+        )
+    )
+    parts_costs = parts_cost_for_jobs(jobs)
+    for job in jobs:
+        job.parts_cost = parts_costs.get(job.order_no)
+
+    heading = "Failed jobs"
+    if uncategorized:
+        heading = "Failed jobs — uncategorized"
+    elif category_id is not None:
+        category = FailureCategory.objects.filter(pk=category_id).first()
+        heading = f"Failed jobs — {category.name}" if category else heading
+    elif master_reason_param:
+        heading = f"Failed jobs — {dict(FailureCategory.MasterReason.choices).get(master_reason_param, master_reason_param)}"
+    if locksmith_id is not None:
+        locksmith = Locksmith.objects.filter(pk=locksmith_id).first()
+        if locksmith:
+            heading += f" — {locksmith.name}"
+
+    return render(
+        request,
+        "job_completion/failed_jobs_list.html",
+        {
+            "jobs": jobs,
+            "heading": heading,
         },
     )
 

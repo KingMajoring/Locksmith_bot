@@ -31,6 +31,7 @@ from .services.pulling import (
 )
 from .services.reporting import (
     all_locksmith_summaries,
+    failed_jobs_list,
     failure_category_breakdown,
     master_reason_breakdown,
     needs_categorization_queryset,
@@ -685,7 +686,77 @@ class ReportingTests(TestCase):
             status=CompletedJob.Status.FAILED,
         )
         breakdown = failure_category_breakdown()
-        self.assertEqual(breakdown, [{"category": "Uncategorized", "count": 1}])
+        self.assertEqual(
+            breakdown, [{"category": "Uncategorized", "category_id": None, "count": 1}]
+        )
+
+    def test_failed_jobs_list_filters_by_category(self):
+        category = FailureCategory.objects.create(name="Wrong parts")
+        other_category = FailureCategory.objects.create(name="Other reason")
+        matching = CompletedJob.objects.create(
+            order_no="a", report_id="1", job_date=date(2026, 9, 1),
+            status=CompletedJob.Status.FAILED, failure_category=category,
+        )
+        CompletedJob.objects.create(
+            order_no="b", report_id="2", job_date=date(2026, 9, 1),
+            status=CompletedJob.Status.FAILED, failure_category=other_category,
+        )
+        results = list(failed_jobs_list(category_id=category.pk))
+        self.assertEqual(results, [matching])
+
+    def test_failed_jobs_list_uncategorized_only(self):
+        category = FailureCategory.objects.create(name="Wrong parts")
+        matching = CompletedJob.objects.create(
+            order_no="a", report_id="1", job_date=date(2026, 9, 1),
+            status=CompletedJob.Status.FAILED,
+        )
+        CompletedJob.objects.create(
+            order_no="b", report_id="2", job_date=date(2026, 9, 1),
+            status=CompletedJob.Status.FAILED, failure_category=category,
+        )
+        results = list(failed_jobs_list(uncategorized=True))
+        self.assertEqual(results, [matching])
+
+    def test_failed_jobs_list_filters_by_master_reason(self):
+        category = FailureCategory.objects.create(
+            name="Skill set - placed incorrectly",
+            master_reason=FailureCategory.MasterReason.WGTK_LOCKSMITH,
+        )
+        other_category = FailureCategory.objects.create(
+            name="Incorrect parts - ordered by WGTK",
+            master_reason=FailureCategory.MasterReason.WGTK_OFFICE,
+        )
+        matching = CompletedJob.objects.create(
+            order_no="a", report_id="1", job_date=date(2026, 9, 1),
+            status=CompletedJob.Status.FAILED, failure_category=category,
+        )
+        CompletedJob.objects.create(
+            order_no="b", report_id="2", job_date=date(2026, 9, 1),
+            status=CompletedJob.Status.FAILED, failure_category=other_category,
+        )
+        results = list(failed_jobs_list(master_reason="wgtk_locksmith"))
+        self.assertEqual(results, [matching])
+
+    def test_failed_jobs_list_filters_by_locksmith(self):
+        other_locksmith = _make_locksmith(name="WGTK - Other", driver_serial="099")
+        matching = CompletedJob.objects.create(
+            order_no="a", report_id="1", job_date=date(2026, 9, 1),
+            status=CompletedJob.Status.FAILED, locksmith=self.locksmith,
+        )
+        CompletedJob.objects.create(
+            order_no="b", report_id="2", job_date=date(2026, 9, 1),
+            status=CompletedJob.Status.FAILED, locksmith=other_locksmith,
+        )
+        results = list(failed_jobs_list(locksmith_id=self.locksmith.pk))
+        self.assertEqual(results, [matching])
+
+    def test_failed_jobs_list_excludes_successful_jobs(self):
+        CompletedJob.objects.create(
+            order_no="a", report_id="1", job_date=date(2026, 9, 1),
+            status=CompletedJob.Status.SUCCESS, locksmith=self.locksmith,
+        )
+        results = list(failed_jobs_list(locksmith_id=self.locksmith.pk))
+        self.assertEqual(results, [])
 
     def test_master_reason_breakdown_groups_by_category_master_reason(self):
         locksmith_fault = FailureCategory.objects.create(
@@ -714,9 +785,9 @@ class ReportingTests(TestCase):
         self.assertEqual(
             breakdown,
             [
-                {"master_reason": "WGTK Locksmith", "count": 2},
-                {"master_reason": "Client", "count": 1},
-                {"master_reason": "Uncategorized", "count": 1},
+                {"master_reason": "WGTK Locksmith", "master_reason_key": "wgtk_locksmith", "count": 2},
+                {"master_reason": "Client", "master_reason_key": "client", "count": 1},
+                {"master_reason": "Uncategorized", "master_reason_key": "uncategorized", "count": 1},
             ],
         )
 
@@ -876,6 +947,62 @@ class ViewsSmokeTests(TestCase):
         self.assertEqual(job.parts_cost, 25.0)
         self.assertContains(response, "£25.0")
         self.assertContains(response, "£150.0")
+
+    def test_job_failures_category_and_master_reason_link_to_failed_jobs_list(self):
+        category = FailureCategory.objects.create(name="Wrong parts")
+        CompletedJob.objects.create(
+            order_no="a", report_id="1", job_date=date(2026, 9, 1),
+            status=CompletedJob.Status.FAILED, locksmith=self.locksmith,
+            failure_category=category,
+        )
+        response = self.client.get(reverse("job_completion:job_failures"))
+        list_url = reverse("job_completion:failed_jobs_list")
+        self.assertContains(response, f'{list_url}?category={category.pk}')
+
+    def test_failed_jobs_list_filtered_by_category_renders(self):
+        category = FailureCategory.objects.create(name="Wrong parts")
+        CompletedJob.objects.create(
+            order_no="a", report_id="1", job_date=date(2026, 9, 1),
+            status=CompletedJob.Status.FAILED, locksmith=self.locksmith,
+            failure_category=category,
+        )
+        response = self.client.get(
+            reverse("job_completion:failed_jobs_list"), {"category": category.pk}
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Wrong parts")
+        self.assertContains(response, "a")
+        self.assertEqual(len(response.context["jobs"]), 1)
+
+    def test_failed_jobs_list_uncategorized_param_renders(self):
+        CompletedJob.objects.create(
+            order_no="a", report_id="1", job_date=date(2026, 9, 1),
+            status=CompletedJob.Status.FAILED, locksmith=self.locksmith,
+        )
+        response = self.client.get(
+            reverse("job_completion:failed_jobs_list"), {"category": "uncategorized"}
+        )
+        self.assertContains(response, "uncategorized")
+        self.assertEqual(len(response.context["jobs"]), 1)
+
+    def test_locksmith_report_links_to_their_failed_jobs(self):
+        response = self.client.get(
+            reverse("job_completion:locksmith_report", args=[self.locksmith.pk])
+        )
+        list_url = reverse("job_completion:failed_jobs_list")
+        self.assertContains(response, f'{list_url}?locksmith={self.locksmith.pk}')
+
+    def test_failed_jobs_list_filtered_by_locksmith_renders(self):
+        CompletedJob.objects.create(
+            order_no="a", report_id="1", job_date=date(2026, 9, 1),
+            status=CompletedJob.Status.FAILED, locksmith=self.locksmith,
+        )
+        response = self.client.get(
+            reverse("job_completion:failed_jobs_list"), {"locksmith": self.locksmith.pk}
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, self.locksmith.name)
+        self.assertEqual(len(response.context["jobs"]), 1)
 
     def test_job_failures_shows_dash_when_parts_cost_unknown(self):
         CompletedJob.objects.create(

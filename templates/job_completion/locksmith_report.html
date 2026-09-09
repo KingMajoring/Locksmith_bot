@@ -33,6 +33,7 @@
 
 <div class="card">
   <h2>Recent jobs</h2>
+  <p class="sub"><a href="{% url 'job_completion:failed_jobs_list' %}?locksmith={{ locksmith.pk }}">View all of {{ locksmith.name }}'s failed jobs (last 90 days) &rarr;</a></p>
   {% if jobs %}
   <table>
     <tr>

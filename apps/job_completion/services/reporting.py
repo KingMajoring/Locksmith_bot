@@ -65,13 +65,23 @@ def failure_category_breakdown(window_days: int = DEFAULT_WINDOW_DAYS) -> list[d
         status=CompletedJob.Status.FAILED, job_date__gte=since
     ).select_related("failure_category")
 
-    by_category: dict[str, int] = {}
+    # category_id is None for "Uncategorized" — the drill-down view
+    # (failed_jobs_list) treats a missing category param as "uncategorized
+    # only", same convention failure_category__isnull=True uses elsewhere.
+    by_category: dict[str, list] = {}
     for job in failed:
-        label = job.failure_category.name if job.failure_category else "Uncategorized"
-        by_category[label] = by_category.get(label, 0) + 1
+        if job.failure_category:
+            label, category_id = job.failure_category.name, job.failure_category_id
+        else:
+            label, category_id = "Uncategorized", None
+        entry = by_category.setdefault(label, [category_id, 0])
+        entry[1] += 1
 
     return sorted(
-        ({"category": k, "count": v} for k, v in by_category.items()),
+        (
+            {"category": label, "category_id": category_id, "count": count}
+            for label, (category_id, count) in by_category.items()
+        ),
         key=lambda e: e["count"],
         reverse=True,
     )
@@ -98,12 +108,48 @@ def master_reason_breakdown(window_days: int = DEFAULT_WINDOW_DAYS) -> list[dict
 
     return sorted(
         (
-            {"master_reason": labels.get(k, "Uncategorized"), "count": v}
+            {
+                "master_reason": labels.get(k, "Uncategorized"),
+                "master_reason_key": k,
+                "count": v,
+            }
             for k, v in by_reason.items()
         ),
         key=lambda e: e["count"],
         reverse=True,
     )
+
+
+def failed_jobs_list(
+    window_days: int = DEFAULT_WINDOW_DAYS,
+    *,
+    category_id: int | None = None,
+    uncategorized: bool = False,
+    master_reason: str | None = None,
+    locksmith_id: int | None = None,
+):
+    """Failed jobs matching any combination of the Job Failures/Locksmith
+    Report drill-downs — same 90-day window as the breakdowns above, so
+    the counts you click through from match what you land on.
+    category_id/uncategorized are mutually exclusive (uncategorized wins
+    if both are somehow passed); master_reason="uncategorized" means the
+    same as uncategorized=True, matching master_reason_breakdown's key."""
+    since = date.today() - timedelta(days=window_days)
+    jobs = CompletedJob.objects.filter(
+        status=CompletedJob.Status.FAILED, job_date__gte=since
+    ).select_related("locksmith", "failure_category")
+
+    if uncategorized or master_reason == "uncategorized":
+        jobs = jobs.filter(failure_category__isnull=True)
+    elif category_id is not None:
+        jobs = jobs.filter(failure_category_id=category_id)
+    elif master_reason:
+        jobs = jobs.filter(failure_category__master_reason=master_reason)
+
+    if locksmith_id is not None:
+        jobs = jobs.filter(locksmith_id=locksmith_id)
+
+    return jobs.order_by("-job_date")
 
 
 def loss_types_for_locksmith(locksmith: Locksmith, window_days: int = DEFAULT_WINDOW_DAYS) -> list[str]:

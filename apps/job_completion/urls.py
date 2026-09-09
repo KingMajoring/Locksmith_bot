@@ -7,6 +7,7 @@ app_name = "job_completion"
 urlpatterns = [
     path("", views.dashboard, name="dashboard"),
     path("job-failures/", views.job_failures, name="job_failures"),
+    path("job-failures/jobs/", views.failed_jobs_list, name="failed_jobs_list"),
     path("jobs/categorize/", views.categorize_jobs, name="categorize_jobs"),
     path("model-analysis/", views.model_analysis, name="model_analysis"),
     path("failure-trend/", views.failure_trend, name="failure_trend"),

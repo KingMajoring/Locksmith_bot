@@ -46,7 +46,7 @@
     <tr><th>Master reason</th><th>Count</th></tr>
     {% for r in master_reasons %}
     <tr>
-      <td>{{ r.master_reason }}</td>
+      <td><a href="{% url 'job_completion:failed_jobs_list' %}?master_reason={{ r.master_reason_key }}">{{ r.master_reason }}</a></td>
       <td>{{ r.count }}</td>
     </tr>
     {% endfor %}
@@ -59,7 +59,7 @@
     <tr><th>Category</th><th>Count</th></tr>
     {% for c in categories %}
     <tr>
-      <td>{{ c.category }}</td>
+      <td><a href="{% url 'job_completion:failed_jobs_list' %}?category={% if c.category_id %}{{ c.category_id }}{% else %}uncategorized{% endif %}">{{ c.category }}</a></td>
       <td>{{ c.count }}</td>
     </tr>
     {% endfor %}
