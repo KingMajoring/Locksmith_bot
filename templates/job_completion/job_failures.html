@@ -9,7 +9,7 @@
   <form method="post" action="{% url 'job_completion:categorize_jobs' %}">
     {% csrf_token %}
     <table>
-      <tr><th>Order</th><th>Date</th><th>Locksmith</th><th>Service</th><th>Note</th><th>Parts cost</th><th>Selling price</th><th>Category</th></tr>
+      <tr><th>Order</th><th>Date</th><th>Locksmith</th><th>Service</th><th>Note</th><th>Parts cost</th><th>Selling price</th><th>Category</th><th>Sufficient notes?</th></tr>
       {% for job in needs_categorization %}
       <tr>
         <td>{{ job.order_no }}</td>
@@ -27,6 +27,7 @@
             {% endfor %}
           </select>
         </td>
+        <td><input type="checkbox" name="notes_ok_{{ job.pk }}" title="Check if this locksmith's note was good enough"></td>
       </tr>
       {% endfor %}
     </table>

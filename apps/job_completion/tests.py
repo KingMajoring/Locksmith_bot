@@ -690,6 +690,35 @@ class ReportingTests(TestCase):
             breakdown, [{"category": "Uncategorized", "category_id": None, "count": 1}]
         )
 
+    def test_locksmith_summary_insufficient_notes_rate_only_counts_assessed_jobs(self):
+        for i in range(3):
+            job = CompletedJob.objects.create(
+                order_no=f"j{i}", report_id=str(i), job_date=date(2026, 9, 1),
+                locksmith=self.locksmith, status=CompletedJob.Status.FAILED,
+            )
+            if i == 0:
+                job.notes_sufficient = False
+                job.save(update_fields=["notes_sufficient"])
+            elif i == 1:
+                job.notes_sufficient = True
+                job.save(update_fields=["notes_sufficient"])
+            # i == 2 left unassessed (notes_sufficient stays None)
+
+        summaries = all_locksmith_summaries()
+        summary = next(s for s in summaries if s["locksmith"] == self.locksmith)
+        self.assertEqual(summary["notes_assessed"], 2)
+        self.assertEqual(summary["insufficient_notes_rate_pct"], 50.0)
+
+    def test_locksmith_summary_insufficient_notes_rate_none_when_nothing_assessed(self):
+        CompletedJob.objects.create(
+            order_no="j0", report_id="0", job_date=date(2026, 9, 1),
+            locksmith=self.locksmith, status=CompletedJob.Status.FAILED,
+        )
+        summaries = all_locksmith_summaries()
+        summary = next(s for s in summaries if s["locksmith"] == self.locksmith)
+        self.assertEqual(summary["notes_assessed"], 0)
+        self.assertIsNone(summary["insufficient_notes_rate_pct"])
+
     def test_failed_jobs_list_filters_by_category(self):
         category = FailureCategory.objects.create(name="Wrong parts")
         other_category = FailureCategory.objects.create(name="Other reason")
@@ -1172,6 +1201,42 @@ class CategorizeJobsBulkViewTests(TestCase):
         self.assertEqual(self.job2.failure_category, self.other_category)
         self.assertEqual(self.job1.categorized_by, self.user)
         self.assertIsNotNone(self.job1.categorized_at)
+
+    def test_notes_ok_checkbox_marks_notes_sufficient_true(self):
+        self.client.post(
+            reverse("job_completion:categorize_jobs"),
+            {
+                f"category_{self.job1.pk}": self.category.pk,
+                f"notes_ok_{self.job1.pk}": "on",
+            },
+        )
+        self.job1.refresh_from_db()
+        self.assertIs(self.job1.notes_sufficient, True)
+
+    def test_missing_notes_ok_checkbox_marks_notes_sufficient_false(self):
+        # Unchecked checkboxes submit nothing at all — this is the
+        # normal "left unchecked" case, not a missing/blank field.
+        self.client.post(
+            reverse("job_completion:categorize_jobs"),
+            {f"category_{self.job1.pk}": self.category.pk},
+        )
+        self.job1.refresh_from_db()
+        self.assertIs(self.job1.notes_sufficient, False)
+
+    def test_uncategorized_row_is_never_assessed_for_notes(self):
+        # job2's category is left blank, so it's skipped entirely —
+        # notes_sufficient must stay None (not False), same as it was
+        # never looked at.
+        self.client.post(
+            reverse("job_completion:categorize_jobs"),
+            {
+                f"category_{self.job1.pk}": self.category.pk,
+                f"category_{self.job2.pk}": "",
+                f"notes_ok_{self.job2.pk}": "on",
+            },
+        )
+        self.job2.refresh_from_db()
+        self.assertIsNone(self.job2.notes_sufficient)
 
     def test_rows_left_blank_are_skipped(self):
         response = self.client.post(

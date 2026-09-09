@@ -6,7 +6,7 @@
 <div class="card">
   <h2>Locksmith summary (last 90 days)</h2>
   <table>
-    <tr><th>Locksmith</th><th>Total jobs</th><th>Failed</th><th>Failure rate</th><th>WGTK Locksmith fault rate</th><th></th></tr>
+    <tr><th>Locksmith</th><th>Total jobs</th><th>Failed</th><th>Failure rate</th><th>WGTK Locksmith fault rate</th><th>Insufficient notes (QC)</th><th></th></tr>
     {% for s in summaries %}
     <tr>
       <td>{{ s.locksmith.name }}</td>
@@ -14,6 +14,9 @@
       <td class="{% if s.failed_jobs %}flag{% endif %}">{{ s.failed_jobs }}</td>
       <td>{{ s.failure_rate_pct }}%</td>
       <td class="{% if s.wgtk_fault_jobs %}flag{% endif %}">{{ s.wgtk_fault_rate_pct }}%</td>
+      <td class="{% if s.insufficient_notes_rate_pct %}flag{% endif %}">
+        {% if s.insufficient_notes_rate_pct is not None %}{{ s.insufficient_notes_rate_pct }}% ({{ s.notes_assessed }} assessed){% else %}—{% endif %}
+      </td>
       <td><a href="{% url 'job_completion:locksmith_report' s.locksmith.pk %}">Details</a></td>
     </tr>
     {% endfor %}

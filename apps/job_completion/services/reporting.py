@@ -42,6 +42,17 @@ def locksmith_summary(locksmith: Locksmith, window_days: int = DEFAULT_WINDOW_DA
     ).count()
     wgtk_fault_rate = round(wgtk_fault / total * 100, 1) if total else 0.0
 
+    # QC: of the jobs office has actually assessed for note quality
+    # (notes_sufficient set, alongside categorizing a failure — see
+    # categorize_jobs), what fraction were judged not good enough.
+    # None (not 0.0) when nothing's been assessed yet, so the dashboard
+    # can tell "0% insufficient" apart from "no QC data yet".
+    notes_assessed = jobs.filter(notes_sufficient__isnull=False).count()
+    notes_insufficient = jobs.filter(notes_sufficient=False).count()
+    insufficient_notes_rate = (
+        round(notes_insufficient / notes_assessed * 100, 1) if notes_assessed else None
+    )
+
     return {
         "locksmith": locksmith,
         "total_jobs": total,
@@ -49,6 +60,8 @@ def locksmith_summary(locksmith: Locksmith, window_days: int = DEFAULT_WINDOW_DA
         "failure_rate_pct": failure_rate,
         "wgtk_fault_jobs": wgtk_fault,
         "wgtk_fault_rate_pct": wgtk_fault_rate,
+        "notes_assessed": notes_assessed,
+        "insufficient_notes_rate_pct": insufficient_notes_rate,
     }
 
 

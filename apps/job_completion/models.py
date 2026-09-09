@@ -128,6 +128,13 @@ class CompletedJob(models.Model):
         settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL
     )
     categorized_at = models.DateTimeField(null=True, blank=True)
+    notes_sufficient = models.BooleanField(
+        null=True, blank=True, default=None,
+        help_text="Office's QC judgement, made alongside categorizing a "
+        "failure, on whether the locksmith's completion_note was good "
+        "enough — null until then, not a default of False. Feeds a "
+        "per-locksmith QC metric rather than blocking categorization.",
+    )
 
     pulled_at = models.DateTimeField(auto_now_add=True)
 

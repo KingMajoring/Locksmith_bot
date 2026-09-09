@@ -155,8 +155,14 @@ def categorize_jobs(request):
         category = categories_by_id.get(category_id)
         if not category:
             continue
+        # The QC checkbox is read alongside category, not standalone —
+        # a row only gets a notes_sufficient judgement when office
+        # actually categorizes it this same submission, same as
+        # categorized_by/categorized_at.
+        notes_sufficient = f"notes_ok_{job_pk}" in request.POST
         updated = CompletedJob.objects.filter(pk=job_pk).update(
-            failure_category=category, categorized_by=request.user, categorized_at=timezone.now()
+            failure_category=category, categorized_by=request.user, categorized_at=timezone.now(),
+            notes_sufficient=notes_sufficient,
         )
         saved += updated
 
