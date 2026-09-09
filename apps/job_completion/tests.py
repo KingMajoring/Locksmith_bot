@@ -995,6 +995,46 @@ class CategorizeJobsBulkViewTests(TestCase):
         self.assertContains(response, f'name="category_{self.job2.pk}"')
 
 
+class PullCompletedJobsCommandTests(TestCase):
+    def test_default_catches_up_the_last_few_days_ending_yesterday(self):
+        from io import StringIO
+
+        from django.core.management import call_command
+
+        from apps.job_completion.management.commands.pull_completed_jobs import CATCHUP_DAYS
+        from apps.job_completion.services.pulling import PullSummary
+
+        yesterday = date.today() - timedelta(days=1)
+        expected_dates = [yesterday - timedelta(days=i) for i in range(CATCHUP_DAYS)]
+
+        with patch(
+            "apps.job_completion.management.commands.pull_completed_jobs.pull_completed_jobs_for_date",
+            return_value=PullSummary(created=1, updated=0, skipped_not_completed=0),
+        ) as mock_pull:
+            out = StringIO()
+            call_command("pull_completed_jobs", stdout=out)
+
+        called_dates = [call.args[0] for call in mock_pull.call_args_list]
+        self.assertEqual(called_dates, expected_dates)
+
+    def test_explicit_date_pulls_only_that_one_date(self):
+        from io import StringIO
+
+        from django.core.management import call_command
+
+        from apps.job_completion.services.pulling import PullSummary
+
+        with patch(
+            "apps.job_completion.management.commands.pull_completed_jobs.pull_completed_jobs_for_date",
+            return_value=PullSummary(created=3, updated=1, skipped_not_completed=0),
+        ) as mock_pull:
+            out = StringIO()
+            call_command("pull_completed_jobs", "--date", "2026-01-15", stdout=out)
+
+        self.assertEqual(mock_pull.call_args_list, [((date(2026, 1, 15),), {})])
+        self.assertIn("2026-01-15: 3 created, 1 updated", out.getvalue())
+
+
 class BackfillCompletedJobsCommandTests(TestCase):
     def test_calls_pull_for_every_day_in_range_and_sums_totals(self):
         from io import StringIO

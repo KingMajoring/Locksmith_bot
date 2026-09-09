@@ -11,9 +11,17 @@ name: Scheduled - Pull Completed Jobs
 
 on:
   schedule:
-    # 03:00 UTC daily — after Optimo's jobs for the previous day have
-    # all had a chance to complete, mirroring the old WebJob's timing.
-    - cron: "0 3 * * *"
+    # Nominally fires 23:10 UTC (i.e. just before midnight — an odd
+    # minute, not :00, since GitHub queues every repo's round-hour
+    # crons together and delays them). Confirmed live this repo's
+    # scheduled runs land ~4.5-5h after their nominal time regardless
+    # (a GitHub Actions scheduling delay, not something we control) —
+    # scheduled this early specifically so the actual run still lands
+    # by ~5am UTC/GMT. pull_completed_jobs itself re-checks the last
+    # few days every run (see that command), so an earlier pull that
+    # catches Optimo jobs still mid-completion isn't a problem — it
+    # just picks them up on the next run instead of losing them.
+    - cron: "10 23 * * *"
   workflow_dispatch: {}
 
 jobs:
