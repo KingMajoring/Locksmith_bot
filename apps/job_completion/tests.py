@@ -640,6 +640,45 @@ class ReportingTests(TestCase):
         self.assertEqual(summary["failed_jobs"], 1)
         self.assertEqual(summary["failure_rate_pct"], 25.0)
 
+    def test_locksmith_summary_wgtk_fault_rate_only_counts_locksmith_blamed_failures(self):
+        wgtk_category = FailureCategory.objects.create(
+            name="Skill set - placed incorrectly",
+            master_reason=FailureCategory.MasterReason.WGTK_LOCKSMITH,
+        )
+        office_category = FailureCategory.objects.create(
+            name="Incorrect parts - ordered by WGTK",
+            master_reason=FailureCategory.MasterReason.WGTK_OFFICE,
+        )
+        for i in range(2):
+            CompletedJob.objects.create(
+                order_no=f"s{i}", report_id=str(i), job_date=date(2026, 9, 1),
+                locksmith=self.locksmith, status=CompletedJob.Status.SUCCESS,
+            )
+        CompletedJob.objects.create(
+            order_no="f1", report_id="9", job_date=date(2026, 9, 1),
+            locksmith=self.locksmith, status=CompletedJob.Status.FAILED,
+            failure_category=wgtk_category,
+        )
+        CompletedJob.objects.create(
+            order_no="f2", report_id="10", job_date=date(2026, 9, 1),
+            locksmith=self.locksmith, status=CompletedJob.Status.FAILED,
+            failure_category=office_category,
+        )
+        CompletedJob.objects.create(
+            order_no="f3", report_id="11", job_date=date(2026, 9, 1),
+            locksmith=self.locksmith, status=CompletedJob.Status.FAILED,
+        )  # still uncategorized
+
+        summaries = all_locksmith_summaries()
+        summary = next(s for s in summaries if s["locksmith"] == self.locksmith)
+        self.assertEqual(summary["total_jobs"], 5)
+        self.assertEqual(summary["failed_jobs"], 3)
+        self.assertEqual(summary["failure_rate_pct"], 60.0)
+        # Only the one job blamed on the locksmith counts here — the
+        # office-fault and uncategorized failures don't.
+        self.assertEqual(summary["wgtk_fault_jobs"], 1)
+        self.assertEqual(summary["wgtk_fault_rate_pct"], 20.0)
+
     def test_failure_category_breakdown_groups_uncategorized(self):
         CompletedJob.objects.create(
             order_no="a", report_id="1", job_date=date(2026, 9, 1),
@@ -921,6 +960,54 @@ class ViewsSmokeTests(TestCase):
         )
         response = self.client.get(reverse("job_completion:jobs_by_day"), {"date": "2026-01-01"})
         self.assertNotContains(response, "row-warn")
+
+    def test_jobs_by_day_shows_supplied_service_column(self):
+        CompletedJob.objects.create(
+            order_no="a", report_id="1", job_date=date(2026, 1, 1),
+            locksmith=self.locksmith, status=CompletedJob.Status.SUCCESS,
+            supplied_service="Non-Destructive Entry",
+        )
+        response = self.client.get(reverse("job_completion:jobs_by_day"), {"date": "2026-01-01"})
+        self.assertContains(response, "Supplied service")
+        self.assertContains(response, "Non-Destructive Entry")
+
+    def test_jobs_by_day_flagged_filter_hides_unflagged_jobs(self):
+        start = datetime(2026, 1, 1, 9, 0, tzinfo=dt_timezone.utc)
+        CompletedJob.objects.create(
+            order_no="flagged", report_id="1", job_date=date(2026, 1, 1),
+            locksmith=self.locksmith, status=CompletedJob.Status.SUCCESS,
+            disposed_skus="", start_time=start, end_time=start.replace(minute=5),
+        )
+        CompletedJob.objects.create(
+            order_no="clean", report_id="2", job_date=date(2026, 1, 1),
+            locksmith=self.locksmith, status=CompletedJob.Status.SUCCESS,
+            disposed_skus="TK-100", start_time=start, end_time=start.replace(minute=30),
+        )
+        response = self.client.get(
+            reverse("job_completion:jobs_by_day"), {"date": "2026-01-01", "flagged": "1"}
+        )
+        order_nos = {job.order_no for job in response.context["jobs"]}
+        self.assertEqual(order_nos, {"flagged"})
+        self.assertTrue(response.context["flagged_only"])
+
+    def test_jobs_by_day_flagged_filter_does_not_change_day_totals(self):
+        start = datetime(2026, 1, 1, 9, 0, tzinfo=dt_timezone.utc)
+        CompletedJob.objects.create(
+            order_no="flagged", report_id="1", job_date=date(2026, 1, 1),
+            locksmith=self.locksmith, status=CompletedJob.Status.SUCCESS,
+            net_cost=100.0, disposed_skus="", start_time=start, end_time=start.replace(minute=5),
+        )
+        CompletedJob.objects.create(
+            order_no="clean", report_id="2", job_date=date(2026, 1, 1),
+            locksmith=self.locksmith, status=CompletedJob.Status.SUCCESS,
+            net_cost=200.0, disposed_skus="TK-100", start_time=start, end_time=start.replace(minute=30),
+        )
+        response = self.client.get(
+            reverse("job_completion:jobs_by_day"), {"date": "2026-01-01", "flagged": "1"}
+        )
+        # Summary reflects the whole day, not just the flagged subset.
+        self.assertEqual(response.context["summary"]["job_count"], 2)
+        self.assertEqual(response.context["summary"]["total_income"], 300.0)
 
     def test_login_required_redirects_anonymous(self):
         self.client.logout()

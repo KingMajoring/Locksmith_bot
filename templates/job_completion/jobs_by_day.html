@@ -5,17 +5,23 @@
 
 <ul class="tabs">
   {% if offset > 0 %}
-  <li><a href="?offset={{ prev_offset }}">← Show more recent days</a></li>
+  <li><a href="?offset={{ prev_offset }}{% if flagged_only %}&flagged=1{% endif %}">← Show more recent days</a></li>
   {% endif %}
   {% for d in pills %}
-  <li><a href="?offset={{ offset }}&date={{ d|date:'Y-m-d' }}" class="{% if d == selected %}tab-active{% endif %}">{{ d|date:"D j M" }}</a></li>
+  <li><a href="?offset={{ offset }}&date={{ d|date:'Y-m-d' }}{% if flagged_only %}&flagged=1{% endif %}" class="{% if d == selected %}tab-active{% endif %}">{{ d|date:"D j M" }}</a></li>
   {% endfor %}
-  <li><a href="?offset={{ next_offset }}">Show earlier days →</a></li>
+  <li><a href="?offset={{ next_offset }}{% if flagged_only %}&flagged=1{% endif %}">Show earlier days →</a></li>
 </ul>
 
 <div class="card">
   <h2>{{ selected|date:"l j F Y" }}</h2>
-  {% if jobs %}
+  <p class="sub">
+    <label>
+      <input type="checkbox" id="flagged-only-toggle" {% if flagged_only %}checked{% endif %}>
+      Flagged for review only
+    </label>
+  </p>
+  {% if summary.job_count %}
   <div class="stat-row">
     <div class="stat-tile"><div class="stat-label">Jobs</div><div class="stat-value">{{ summary.job_count }}</div></div>
     <div class="stat-tile"><div class="stat-label">Locksmiths</div><div class="stat-value">{{ summary.locksmith_count }}</div></div>
@@ -24,6 +30,7 @@
     <div class="stat-tile"><div class="stat-label">Total parts cost</div><div class="stat-value">£{{ summary.total_cost }}</div></div>
     <div class="stat-tile"><div class="stat-label">Total margin</div><div class="stat-value {% if summary.total_margin < 0 %}flag{% endif %}">£{{ summary.total_margin }}</div></div>
   </div>
+  {% if jobs %}
   <div class="table-wrap">
   <table>
     <tr>
@@ -33,6 +40,7 @@
       <th>Make</th>
       <th>Model</th>
       <th>Loss type</th>
+      <th>Supplied service</th>
       <th>Duration</th>
       <th>Parts disposed (SKU)</th>
       <th>Parts cost</th>
@@ -49,6 +57,7 @@
       <td>{{ job.make }}</td>
       <td>{{ job.model }}</td>
       <td>{{ job.loss_type }}</td>
+      <td>{{ job.supplied_service }}</td>
       <td>{% if job.duration_minutes %}{{ job.duration_minutes }} min{% else %}—{% endif %}</td>
       <td>{{ job.disposed_skus }}</td>
       <td>{% if job.parts_cost %}£{{ job.parts_cost }}{% else %}—{% endif %}</td>
@@ -65,7 +74,22 @@
   </table>
   </div>
   {% else %}
+  <p>No flagged jobs on {{ selected }}.</p>
+  {% endif %}
+  {% else %}
   <p>No completed jobs on {{ selected }}.</p>
   {% endif %}
 </div>
+
+<script>
+  document.getElementById('flagged-only-toggle').addEventListener('change', function (e) {
+    var url = new URL(window.location.href);
+    if (e.target.checked) {
+      url.searchParams.set('flagged', '1');
+    } else {
+      url.searchParams.delete('flagged');
+    }
+    window.location.href = url.toString();
+  });
+</script>
 {% endblock %}

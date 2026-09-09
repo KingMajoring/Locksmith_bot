@@ -171,17 +171,26 @@ def jobs_by_day(request):
             job.margin = None
         job.review_flags = review_flags(job)
 
+    # Summary totals always reflect the whole day, regardless of the
+    # flagged-only filter below — otherwise switching the filter on
+    # would make the day's own totals look like they'd changed.
+    summary = summarize_day(jobs)
+
+    flagged_only = request.GET.get("flagged") == "1"
+    display_jobs = [job for job in jobs if job.review_flags] if flagged_only else jobs
+
     return render(
         request,
         "job_completion/jobs_by_day.html",
         {
             "pills": pills,
             "selected": selected,
-            "jobs": jobs,
+            "jobs": display_jobs,
             "offset": offset,
             "next_offset": next_offset(offset),
             "prev_offset": prev_offset(offset),
-            "summary": summarize_day(jobs),
+            "summary": summary,
+            "flagged_only": flagged_only,
         },
     )
 

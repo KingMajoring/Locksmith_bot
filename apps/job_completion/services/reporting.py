@@ -32,12 +32,23 @@ def locksmith_summary(locksmith: Locksmith, window_days: int = DEFAULT_WINDOW_DA
     total = jobs.count()
     failed = jobs.filter(status=CompletedJob.Status.FAILED).count()
     failure_rate = round(failed / total * 100, 1) if total else 0.0
+    # Failures specifically blamed on the locksmith — a subset of
+    # `failed` (some failures are Office/Client/Supplier's fault, or
+    # still sitting uncategorized in the Job Failures queue), so this
+    # is always <= failure_rate_pct, never a second independent measure.
+    wgtk_fault = jobs.filter(
+        status=CompletedJob.Status.FAILED,
+        failure_category__master_reason=FailureCategory.MasterReason.WGTK_LOCKSMITH,
+    ).count()
+    wgtk_fault_rate = round(wgtk_fault / total * 100, 1) if total else 0.0
 
     return {
         "locksmith": locksmith,
         "total_jobs": total,
         "failed_jobs": failed,
         "failure_rate_pct": failure_rate,
+        "wgtk_fault_jobs": wgtk_fault,
+        "wgtk_fault_rate_pct": wgtk_fault_rate,
     }
 
 
