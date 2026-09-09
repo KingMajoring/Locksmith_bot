@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 
 from apps.integrations.handl import PanelDailyFigures, get_handl_client
+from apps.locksmiths.services import normalize_base_name
 
 
 @dataclass(frozen=True)
@@ -54,9 +55,14 @@ def month_bounds(months_ago: int = 0, today: date | None = None) -> tuple[date, 
 def _aggregate_by_locksmith(
     figures: list[PanelDailyFigures],
 ) -> tuple[list[PanelLocksmithSpend], PanelSpendTotals]:
+    # Panel firms get the same "(V)"/"(A)" Soter-location suffix WGTK's
+    # own locksmiths do (see apps.locksmiths.services) — grouping by the
+    # raw panel_name string was silently splitting one firm's spend
+    # across two rows. normalize_base_name strips that suffix, same as
+    # the WGTK-side sync already does.
     by_locksmith: dict[str, list] = {}
     for figure in figures:
-        by_locksmith.setdefault(figure.panel_name, []).append(figure)
+        by_locksmith.setdefault(normalize_base_name(figure.panel_name), []).append(figure)
 
     rows = []
     for name, daily_figures in by_locksmith.items():

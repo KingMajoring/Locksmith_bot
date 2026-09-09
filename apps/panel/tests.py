@@ -71,6 +71,22 @@ class PanelSpendForMonthTests(TestCase):
         self.assertEqual(row.selling_cost, 340.0)
         self.assertEqual(month_start, date(2026, 9, 1))
 
+    def test_v_and_a_rows_for_the_same_firm_are_combined_into_one_row(self):
+        # Panel firms carry the same "(V)"/"(A)" Soter-location suffix
+        # WGTK's own locksmiths do — these must combine into one row,
+        # not two, same as the WGTK-side sync already does.
+        figures = [
+            _figure("ABC Locksmiths (V)", date(2026, 9, 3), 1, 50.0, 150.0),
+            _figure("ABC Locksmiths (A)", date(2026, 9, 5), 2, 70.0, 190.0),
+        ]
+        rows, totals, _month_start = self._run(figures)
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(row.locksmith_name, "ABC Locksmiths")
+        self.assertEqual(row.job_count, 3)
+        self.assertEqual(row.total_quoted_price, 220.0)
+        self.assertEqual(totals.job_count, 3)
+
     def test_selling_cost_is_quoted_price_plus_wgtk_fee(self):
         figures = [_figure("ABC Locksmiths", date(2026, 9, 3), 1, 50.0, 150.0)]
         rows, _totals, _month_start = self._run(figures)

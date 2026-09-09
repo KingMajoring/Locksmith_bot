@@ -1207,6 +1207,26 @@ class JobVisitWorkflowTests(TestCase):
         url = reverse("locksmith_portal:job_on_route", args=[self.order_no])
         self.assertEqual(self.client.get(url).status_code, 405)
 
+    def test_on_route_for_a_past_day_advances_stage_but_does_not_push_optimo(self):
+        yesterday = self.today - timedelta(days=1)
+        past_order_no = f"555555_{yesterday.isoformat()}"
+        self.mock_optimo.list_orders_for_date.return_value = [
+            OptimoOrderSummary(
+                order_no=past_order_no, driver_serial="011", distance_metres=0, travel_time_seconds=0
+            ),
+        ]
+        url = f"{reverse('locksmith_portal:job_on_route', args=[past_order_no])}?date={yesterday.isoformat()}"
+        response = self.client.post(url)
+
+        visit = JobVisit.objects.get(locksmith=self.locksmith, order_no=past_order_no)
+        self.assertEqual(visit.stage, JobVisit.Stage.ON_ROUTE)
+        self.assertRedirects(
+            response,
+            f"{reverse('locksmith_portal:job_overview', args=[past_order_no])}?date={yesterday.isoformat()}",
+        )
+        self.mock_handl.add_report_note.assert_called_once()
+        self.mock_optimo.update_completion_status.assert_not_called()
+
     def test_on_route_is_idempotent(self):
         url = reverse("locksmith_portal:job_on_route", args=[self.order_no])
         self.client.post(url)
@@ -1273,6 +1293,25 @@ class JobVisitWorkflowTests(TestCase):
         self.mock_optimo.update_completion_status.assert_called_once_with(
             self.order_no, "failed", start_time=None, end_time=visit.completed_at
         )
+
+    def test_cancel_for_a_past_day_marks_cancelled_but_does_not_push_optimo(self):
+        yesterday = self.today - timedelta(days=1)
+        past_order_no = f"555555_{yesterday.isoformat()}"
+        self.mock_optimo.list_orders_for_date.return_value = [
+            OptimoOrderSummary(
+                order_no=past_order_no, driver_serial="011", distance_metres=0, travel_time_seconds=0
+            ),
+        ]
+        url = f"{reverse('locksmith_portal:job_cancel', args=[past_order_no])}?date={yesterday.isoformat()}"
+        response = self.client.post(url, {"cancel_reason": "wrong_address", "notes": ""})
+        self.assertRedirects(
+            response,
+            f"{reverse('locksmith_portal:job_overview', args=[past_order_no])}?date={yesterday.isoformat()}",
+        )
+        visit = JobVisit.objects.get(locksmith=self.locksmith, order_no=past_order_no)
+        self.assertEqual(visit.outcome, JobVisit.Outcome.CANCELLED)
+        self.mock_handl.add_report_note.assert_called_once()
+        self.mock_optimo.update_completion_status.assert_not_called()
 
     def test_cancel_blocked_once_arrived(self):
         JobVisit.objects.create(
@@ -1347,6 +1386,30 @@ class JobVisitWorkflowTests(TestCase):
         self.mock_optimo.update_completion_status.assert_called_once_with(
             self.order_no, "servicing", start_time=visit.arrived_at, end_time=None
         )
+
+    def test_arrived_for_a_past_day_advances_stage_but_does_not_push_optimo(self):
+        yesterday = self.today - timedelta(days=1)
+        past_order_no = f"555555_{yesterday.isoformat()}"
+        self.mock_optimo.list_orders_for_date.return_value = [
+            OptimoOrderSummary(
+                order_no=past_order_no, driver_serial="011", distance_metres=0, travel_time_seconds=0
+            ),
+        ]
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=past_order_no, report_id="555555",
+            stage=JobVisit.Stage.ON_ROUTE, on_route_at=timezone.now(),
+        )
+        url = f"{reverse('locksmith_portal:job_arrived', args=[past_order_no])}?date={yesterday.isoformat()}"
+        response = self.client.post(url, {"photo_before": [_fake_photo()]})
+
+        visit = JobVisit.objects.get(locksmith=self.locksmith, order_no=past_order_no)
+        self.assertEqual(visit.stage, JobVisit.Stage.ARRIVED)
+        self.assertRedirects(
+            response,
+            f"{reverse('locksmith_portal:job_overview', args=[past_order_no])}?date={yesterday.isoformat()}",
+        )
+        self.mock_handl.add_report_note.assert_called_once()
+        self.mock_optimo.update_completion_status.assert_not_called()
 
     def test_arrived_captures_gps_and_includes_maps_link_in_note(self):
         JobVisit.objects.create(
@@ -1470,6 +1533,36 @@ class JobVisitWorkflowTests(TestCase):
         self.mock_optimo.update_completion_status.assert_called_once_with(
             self.order_no, "success", start_time=visit.arrived_at, end_time=visit.completed_at
         )
+
+    def test_complete_for_a_past_day_marks_done_but_does_not_push_optimo(self):
+        yesterday = self.today - timedelta(days=1)
+        past_order_no = f"555555_{yesterday.isoformat()}"
+        self.mock_optimo.list_orders_for_date.return_value = [
+            OptimoOrderSummary(
+                order_no=past_order_no, driver_serial="011", distance_metres=0, travel_time_seconds=0
+            ),
+        ]
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=past_order_no, report_id="555555",
+            stage=JobVisit.Stage.PARTS_DONE, parts_done_at=timezone.now(),
+        )
+        url = f"{reverse('locksmith_portal:job_complete', args=[past_order_no])}?date={yesterday.isoformat()}"
+        response = self.client.post(
+            url,
+            {
+                "photo_after": [_fake_photo(name="after.jpg")], "notes": "",
+                "outcome": "completed", "completion_signature": "data:image/png;base64,aGVsbG8=",
+            },
+        )
+
+        visit = JobVisit.objects.get(locksmith=self.locksmith, order_no=past_order_no)
+        self.assertEqual(visit.stage, JobVisit.Stage.DONE)
+        self.assertRedirects(
+            response,
+            f"{reverse('locksmith_portal:job_overview', args=[past_order_no])}?date={yesterday.isoformat()}",
+        )
+        self.mock_handl.add_report_note.assert_called_once()
+        self.mock_optimo.update_completion_status.assert_not_called()
 
     def test_complete_requires_completion_signature(self):
         JobVisit.objects.create(

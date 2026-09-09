@@ -652,6 +652,7 @@ def job_on_route(request, order_no):
     if ctx is None:
         return early
     locksmith, report_id, visit = ctx["locksmith"], ctx["report_id"], ctx["visit"]
+    selected_date = ctx["selected_date"]
 
     # First time this locksmith picks Maps or Waze on the "Mark on
     # route" step, remember it so they're not asked again on every
@@ -669,7 +670,12 @@ def job_on_route(request, order_no):
         _write_handl_note(
             locksmith, report_id, f"'{locksmith.van_soter_display_name}' is on route to this job."
         )
-        _update_optimo_status(order_no, "on_route")
+        # Optimo's own route for that day is only meaningful the day of —
+        # working a previous day's job (e.g. logging a disposal missed
+        # at the time) should still progress the stage locally, but must
+        # never push a live status update against an already-closed day.
+        if selected_date == timezone.localdate():
+            _update_optimo_status(order_no, "on_route")
 
     overview_url = f"{reverse('locksmith_portal:job_overview', args=[order_no])}?date={ctx['selected_date'].isoformat()}"
     return redirect(overview_url)
@@ -721,7 +727,8 @@ def job_cancel(request, order_no):
             if notes_text:
                 note += f" {escape(notes_text)}"
             _write_handl_note(locksmith, report_id, note)
-            _update_optimo_status(order_no, "failed", end_time=visit.completed_at)
+            if selected_date == timezone.localdate():
+                _update_optimo_status(order_no, "failed", end_time=visit.completed_at)
 
             messages.success(request, "Job cancelled.")
             return redirect(overview_url)
@@ -796,7 +803,8 @@ def job_arrived(request, order_no):
                 if maps_link:
                     note_parts.append(f"Location: {maps_link}")
                 _write_handl_note(locksmith, report_id, " ".join(note_parts))
-                _update_optimo_status(order_no, "servicing", start_time=visit.arrived_at)
+                if selected_date == timezone.localdate():
+                    _update_optimo_status(order_no, "servicing", start_time=visit.arrived_at)
                 messages.success(request, "Arrival photos saved.")
                 return redirect(overview_url)
 
@@ -1079,11 +1087,12 @@ def job_complete(request, order_no):
             ])
 
             _write_handl_note(locksmith, report_id, " ".join(note_parts))
-            _update_optimo_status(
-                order_no,
-                "success" if outcome == JobVisit.Outcome.COMPLETED else "failed",
-                start_time=visit.arrived_at, end_time=visit.completed_at,
-            )
+            if selected_date == timezone.localdate():
+                _update_optimo_status(
+                    order_no,
+                    "success" if outcome == JobVisit.Outcome.COMPLETED else "failed",
+                    start_time=visit.arrived_at, end_time=visit.completed_at,
+                )
 
             messages.success(request, "Job marked complete.")
             return redirect(overview_url)
