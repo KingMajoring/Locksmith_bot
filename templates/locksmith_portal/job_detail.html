@@ -23,23 +23,18 @@
 {% endif %}
 
 {% if stock_lines or all_parts %}
-<datalist id="parts-catalogue">
-  {% for line in stock_lines %}
-    <option value="{{ line.part_code }} — {{ line.part_name }}">{{ line.part_code }} — {{ line.part_name }} (have {{ line.qty }})</option>
-  {% endfor %}
-</datalist>
-<datalist id="all-parts-catalogue">
-  {% for code, name in all_parts %}
-    <option value="{{ code }} — {{ name }}">{{ code }} — {{ name }}</option>
-  {% endfor %}
-</datalist>
+{{ stock_options|json_script:"stock-options-data" }}
+{{ all_parts_options|json_script:"all-parts-options-data" }}
 <p class="sub">Client-supplied parts can be picked from the full parts list, not just what's in your van.</p>
 
 <form method="post" class="card" id="dispose-form" action="{% url 'locksmith_portal:job_detail' order_no=order_no %}?date={{ selected_date|date:'Y-m-d' }}">
   {% csrf_token %}
   <div id="dispose-rows">
     <div class="dispose-row">
-      <input type="text" list="parts-catalogue" name="part_code" placeholder="Search SKU or part name" autocomplete="off">
+      <div class="part-search">
+        <input type="text" name="part_code" placeholder="Search SKU or part name" autocomplete="off">
+        <div class="part-suggestions" hidden></div>
+      </div>
       <input type="number" min="1" inputmode="numeric" name="quantity" placeholder="Qty">
       <label class="client-supplied-label">
         <input type="checkbox" class="client-supplied-checkbox">
@@ -54,7 +49,10 @@
 
 <template id="dispose-row-template">
   <div class="dispose-row">
-    <input type="text" list="parts-catalogue" name="part_code" placeholder="Search SKU or part name" autocomplete="off">
+    <div class="part-search">
+      <input type="text" name="part_code" placeholder="Search SKU or part name" autocomplete="off">
+      <div class="part-suggestions" hidden></div>
+    </div>
     <input type="number" min="1" inputmode="numeric" name="quantity" placeholder="Qty">
     <label class="client-supplied-label">
       <input type="checkbox" class="client-supplied-checkbox">
@@ -76,10 +74,89 @@
 </div>
 
 <script>
+  // Native <datalist> autocomplete is unreliable on mobile browsers
+  // (notably iOS Safari, which barely supports it) — this is a small
+  // custom suggestions dropdown instead, so search-as-you-type actually
+  // works on the phones locksmiths use this on.
+  var stockOptions = JSON.parse(document.getElementById('stock-options-data').textContent);
+  var allPartsOptions = JSON.parse(document.getElementById('all-parts-options-data').textContent);
+
+  function optionsFor(clientSupplied) {
+    return clientSupplied ? allPartsOptions : stockOptions;
+  }
+
+  function optionLabel(opt) {
+    return opt.code + ' — ' + opt.name + (opt.qty !== undefined ? ' (have ' + opt.qty + ')' : '');
+  }
+
+  function optionValue(opt) {
+    return opt.code + ' — ' + opt.name;
+  }
+
+  function matchingOptions(options, query) {
+    query = query.trim().toLowerCase();
+    if (!query) return [];
+    return options.filter(function (opt) {
+      return opt.code.toLowerCase().indexOf(query) !== -1 || opt.name.toLowerCase().indexOf(query) !== -1;
+    }).slice(0, 20);
+  }
+
+  function isClientSupplied(row) {
+    return row.querySelector('input[name=client_supplied]').value === '1';
+  }
+
+  function closeSuggestions(row) {
+    var box = row.querySelector('.part-suggestions');
+    box.innerHTML = '';
+    box.hidden = true;
+  }
+
+  function showSuggestions(row, input) {
+    var options = matchingOptions(optionsFor(isClientSupplied(row)), input.value);
+    var box = row.querySelector('.part-suggestions');
+    box.innerHTML = '';
+    if (options.length === 0) {
+      box.hidden = true;
+      return;
+    }
+    options.forEach(function (opt) {
+      var item = document.createElement('div');
+      item.className = 'part-suggestion';
+      item.textContent = optionLabel(opt);
+      // mousedown (not click) + preventDefault so the input doesn't
+      // blur — and lose this dropdown — before the tap/click registers.
+      item.addEventListener('mousedown', function (e) {
+        e.preventDefault();
+        input.value = optionValue(opt);
+        closeSuggestions(row);
+      });
+      box.appendChild(item);
+    });
+    box.hidden = false;
+  }
+
+  var rowsContainer = document.getElementById('dispose-rows');
+
   document.getElementById('add-row').addEventListener('click', function () {
     var tpl = document.getElementById('dispose-row-template');
-    document.getElementById('dispose-rows').appendChild(tpl.content.cloneNode(true));
+    rowsContainer.appendChild(tpl.content.cloneNode(true));
   });
+
+  rowsContainer.addEventListener('input', function (e) {
+    if (!e.target.matches('input[name=part_code]')) return;
+    showSuggestions(e.target.closest('.dispose-row'), e.target);
+  });
+
+  // focus/blur don't bubble, so these listen in the capture phase.
+  rowsContainer.addEventListener('focus', function (e) {
+    if (!e.target.matches('input[name=part_code]')) return;
+    if (e.target.value.trim()) showSuggestions(e.target.closest('.dispose-row'), e.target);
+  }, true);
+
+  rowsContainer.addEventListener('blur', function (e) {
+    if (!e.target.matches('input[name=part_code]')) return;
+    closeSuggestions(e.target.closest('.dispose-row'));
+  }, true);
 
   document.getElementById('dispose-rows').addEventListener('change', function (e) {
     if (!e.target.classList.contains('client-supplied-checkbox')) return;
@@ -87,9 +164,9 @@
     var hidden = row.querySelector('input[name=client_supplied]');
     hidden.value = e.target.checked ? '1' : '0';
     // Client-supplied parts aren't limited to this locksmith's own van
-    // stock, so switch the search to the full parts catalogue.
+    // stock — re-run the search against the full parts catalogue.
     var codeInput = row.querySelector('input[name=part_code]');
-    codeInput.setAttribute('list', e.target.checked ? 'all-parts-catalogue' : 'parts-catalogue');
+    if (document.activeElement === codeInput) showSuggestions(row, codeInput);
   });
 
   (function () {
@@ -101,18 +178,16 @@
 
     function describeRow(raw, clientSupplied) {
       // Picking a suggestion gives "SKU — Name" already; typing a bare
-      // SKU without picking one doesn't — look it up in the catalogue
-      // so the confirmation shows the part name, not just a code.
+      // SKU without picking one doesn't — look it up in the options so
+      // the confirmation shows the part name, not just a code.
       // Client-supplied rows search the full parts list (they aren't
       // limited to this locksmith's own van stock); other rows search
       // just their own stock.
       if (raw.indexOf(' — ') !== -1) return raw;
-      var selector = clientSupplied ? '#all-parts-catalogue option' : '#parts-catalogue option';
       var match = null;
-      document.querySelectorAll(selector).forEach(function (opt) {
+      optionsFor(clientSupplied).forEach(function (opt) {
         if (match) return;
-        var code = opt.value.split(' — ')[0].trim().toLowerCase();
-        if (code === raw.trim().toLowerCase()) match = opt.value;
+        if (opt.code.trim().toLowerCase() === raw.trim().toLowerCase()) match = optionValue(opt);
       });
       return match || raw;
     }

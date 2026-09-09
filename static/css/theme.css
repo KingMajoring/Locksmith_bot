@@ -431,9 +431,28 @@ textarea { width: 100%; padding: 0.6rem 0.7rem; font-size: 1rem; font-family: va
 }
 
 .dispose-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-bottom: 0.6rem; }
-.dispose-row input[type=text] { flex: 1; min-width: 0; padding: 0.55rem 0.7rem; font-size: 1rem; }
+.part-search { position: relative; flex: 1; min-width: 0; }
+.part-search input[type=text] { width: 100%; padding: 0.55rem 0.7rem; font-size: 1rem; }
 .dispose-row input[type=number] { width: 4.5rem; flex-shrink: 0; }
 .client-supplied-label { display: flex; align-items: center; gap: 0.35rem; font-size: 0.85rem; color: var(--ink-soft); white-space: nowrap; flex-basis: 100%; }
+
+.part-suggestions {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 15;
+  margin-top: 0.2rem;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-sm);
+  max-height: 220px;
+  overflow-y: auto;
+}
+.part-suggestion { padding: 0.55rem 0.7rem; font-size: 0.9rem; cursor: pointer; border-bottom: 1px solid var(--border); }
+.part-suggestion:last-child { border-bottom: none; }
+.part-suggestion:active { background: var(--bg); }
 
 .confirm-overlay {
   position: fixed;

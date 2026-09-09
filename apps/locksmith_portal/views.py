@@ -1351,6 +1351,11 @@ def job_detail(request, order_no):
             "report_id": report_id,
             "stock_lines": stock_lines,
             "all_parts": all_parts,
+            "stock_options": [
+                {"code": line.part_code, "name": line.part_name, "qty": line.qty}
+                for line in stock_lines
+            ],
+            "all_parts_options": [{"code": code, "name": name} for code, name in all_parts],
             "previous_disposals": previous_disposals,
             "locksmith": locksmith,
             "selected_date": selected_date,
