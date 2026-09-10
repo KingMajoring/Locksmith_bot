@@ -198,6 +198,33 @@ class DashboardTests(TestCase):
 
     @patch("apps.locksmith_portal.views.get_handl_client")
     @patch("apps.locksmith_portal.views.get_optimo_client")
+    def test_dashboard_shows_supplied_service(self, mock_get_optimo, mock_get_handl):
+        today = timezone.localdate()
+        order_no = f"1001_{today.isoformat()}"
+        mock_optimo = MagicMock()
+        mock_optimo.list_orders_for_date.return_value = [
+            OptimoOrderSummary(
+                order_no=order_no, driver_serial="011", distance_metres=0, travel_time_seconds=0
+            ),
+        ]
+        mock_get_optimo.return_value = mock_optimo
+        mock_handl = MagicMock()
+        mock_handl.get_job_details.return_value = {
+            "1001": JobDetails(
+                report_id="1001", make="Ford", model="Focus", year="2020", reg="AB20 CDE", vin="VIN1",
+                service_type="Car", loss_type="LOST", supplied_service="Non-Destructive Entry",
+                net_cost=100.0,
+            )
+        }
+        mock_get_handl.return_value = mock_handl
+
+        response = self.client.get(reverse("locksmith_portal:dashboard"))
+        job = response.context["jobs"][0]
+        self.assertEqual(job["supplied_service"], "Non-Destructive Entry")
+        self.assertContains(response, "Non-Destructive Entry")
+
+    @patch("apps.locksmith_portal.views.get_handl_client")
+    @patch("apps.locksmith_portal.views.get_optimo_client")
     def test_dashboard_hides_location_without_postcode(self, mock_get_optimo, mock_get_handl):
         today = timezone.localdate()
         order_no = f"1001_{today.isoformat()}"

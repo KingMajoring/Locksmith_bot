@@ -594,6 +594,7 @@ def dashboard(request):
         job["year"] = details.year if details else ""
         job["reg"] = details.reg if details else ""
         job["service"] = display_loss_type(details.loss_type) if details else ""
+        job["supplied_service"] = details.supplied_service if details else ""
         job["postcode"] = details.postcode if details else ""
 
     return render(
