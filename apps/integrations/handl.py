@@ -570,7 +570,15 @@ class SQLHandlClient(HandlClient):
         """Shared by get_expected_stock and get_part_costs — same cost
         basis (Inventory_Stock's PartValue/Quantity for the most
         recently *priced* batch, see the class docstring), unscoped to
-        any locksmith since a part's cost isn't locksmith-specific."""
+        any locksmith since a part's cost isn't locksmith-specific.
+
+        Falls back to _fetch_last_purchase_costs for any SKU this basis
+        has nothing for — confirmed live against DIYB36 (reported live
+        as showing a real 12-unit stock-check variance but £0 impact):
+        every one of its Inventory_Stock batches has Quantity=0 even
+        when priced, so PartValue/Quantity never resolves for it, even
+        though it's a real, regularly-ordered part.
+        """
         if not skus:
             return {}
         code_placeholders = ", ".join(f"%(code{i})s" for i in range(len(skus)))
@@ -588,6 +596,44 @@ class SQLHandlClient(HandlClient):
                 WHERE ipa.SKU IN ({code_placeholders})
                   AND ist.PartValue > 0
                   AND ist.Quantity > 0
+            ) ranked
+            WHERE rn = 1
+        """
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+        unit_costs = {row["part_code"]: float(row["unit_cost"] or 0) for row in rows}
+
+        missing = [sku for sku in skus if sku not in unit_costs]
+        if missing:
+            unit_costs.update(self._fetch_last_purchase_costs(cursor, missing))
+        return unit_costs
+
+    def _fetch_last_purchase_costs(self, cursor, skus: list[str]) -> dict[str, float]:
+        """Fallback cost source for a SKU _fetch_unit_costs' primary
+        Inventory_Stock basis has nothing for — the most recent
+        Inventory_Orders.CostPerUnit for that part (confirmed live
+        against DIYB36: the office's own "last purchased cost per
+        unit" screen shows £0.70, exactly matching this query's most
+        recent row). Most-recently-*arrived* order, falling back to
+        most-recently-*created* for one not yet marked arrived."""
+        if not skus:
+            return {}
+        code_placeholders = ", ".join(f"%(code{i})s" for i in range(len(skus)))
+        params = {f"code{i}": code for i, code in enumerate(skus)}
+        query = f"""
+            SELECT part_code, unit_cost FROM (
+                SELECT
+                    ipa.SKU AS part_code,
+                    io.CostPerUnit AS unit_cost,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY ipa.SKU
+                        ORDER BY ISNULL(io.DateArrived, io.DateCreated) DESC
+                    ) AS rn
+                FROM Inventory_Orders io
+                JOIN Inventory_Order_Requests oreq ON io.OrderRequestId = oreq.Id
+                JOIN Inventory_Parts ipa ON oreq.PartId = ipa.Id
+                WHERE ipa.SKU IN ({code_placeholders})
+                  AND io.CostPerUnit > 0
             ) ranked
             WHERE rn = 1
         """

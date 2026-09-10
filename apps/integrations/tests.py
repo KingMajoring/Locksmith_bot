@@ -253,12 +253,48 @@ class SQLHandlClientTests(TestCase):
         self.assertEqual(expected["TK-100"].unit_cost, 12.5)
         self.assertEqual(expected["TK-101"].unit_cost, 0)
 
+    def test_get_expected_stock_falls_back_to_last_purchase_cost(self):
+        """Regression test: DIYB36, reported live as showing a real
+        12-unit stock-check variance but £0 impact — every one of its
+        Inventory_Stock batches has Quantity=0 even when priced, so the
+        primary basis returns no row for it at all (not a NULL-cost
+        row, no row). Falls back to Inventory_Orders.CostPerUnit, which
+        the office's own "last purchased cost per unit" screen confirms
+        is a real, reliable price for it."""
+        qty_rows = [{"part_code": "DIYB36", "expected_qty": 8}]
+        primary_cost_rows = []  # no Inventory_Stock batch qualifies
+        fallback_cost_rows = [{"part_code": "DIYB36", "unit_cost": 0.70}]
+        client = SQLHandlClient()
+        fake_conn = _fake_connection_multi(qty_rows, primary_cost_rows, fallback_cost_rows)
+        with patch.object(client, "_connection", return_value=fake_conn):
+            expected = client.get_expected_stock(["42"], ["DIYB36"])
+
+        self.assertEqual(expected["DIYB36"].unit_cost, 0.70)
+
+        cursor = fake_conn.cursor.return_value
+        fallback_query = cursor.execute.call_args_list[2][0][0]
+        self.assertIn("Inventory_Orders", fallback_query)
+        self.assertIn("Inventory_Order_Requests", fallback_query)
+        self.assertIn("CostPerUnit", fallback_query)
+
+    def test_get_expected_stock_does_not_fall_back_when_primary_basis_has_the_sku(self):
+        qty_rows = [{"part_code": "TK-100", "expected_qty": 6}]
+        cost_rows = [{"part_code": "TK-100", "unit_cost": 12.5}]
+        client = SQLHandlClient()
+        fake_conn = _fake_connection_multi(qty_rows, cost_rows)
+        with patch.object(client, "_connection", return_value=fake_conn):
+            client.get_expected_stock(["42"], ["TK-100"])
+
+        # Only two execute() calls — no fallback query issued.
+        cursor = fake_conn.cursor.return_value
+        self.assertEqual(cursor.execute.call_count, 2)
+
     def test_get_expected_stock_returns_empty_dict_for_no_codes(self):
         client = SQLHandlClient()
         self.assertEqual(client.get_expected_stock(["42"], []), {})
 
     def test_get_expected_stock_builds_placeholders_for_ids_and_codes(self):
-        fake_conn = _fake_connection_multi([], [])
+        fake_conn = _fake_connection_multi([], [], [])
         client = SQLHandlClient()
         with patch.object(client, "_connection", return_value=fake_conn):
             client.get_expected_stock(["42", "43"], ["TK-100", "TK-101", "TK-102"])
@@ -281,7 +317,7 @@ class SQLHandlClientTests(TestCase):
         5589 instead of a plausible van-stock number). Unit cost must
         come from a separate, unfiltered-by-locksmith query instead.
         """
-        fake_conn = _fake_connection_multi([], [])
+        fake_conn = _fake_connection_multi([], [], [])
         client = SQLHandlClient()
         with patch.object(client, "_connection", return_value=fake_conn):
             client.get_expected_stock(["42"], ["TK-100"])
@@ -290,7 +326,7 @@ class SQLHandlClientTests(TestCase):
         self.assertNotIn("Inventory_Stock", qty_query)
 
     def test_get_expected_stock_cost_query_is_not_scoped_to_locksmith(self):
-        fake_conn = _fake_connection_multi([], [])
+        fake_conn = _fake_connection_multi([], [], [])
         client = SQLHandlClient()
         with patch.object(client, "_connection", return_value=fake_conn):
             client.get_expected_stock(["42"], ["TK-100"])
@@ -306,7 +342,7 @@ class SQLHandlClientTests(TestCase):
         "current" cost, matching how Soter's own UI shows per-supplier
         cost — so no AVG(, and a recency-ranked ROW_NUMBER() instead.
         """
-        fake_conn = _fake_connection_multi([], [])
+        fake_conn = _fake_connection_multi([], [], [])
         client = SQLHandlClient()
         with patch.object(client, "_connection", return_value=fake_conn):
             client.get_expected_stock(["42"], ["TK-100"])
@@ -324,7 +360,7 @@ class SQLHandlClientTests(TestCase):
         so ranking by date alone returned unit_cost=0.0 for everything.
         Non-priced rows must be excluded before ranking.
         """
-        fake_conn = _fake_connection_multi([], [])
+        fake_conn = _fake_connection_multi([], [], [])
         client = SQLHandlClient()
         with patch.object(client, "_connection", return_value=fake_conn):
             client.get_expected_stock(["42"], ["TK-100"])
@@ -339,7 +375,7 @@ class SQLHandlClientTests(TestCase):
         Quantity=37, PartValue=90.65 gives the real per-unit price
         (90.65/37 = £2.45) only once divided by Quantity.
         """
-        fake_conn = _fake_connection_multi([], [])
+        fake_conn = _fake_connection_multi([], [], [])
         client = SQLHandlClient()
         with patch.object(client, "_connection", return_value=fake_conn):
             client.get_expected_stock(["42"], ["TK-100"])
