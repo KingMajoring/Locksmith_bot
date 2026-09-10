@@ -596,6 +596,10 @@ def dashboard(request):
         job["service"] = display_loss_type(details.loss_type) if details else ""
         job["supplied_service"] = details.supplied_service if details else ""
         job["postcode"] = details.postcode if details else ""
+        job["client_name"] = details.client_name if details else ""
+        job["client_phone"] = details.client_phone if details else ""
+        job["broker"] = details.broker if details else ""
+        job["detail_of_loss"] = details.detail_of_loss if details else ""
 
     return render(
         request,

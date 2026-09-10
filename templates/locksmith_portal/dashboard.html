@@ -72,6 +72,9 @@
             {% if job.supplied_service %}
               <span class="job-meta">{{ job.supplied_service }}</span>
             {% endif %}
+            {% if job.client_name or job.broker %}
+              <span class="job-meta">{% if job.client_name %}{{ job.client_name }}{% endif %}{% if job.client_name and job.broker %} · {% endif %}{% if job.broker %}{{ job.broker }}{% endif %}</span>
+            {% endif %}
             {% if job.postcode %}
               <span class="job-location">{{ job.postcode }}</span>
             {% endif %}
@@ -86,10 +89,48 @@
             <span>Start this job</span>
           {% endif %}
         </a>
+        {% if job.client_phone or job.detail_of_loss %}
+          <div class="job-extra-row">
+            {% if job.client_phone %}
+              <a class="job-call" href="tel:{{ job.client_phone }}">&#128222; Call{% if job.client_name %} {{ job.client_name }}{% endif %} — {{ job.client_phone }}</a>
+            {% endif %}
+            {% if job.detail_of_loss %}
+              <button type="button" class="job-detail-btn" data-detail-for="loss-{{ forloop.counter }}">Detail of loss</button>
+              <span id="loss-{{ forloop.counter }}" hidden>{{ job.detail_of_loss }}</span>
+            {% endif %}
+          </div>
+        {% endif %}
       </div>
     {% endfor %}
   {% else %}
     <p class="empty">No jobs found for {% if is_today %}you today{% else %}this day{% endif %}.</p>
   {% endif %}
 </div>
+
+<dialog id="detail-of-loss-dialog">
+  <h3>Detail of loss</h3>
+  <p id="detail-of-loss-text"></p>
+  <button type="button" class="btn-secondary" id="detail-of-loss-close">Close</button>
+</dialog>
+
+<script>
+  (function () {
+    var dialog = document.getElementById('detail-of-loss-dialog');
+    var dialogText = document.getElementById('detail-of-loss-text');
+    if (!dialog) return;
+
+    document.querySelectorAll('.job-detail-btn').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var source = document.getElementById(btn.dataset.detailFor);
+        dialogText.textContent = source ? source.textContent : '';
+        dialog.showModal();
+      });
+    });
+
+    var closeButton = document.getElementById('detail-of-loss-close');
+    if (closeButton) {
+      closeButton.addEventListener('click', function () { dialog.close(); });
+    }
+  })();
+</script>
 {% endblock %}

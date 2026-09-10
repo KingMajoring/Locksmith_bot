@@ -333,6 +333,49 @@ input[type=number] { width: 5rem; }
 .job-done { border-color: var(--wgtk-green-light); }
 .job-tick { color: var(--wgtk-green-dark); font-weight: 700; }
 
+.job-extra-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0 1.1rem 0.85rem;
+  flex-wrap: wrap;
+}
+.job-call {
+  color: var(--wgtk-green-dark);
+  text-decoration: none;
+  font-weight: 700;
+  font-size: 0.85rem;
+}
+.job-call:active { opacity: 0.7; }
+.job-detail-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  color: var(--ink-soft);
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 0.3rem 0.7rem;
+  cursor: pointer;
+}
+.job-detail-btn:active { background: var(--wgtk-green-pale); }
+
+dialog#detail-of-loss-dialog {
+  border: none;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md);
+  padding: 1.25rem;
+  max-width: 90vw;
+  width: 480px;
+  max-height: 80vh;
+}
+dialog#detail-of-loss-dialog::backdrop { background: rgba(22, 36, 29, 0.5); }
+dialog#detail-of-loss-dialog h3 { margin-top: 0; }
+dialog#detail-of-loss-dialog p {
+  white-space: pre-wrap;
+  color: var(--ink);
+  line-height: 1.5;
+}
+
 .nav-icon { vertical-align: -3px; margin-right: 0.3rem; }
 
 .day-nav { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.9rem; }

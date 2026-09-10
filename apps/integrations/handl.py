@@ -70,6 +70,24 @@ class JobDetails:
     # AKL job — NR14 8PL) — the job's actual location, for the
     # locksmith portal's dashboard and one-tap Maps/Waze navigation.
     postcode: str = ""
+    # Policy_HolderDetails.Name + Surname (falling back to
+    # OrganisationName for a trade/business client with no individual
+    # name on file) and PhoneMobile (falling back to PhoneDay, then
+    # PhoneHome) — for the portal's job detail screen.
+    client_name: str = ""
+    client_phone: str = ""
+    # Policy_BrokersDetails.SubBrokerID -> SubBrokers.Name — same join
+    # the business's own "Wiki" reporting query uses for "Subbroker".
+    broker: str = ""
+    # Policy_ClaimDetails_Key.DetailOfLoss (confirmed live against a
+    # real claim, ReportID 500918 — a lorry driver's lost car key) —
+    # the customer's own free-text account of what happened, often
+    # long, shown as a popup on the portal rather than inline (see
+    # templates/locksmith_portal/dashboard.html) so it doesn't clutter
+    # the job card. Table name confirms this is the key-claim-specific
+    # variant — Policy_ClaimDetails_Home/_SVI hold the equivalent field
+    # for other claim types this app never deals with.
+    detail_of_loss: str = ""
 
 
 @dataclass(frozen=True)
@@ -106,7 +124,9 @@ class HandlClient(ABC):
         i.e. Lookup_KeyType, loss_type i.e. Lookup_LossEvent_Details,
         supplied_service i.e. Lookup_LocksmithSuppliedServices, net_cost
         i.e. Policy_Financial.NetCost — what the client was charged,
-        excl. VAT, the business's own "selling price" figure for a job)
+        excl. VAT, the business's own "selling price" figure for a job,
+        client_name/client_phone i.e. Policy_HolderDetails, broker i.e.
+        Policy_BrokersDetails -> SubBrokers)
         for the given Handl ReportID values, keyed by report_id — for
         Area 2 (Job Completion), which resolves an Optimo orderNo of the
         form "<ReportID>_<date>" back to Handl for these details."""
@@ -335,6 +355,18 @@ class MockHandlClient(HandlClient):
         "Non-Destructive Entry", "Key Cutting", "Key Programming",
         "Lock Change", "Boot Entry",
     ]
+    _CLIENT_NAMES = ["Sarah Jones", "Mark Taylor", "Priya Patel", "James Wilson", "Emma Clarke"]
+    _BROKERS = ["Direct Line", "Admiral", "AXA", "LV=", "Aviva"]
+    _LOSS_DETAILS = [
+        "Customer was loading the van when the keys fell from their pocket "
+        "somewhere in the yard. Searched the site with a colleague but "
+        "couldn't find them. No spare key available.",
+        "Locked the car and walked away before realising the keys were "
+        "still on the driver's seat. Doors and windows fully closed, no "
+        "other way in.",
+        "Key snapped in the ignition while starting the engine — the "
+        "broken half is still stuck inside the barrel.",
+    ]
 
     def get_job_details(self, report_ids: list[str]) -> dict[str, JobDetails]:
         result = {}
@@ -357,6 +389,10 @@ class MockHandlClient(HandlClient):
                 net_cost=round(rng.uniform(60, 350), 2),
                 spare_key=rng.choice([True, False]),
                 postcode=rng.choice(self._POSTCODES),
+                client_name=rng.choice(self._CLIENT_NAMES),
+                client_phone=f"07{rng.randint(10**8, 10**9 - 1)}",
+                broker=rng.choice(self._BROKERS),
+                detail_of_loss=rng.choice(self._LOSS_DETAILS),
             )
         return result
 
@@ -736,28 +772,67 @@ class SQLHandlClient(HandlClient):
                 WHERE pf.ReportID IN ({id_placeholders})
                 GROUP BY pf.ReportID
             ),
-            HolderPostcode AS (
+            HolderDetails AS (
                 -- The job's actual location (confirmed live against a
-                -- real AKL job — NR14 8PL), for the portal's dashboard
-                -- and Maps/Waze navigation. Deliberately MAX()'d rather
-                -- than ranked by an ID column (unlike the CTEs above) —
+                -- real AKL job — NR14 8PL) plus who to contact and how —
+                -- for the portal's dashboard/Maps/Waze navigation and
+                -- job detail screen. Deliberately MAX()'d rather than
+                -- ranked by an ID column (unlike the CTEs above) —
                 -- Policy_HolderDetails' own row-uniqueness per ReportID
                 -- isn't confirmed, and grouping avoids any risk of
                 -- fanning VehicleRanked's rows out via the join below if
-                -- it turns out not to be one row per ReportID.
-                SELECT ReportID, MAX(PostCode) AS PostCode
+                -- it turns out not to be one row per ReportID. Phone
+                -- preference is mobile first (most useful for a
+                -- locksmith trying to reach someone out in the field),
+                -- falling back to day then home.
+                SELECT
+                    ReportID,
+                    MAX(PostCode) AS PostCode,
+                    MAX(LTRIM(RTRIM(ISNULL(Name, '') + ' ' + ISNULL(Surname, '')))) AS ClientName,
+                    MAX(OrganisationName) AS OrganisationName,
+                    MAX(ISNULL(NULLIF(PhoneMobile, ''), ISNULL(NULLIF(PhoneDay, ''), PhoneHome))) AS ClientPhone
                 FROM Policy_HolderDetails
+                WHERE ReportID IN ({id_placeholders})
+                GROUP BY ReportID
+            ),
+            Broker AS (
+                -- Same SubBrokerID -> SubBrokers.Name join the
+                -- business's own "Wiki" reporting query uses for
+                -- "Subbroker". A ReportID can have more than one
+                -- Policy_BrokersDetails row, so ranked down to the most
+                -- recently logged one, same pattern as SuppliedServiceRanked.
+                SELECT pbd.ReportID, sb.Name AS BrokerName,
+                    ROW_NUMBER() OVER (PARTITION BY pbd.ReportID ORDER BY pbd.ID DESC) AS rn
+                FROM Policy_BrokersDetails pbd
+                LEFT JOIN SubBrokers sb ON pbd.SubBrokerID = sb.ID
+                WHERE pbd.ReportID IN ({id_placeholders})
+            ),
+            LossDetail AS (
+                -- The customer's own free-text account of what happened
+                -- (confirmed live against a real claim, ReportID
+                -- 500918) — often long, so shown as a popup on the
+                -- portal rather than inline. Policy_ClaimDetails_Key is
+                -- the key-claim-specific variant of this table (there's
+                -- a matching _Home/_SVI for other claim types this app
+                -- never deals with). MAX()'d rather than ranked, same
+                -- caution as HolderDetails — this table's own
+                -- row-uniqueness per ReportID isn't confirmed either.
+                SELECT ReportID, MAX(DetailOfLoss) AS DetailOfLoss
+                FROM Policy_ClaimDetails_Key
                 WHERE ReportID IN ({id_placeholders})
                 GROUP BY ReportID
             )
             SELECT
                 v.ReportID, v.Make, v.Model, v.yearOfManufacture, v.VehicleReg, v.VehicleVIN, v.KeyType,
-                v.SpareKey, lt.LossEvent, ss.SuppliedService, f.NetCost, hp.PostCode
+                v.SpareKey, lt.LossEvent, ss.SuppliedService, f.NetCost, hp.PostCode,
+                hp.ClientName, hp.OrganisationName, hp.ClientPhone, br.BrokerName, ld.DetailOfLoss
             FROM VehicleRanked v
             LEFT JOIN LossType lt ON v.ReportID = lt.ReportID
             LEFT JOIN SuppliedServiceRanked ss ON v.ReportID = ss.ReportID AND ss.rn = 1
             LEFT JOIN Finance f ON v.ReportID = f.ReportID
-            LEFT JOIN HolderPostcode hp ON v.ReportID = hp.ReportID
+            LEFT JOIN HolderDetails hp ON v.ReportID = hp.ReportID
+            LEFT JOIN Broker br ON v.ReportID = br.ReportID AND br.rn = 1
+            LEFT JOIN LossDetail ld ON v.ReportID = ld.ReportID
             WHERE v.rn = 1
         """
         with self._connection() as conn:
@@ -798,6 +873,14 @@ class SQLHandlClient(HandlClient):
                 net_cost=float(row["NetCost"]) if row["NetCost"] is not None else None,
                 spare_key=bool(row["SpareKey"]) if row["SpareKey"] is not None else None,
                 postcode=row["PostCode"] or "",
+                # OrganisationName is the fallback for a trade/business
+                # client with no individual name on file — ClientName
+                # itself is always a non-null string (LTRIM/RTRIM of two
+                # ISNULL'd parts), just possibly blank.
+                client_name=row["ClientName"] or row["OrganisationName"] or "",
+                client_phone=row["ClientPhone"] or "",
+                broker=row["BrokerName"] or "",
+                detail_of_loss=row["DetailOfLoss"] or "",
             )
         return result
 

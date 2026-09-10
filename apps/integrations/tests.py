@@ -365,6 +365,11 @@ class SQLHandlClientTests(TestCase):
                 "SuppliedService": "Key Programming",
                 "NetCost": 145.5,
                 "PostCode": "NR14 8PL",
+                "ClientName": "Sarah Jones",
+                "OrganisationName": None,
+                "ClientPhone": "07700900123",
+                "BrokerName": "Admiral",
+                "DetailOfLoss": "Lost the only key on a dog walk.",
             }
         ]
         fake_conn = _fake_connection(rows)
@@ -380,6 +385,9 @@ class SQLHandlClientTests(TestCase):
         self.assertIn("Lookup_LocksmithSuppliedServices", query)
         self.assertIn("Policy_Financial", query)
         self.assertIn("Policy_HolderDetails", query)
+        self.assertIn("Policy_BrokersDetails", query)
+        self.assertIn("SubBrokers", query)
+        self.assertIn("Policy_ClaimDetails_Key", query)
 
         job = details["496390"]
         self.assertEqual(job.make, "NISSAN")
@@ -392,6 +400,70 @@ class SQLHandlClientTests(TestCase):
         self.assertEqual(job.net_cost, 145.5)
         self.assertIs(job.spare_key, False)
         self.assertEqual(job.postcode, "NR14 8PL")
+        self.assertEqual(job.client_name, "Sarah Jones")
+        self.assertEqual(job.client_phone, "07700900123")
+        self.assertEqual(job.broker, "Admiral")
+        self.assertEqual(job.detail_of_loss, "Lost the only key on a dog walk.")
+
+    def test_get_job_details_null_detail_of_loss_maps_to_empty_string(self):
+        rows = [
+            {
+                "ReportID": "496390",
+                "Make": "NISSAN",
+                "Model": "X-TRAIL",
+                "yearOfManufacture": 2017,
+                "VehicleReg": "AB17 CDE",
+                "VehicleVIN": "SJNFAAJ11U1234567",
+                "KeyType": "Car",
+                "SpareKey": False,
+                "LossEvent": "Lost Keys",
+                "SuppliedService": "Key Programming",
+                "NetCost": 145.5,
+                "PostCode": "NR14 8PL",
+                "ClientName": "Sarah Jones",
+                "OrganisationName": None,
+                "ClientPhone": "07700900123",
+                "BrokerName": "Admiral",
+                "DetailOfLoss": None,
+            }
+        ]
+        fake_conn = _fake_connection(rows)
+        client = SQLHandlClient()
+        with patch.object(client, "_connection", return_value=fake_conn):
+            details = client.get_job_details(["496390"])
+        self.assertEqual(details["496390"].detail_of_loss, "")
+
+    def test_get_job_details_falls_back_to_organisation_name_for_trade_clients(self):
+        rows = [
+            {
+                "ReportID": "496390",
+                "Make": "NISSAN",
+                "Model": "X-TRAIL",
+                "yearOfManufacture": 2017,
+                "VehicleReg": "AB17 CDE",
+                "VehicleVIN": "SJNFAAJ11U1234567",
+                "KeyType": "Car",
+                "SpareKey": False,
+                "LossEvent": "Lost Keys",
+                "SuppliedService": "Key Programming",
+                "NetCost": 145.5,
+                "PostCode": "NR14 8PL",
+                "ClientName": "",
+                "OrganisationName": "Acme Fleet Ltd",
+                "ClientPhone": "",
+                "BrokerName": None,
+                "DetailOfLoss": "Lost the only key on a dog walk.",
+            }
+        ]
+        fake_conn = _fake_connection(rows)
+        client = SQLHandlClient()
+        with patch.object(client, "_connection", return_value=fake_conn):
+            details = client.get_job_details(["496390"])
+
+        job = details["496390"]
+        self.assertEqual(job.client_name, "Acme Fleet Ltd")
+        self.assertEqual(job.client_phone, "")
+        self.assertEqual(job.broker, "")
 
     def test_get_job_details_null_postcode_maps_to_empty_string(self):
         rows = [
@@ -408,6 +480,11 @@ class SQLHandlClientTests(TestCase):
                 "SuppliedService": "Key Programming",
                 "NetCost": 100.0,
                 "PostCode": None,
+                "ClientName": "Sarah Jones",
+                "OrganisationName": None,
+                "ClientPhone": "07700900123",
+                "BrokerName": "Admiral",
+                "DetailOfLoss": "Lost the only key on a dog walk.",
             }
         ]
         fake_conn = _fake_connection(rows)
@@ -439,6 +516,11 @@ class SQLHandlClientTests(TestCase):
                 "SuppliedService": "",
                 "NetCost": None,
                 "PostCode": "NR14 8PL",
+                "ClientName": "Sarah Jones",
+                "OrganisationName": None,
+                "ClientPhone": "07700900123",
+                "BrokerName": "Admiral",
+                "DetailOfLoss": "Lost the only key on a dog walk.",
             }
         ]
         fake_conn = _fake_connection(rows)
@@ -467,6 +549,11 @@ class SQLHandlClientTests(TestCase):
                 "SuppliedService": "Key Programming",
                 "NetCost": None,
                 "PostCode": "NR14 8PL",
+                "ClientName": "Sarah Jones",
+                "OrganisationName": None,
+                "ClientPhone": "07700900123",
+                "BrokerName": "Admiral",
+                "DetailOfLoss": "Lost the only key on a dog walk.",
             }
         ]
         fake_conn = _fake_connection(rows)
@@ -491,6 +578,11 @@ class SQLHandlClientTests(TestCase):
                 "SuppliedService": "Key Programming",
                 "NetCost": 100.0,
                 "PostCode": "NR14 8PL",
+                "ClientName": "Sarah Jones",
+                "OrganisationName": None,
+                "ClientPhone": "07700900123",
+                "BrokerName": "Admiral",
+                "DetailOfLoss": "Lost the only key on a dog walk.",
             }
         ]
         fake_conn = _fake_connection(rows)
