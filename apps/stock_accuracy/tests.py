@@ -168,6 +168,18 @@ class ViewsSmokeTests(TestCase):
         )
         self.assertEqual(response.status_code, 200)
 
+    def test_dashboard_hides_locksmith_portal_link_for_plain_office_user(self):
+        response = self.client.get(reverse("stock_accuracy:dashboard"))
+        self.assertNotContains(response, "Locksmith portal")
+
+    def test_dashboard_shows_locksmith_portal_link_for_dual_access_locksmith(self):
+        self.locksmith.office_access = True
+        self.locksmith.save(update_fields=["office_access"])
+        self.locksmith.user = self.user
+        self.locksmith.save(update_fields=["user"])
+        response = self.client.get(reverse("stock_accuracy:dashboard"))
+        self.assertContains(response, "Locksmith portal")
+
     def test_entry_detail_saves_counts_and_completes_check(self):
         url = reverse("stock_accuracy:entry_detail", args=[self.weekly_check.pk])
         self.assertEqual(self.client.get(url).status_code, 200)

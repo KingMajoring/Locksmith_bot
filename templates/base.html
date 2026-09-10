@@ -41,6 +41,9 @@
       </nav>
       <div class="user-box">
         {{ user.email }}<br>
+        {% if user.locksmith_profile %}
+          <a href="{% url 'locksmith_portal:dashboard' %}">Locksmith portal →</a><br>
+        {% endif %}
         <a href="{% url 'account_logout' %}">Sign out</a>
       </div>
     </div>

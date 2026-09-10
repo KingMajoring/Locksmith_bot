@@ -51,6 +51,16 @@ class DashboardTests(TestCase):
         response = self.client.get(reverse("locksmith_portal:dashboard"))
         self.assertRedirects(response, reverse("stock_accuracy:dashboard"))
 
+    def test_dashboard_hides_office_view_link_without_office_access(self):
+        response = self.client.get(reverse("locksmith_portal:dashboard"))
+        self.assertNotContains(response, "Office view")
+
+    def test_dashboard_shows_office_view_link_with_office_access(self):
+        self.locksmith.office_access = True
+        self.locksmith.save(update_fields=["office_access"])
+        response = self.client.get(reverse("locksmith_portal:dashboard"))
+        self.assertContains(response, "Office view")
+
     def test_dashboard_with_no_stock_check_shows_empty_state(self):
         response = self.client.get(reverse("locksmith_portal:dashboard"))
         self.assertIsNone(response.context["latest_check"])
