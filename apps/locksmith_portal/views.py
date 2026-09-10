@@ -52,6 +52,7 @@ from apps.locksmiths.models import Locksmith
 from apps.stock_accuracy.models import WeeklyStockCheck
 
 from .models import (
+    FaultyPartReport,
     JobTimingSummary,
     JobVisit,
     JobVisitPhoto,
@@ -1338,6 +1339,18 @@ def job_detail(request, order_no):
     previous_disposals = PortalDisposal.objects.filter(
         locksmith=locksmith, order_no=order_no
     ).order_by("-created_at")
+    previous_faulty_reports = FaultyPartReport.objects.filter(
+        locksmith=locksmith, order_no=order_no
+    ).order_by("-created_at")
+
+    # Vehicle details for any part reported faulty this submission (see
+    # FaultyPartReport) — best-effort, same as every other Handl
+    # job-details lookup on this page.
+    try:
+        job_details = handl.get_job_details([report_id]).get(report_id)
+    except Exception:
+        logger.exception("Failed to fetch Handl job details for report %s", report_id)
+        job_details = None
 
     if request.method == "POST":
         late_add_reason = request.POST.get("late_add_reason", "").strip()
@@ -1383,15 +1396,18 @@ def job_detail(request, order_no):
             )
 
         # Aggregate by part first, in case the same part was searched
-        # for and added across more than one row. Client-supplied rows
-        # aren't merged into this — they don't touch van stock, so
-        # there's nothing to aggregate against, and each one might
-        # resolve to a different part_name for the same free-typed code.
+        # for and added across more than one row. Client-supplied and
+        # faulty rows aren't merged into this — client-supplied parts
+        # don't touch van stock at all, and a faulty part is written
+        # through its own path (see below) rather than record_disposal,
+        # so there's nothing to aggregate against either way.
         requested: dict[str, int] = {}
         client_supplied_rows: list[tuple[str, str, int]] = []
-        for raw_code, raw_qty, is_client_supplied in itertools.zip_longest(
+        faulty_rows: list[tuple[str, str, int]] = []
+        for raw_code, raw_qty, is_client_supplied, is_faulty in itertools.zip_longest(
             request.POST.getlist("part_code"), request.POST.getlist("quantity"),
-            request.POST.getlist("client_supplied"), fillvalue="0",
+            request.POST.getlist("client_supplied"), request.POST.getlist("faulty"),
+            fillvalue="0",
         ):
             raw_code = raw_code.strip()
             raw_qty = raw_qty.strip()
@@ -1405,6 +1421,21 @@ def job_detail(request, order_no):
                 messages.error(request, f"'{raw_qty}' isn't a valid quantity for {raw_code or 'that row'}.")
                 continue
             if qty <= 0:
+                continue
+
+            # Faulty takes priority over client-supplied if somehow both
+            # are checked on the same row (the UI keeps them mutually
+            # exclusive) — a faulty part must have come from this
+            # locksmith's own van stock to be removed from it, so it's
+            # always resolved against stock only, never the full
+            # catalogue the way client-supplied rows are.
+            if is_faulty == "1":
+                line = _resolve(raw_code) if raw_code else None
+                if line is None:
+                    if raw_code:
+                        messages.error(request, f"Couldn't find '{raw_code}' in your stock.")
+                    continue
+                faulty_rows.append((line.part_code, line.part_name, qty))
                 continue
 
             if is_client_supplied == "1":
@@ -1539,6 +1570,74 @@ def job_detail(request, order_no):
             disposal.save(update_fields=["handl_synced"])
             disposed_any = True
 
+        for part_code, part_name, qty in faulty_rows:
+            line = by_code[part_code.upper()]
+            if qty > line.qty:
+                messages.error(
+                    request,
+                    f"You only have {line.qty} of {line.part_code} in stock — "
+                    f"can't report {qty} faulty.",
+                )
+                continue
+
+            report = FaultyPartReport.objects.create(
+                locksmith=locksmith,
+                created_by=request.user,
+                order_no=order_no,
+                report_id=report_id,
+                part_code=part_code,
+                part_name=part_name,
+                quantity=qty,
+                vin=job_details.vin if job_details else "",
+                reg=job_details.reg if job_details else "",
+                make=job_details.make if job_details else "",
+                model_name=job_details.model if job_details else "",
+                year=job_details.year if job_details else "",
+                spare_key=job_details.spare_key if job_details else None,
+            )
+
+            actioned_by = locksmith.soter_user_id or settings.HANDL_PORTAL_CREATED_BY_USER_ID
+            note = (
+                f"'{locksmith.van_soter_display_name}' reported {qty} x {escape(part_name)} "
+                f"({escape(part_code)}) as faulty/didn't work on this job — removed from van stock."
+            )
+            if is_late_add:
+                note += f" Added after the job was marked done. Reason: {escape(late_add_reason)}"
+
+            try:
+                # Deliberately NOT record_disposal: that writes a real
+                # Inventory_Disposals row, which apps.job_completion's
+                # parts-lookup reads to suggest the "most likely part"
+                # for a job — a faulty part isn't a successful fit, and
+                # would skew that suggestion. This only corrects the
+                # locksmith's own recorded van stock (same absolute-set
+                # approach as edit_disposal) and leaves a note, with no
+                # disposal row at all.
+                expected = handl.get_expected_stock(soter_ids, [part_code])
+                current_qty = expected[part_code].expected_qty if part_code in expected else 0
+                corrected = current_qty - qty
+                if corrected < 0:
+                    raise ValueError(
+                        f"Only {current_qty} of {part_code} available in Handl — can't remove {qty}."
+                    )
+                handl.set_locksmith_stock_quantity(
+                    soter_ids, part_code, corrected,
+                    actioned_by_user_id=actioned_by, locksmith_display_name=locksmith.van_soter_display_name,
+                )
+                handl.add_report_note(report_id, note, actioned_by_user_id=actioned_by)
+            except Exception as exc:
+                report.handl_error = str(exc)
+                report.save(update_fields=["handl_error"])
+                messages.warning(
+                    request,
+                    f"Recorded {qty} x {part_code} as faulty, but something went wrong "
+                    "updating Soter — the office will follow up.",
+                )
+            else:
+                report.handl_synced = True
+                report.save(update_fields=["handl_synced"])
+                disposed_any = True
+
         if is_late_add and created_disposals:
             parts_summary = ", ".join(
                 f"{d.quantity} x {d.part_name} ({d.part_code})" for d in created_disposals
@@ -1590,6 +1689,7 @@ def job_detail(request, order_no):
             ],
             "all_parts_options": [{"code": code, "name": name} for code, name in all_parts],
             "previous_disposals": previous_disposals,
+            "previous_faulty_reports": previous_faulty_reports,
             "locksmith": locksmith,
             "selected_date": selected_date,
             "is_today": selected_date == timezone.localdate(),

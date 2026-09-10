@@ -104,6 +104,55 @@ class PortalDisposalEdit(models.Model):
         return f"{self.get_kind_display()} — {self.disposal} ({self.performed_at:%Y-%m-%d %H:%M})"
 
 
+class FaultyPartReport(models.Model):
+    """A part a locksmith fitted that turned out to be faulty/didn't
+    work on the job — physically consumed from van stock the same as a
+    normal disposal, but deliberately kept separate from PortalDisposal/
+    Handl's Inventory_Disposals: apps.job_completion's parts-lookup
+    "most likely part" suggestion is built from real successful
+    disposals, and a faulty part isn't one — mixing it in would skew
+    that suggestion toward parts that don't actually work. See
+    apps.locksmith_portal.views.job_detail for where this is written
+    (get_expected_stock + set_locksmith_stock_quantity, never
+    record_disposal).
+
+    Vehicle details are captured at the time (rather than joined out to
+    Handl later) so a part-reliability/success-rate report can be built
+    from this table alone, without a live Handl query.
+    """
+
+    locksmith = models.ForeignKey(
+        Locksmith, on_delete=models.CASCADE, related_name="faulty_part_reports"
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL
+    )
+    order_no = models.CharField(max_length=100)
+    report_id = models.CharField(max_length=100)
+    part_code = models.CharField(max_length=64)
+    part_name = models.CharField(max_length=200)
+    quantity = models.PositiveIntegerField()
+
+    vin = models.CharField(max_length=50, blank=True)
+    reg = models.CharField(max_length=20, blank=True)
+    make = models.CharField(max_length=100, blank=True)
+    model_name = models.CharField(max_length=100, blank=True)
+    year = models.CharField(max_length=10, blank=True)
+    # Null when Handl has no key-claim row to read it from at all —
+    # distinct from a genuine False (see JobDetails.spare_key).
+    spare_key = models.BooleanField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    handl_synced = models.BooleanField(default=False)
+    handl_error = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.locksmith} reported {self.part_code} faulty on {self.order_no}"
+
+
 class JobVisit(models.Model):
     """One locksmith's progress through a job: on route -> arrived (+
     before photos) -> parts disposed -> completed (+ after photos,

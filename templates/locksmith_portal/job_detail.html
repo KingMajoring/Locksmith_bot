@@ -31,6 +31,20 @@
 </div>
 {% endif %}
 
+{% if previous_faulty_reports %}
+<div class="card">
+  <h2>Reported faulty</h2>
+  <ul class="disposal-list">
+    {% for f in previous_faulty_reports %}
+      <li>
+        {{ f.quantity }} x {{ f.part_name }} <span class="sub">({{ f.part_code }})</span>
+        <span class="sub">— {{ f.created_at|date:"D j M, H:i" }}{% if f.handl_error %}, not yet synced to Soter{% endif %}</span>
+      </li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
 {% if stock_lines or all_parts %}
 {{ stock_options|json_script:"stock-options-data" }}
 {{ all_parts_options|json_script:"all-parts-options-data" }}
@@ -50,6 +64,11 @@
         Client supplied
       </label>
       <input type="hidden" name="client_supplied" value="0">
+      <label class="client-supplied-label">
+        <input type="checkbox" class="faulty-checkbox">
+        Faulty / didn't work
+      </label>
+      <input type="hidden" name="faulty" value="0">
     </div>
   </div>
   <p><button type="button" class="btn-secondary" id="add-row">+ Add another part</button></p>
@@ -74,6 +93,11 @@
       Client supplied
     </label>
     <input type="hidden" name="client_supplied" value="0">
+    <label class="client-supplied-label">
+      <input type="checkbox" class="faulty-checkbox">
+      Faulty / didn't work
+    </label>
+    <input type="hidden" name="faulty" value="0">
   </div>
 </template>
 
@@ -118,6 +142,10 @@
 
   function isClientSupplied(row) {
     return row.querySelector('input[name=client_supplied]').value === '1';
+  }
+
+  function isFaulty(row) {
+    return row.querySelector('input[name=faulty]').value === '1';
   }
 
   function closeSuggestions(row) {
@@ -174,14 +202,29 @@
   }, true);
 
   document.getElementById('dispose-rows').addEventListener('change', function (e) {
-    if (!e.target.classList.contains('client-supplied-checkbox')) return;
     var row = e.target.closest('.dispose-row');
-    var hidden = row.querySelector('input[name=client_supplied]');
-    hidden.value = e.target.checked ? '1' : '0';
-    // Client-supplied parts aren't limited to this locksmith's own van
-    // stock — re-run the search against the full parts catalogue.
-    var codeInput = row.querySelector('input[name=part_code]');
-    if (document.activeElement === codeInput) showSuggestions(row, codeInput);
+    if (!row) return;
+
+    if (e.target.classList.contains('client-supplied-checkbox')) {
+      row.querySelector('input[name=client_supplied]').value = e.target.checked ? '1' : '0';
+      if (e.target.checked) {
+        // Mutually exclusive with faulty — a part can't be both
+        // supplied by the client and removed from this locksmith's own
+        // van stock as faulty.
+        row.querySelector('.faulty-checkbox').checked = false;
+        row.querySelector('input[name=faulty]').value = '0';
+      }
+      // Client-supplied parts aren't limited to this locksmith's own van
+      // stock — re-run the search against the full parts catalogue.
+      var codeInput = row.querySelector('input[name=part_code]');
+      if (document.activeElement === codeInput) showSuggestions(row, codeInput);
+    } else if (e.target.classList.contains('faulty-checkbox')) {
+      row.querySelector('input[name=faulty]').value = e.target.checked ? '1' : '0';
+      if (e.target.checked) {
+        row.querySelector('.client-supplied-checkbox').checked = false;
+        row.querySelector('input[name=client_supplied]').value = '0';
+      }
+    }
   });
 
   (function () {
@@ -212,13 +255,16 @@
       var rows = [];
       var hasStock = false;
       var hasClientSupplied = false;
+      var hasFaulty = false;
       form.querySelectorAll('.dispose-row').forEach(function (row) {
         var code = row.querySelector('input[name=part_code]').value.trim();
         var qty = row.querySelector('input[name=quantity]').value.trim();
         var clientSupplied = row.querySelector('input[name=client_supplied]').value === '1';
+        var faulty = row.querySelector('input[name=faulty]').value === '1';
         if (code && qty) {
-          rows.push(describeRow(code, clientSupplied) + ' — qty ' + qty + (clientSupplied ? ' (client supplied)' : ''));
-          if (clientSupplied) { hasClientSupplied = true; } else { hasStock = true; }
+          var suffix = faulty ? ' (faulty/didn\'t work)' : (clientSupplied ? ' (client supplied)' : '');
+          rows.push(describeRow(code, clientSupplied) + ' — qty ' + qty + suffix);
+          if (faulty) { hasFaulty = true; } else if (clientSupplied) { hasClientSupplied = true; } else { hasStock = true; }
         }
       });
       if (rows.length === 0) return; // nothing entered — let the server show its own message
@@ -230,7 +276,9 @@
         li.textContent = text;
         list.appendChild(li);
       });
-      if (hasClientSupplied && !hasStock) {
+      if (hasFaulty) {
+        sub.textContent = "Faulty parts are removed from your van stock but kept separate from normal disposals — this updates Soter and your van stock. Client-supplied/normal parts above are handled as usual.";
+      } else if (hasClientSupplied && !hasStock) {
         sub.textContent = "Client-supplied parts are logged in Soter for the office's records, but won't be taken off your van stock.";
       } else if (hasClientSupplied) {
         sub.textContent = "This updates your van stock and Soter for the stock items — client-supplied parts are also logged in Soter but won't affect your van stock.";

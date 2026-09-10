@@ -1,6 +1,7 @@
 from django.contrib import admin
 
 from .models import (
+    FaultyPartReport,
     JobTimingSummary,
     JobVisit,
     JobVisitPhoto,
@@ -46,6 +47,30 @@ class PortalDisposalEditAdmin(admin.ModelAdmin):
         "disposal__order_no", "disposal__report_id", "disposal__locksmith__name",
         "old_part_code", "new_part_code", "reason",
     )
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(FaultyPartReport)
+class FaultyPartReportAdmin(admin.ModelAdmin):
+    """Read-only — written by job_detail's "faulty part" path only.
+    Kept separate from PortalDisposal deliberately (see the model's own
+    docstring) — this is where office can start building a part
+    reliability/success-rate view from."""
+
+    list_display = (
+        "created_at", "locksmith", "order_no", "part_code", "quantity",
+        "make", "model_name", "year", "spare_key", "handl_synced",
+    )
+    list_filter = ("handl_synced", "make", "locksmith")
+    search_fields = ("order_no", "report_id", "part_code", "vin", "reg", "locksmith__name")
 
     def has_add_permission(self, request):
         return False
