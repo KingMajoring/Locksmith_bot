@@ -136,3 +136,29 @@ class RestrictLocksmithsToPortalMiddlewareTests(TestCase):
         request.user = AnonymousUser()
         response = self._middleware()(request)
         self.assertEqual(response.status_code, 200)
+
+    def test_locksmith_with_office_access_not_redirected(self):
+        locksmith = Locksmith.objects.create(
+            name="Dean S", email="dean@wgtk.co.uk", active=True, office_access=True
+        )
+        user = User.objects.create(email="dean@wgtk.co.uk", username="dean@wgtk.co.uk")
+        locksmith.user = user
+        locksmith.save(update_fields=["user"])
+
+        request = RequestFactory().get("/stock-accuracy/")
+        request.user = user
+        response = self._middleware()(request)
+        self.assertEqual(response.status_code, 200)
+
+    def test_locksmith_with_office_access_still_allowed_on_portal_paths(self):
+        locksmith = Locksmith.objects.create(
+            name="Dean S", email="dean@wgtk.co.uk", active=True, office_access=True
+        )
+        user = User.objects.create(email="dean@wgtk.co.uk", username="dean@wgtk.co.uk")
+        locksmith.user = user
+        locksmith.save(update_fields=["user"])
+
+        request = RequestFactory().get("/locksmith/")
+        request.user = user
+        response = self._middleware()(request)
+        self.assertEqual(response.status_code, 200)

@@ -28,6 +28,14 @@ class Locksmith(models.Model):
         "with a Microsoft account matching their email — grants access to the "
         "self-service portal at /locksmith/ instead of office/admin access.",
     )
+    office_access = models.BooleanField(
+        default=False,
+        help_text="Also gives this locksmith the office/admin side of the "
+        "tool (Job Completion, Panel Spend, etc.) on top of their normal "
+        "self-service portal access at /locksmith/ — for the rare "
+        "locksmith who also does office work. See "
+        "apps.accounts.middleware.RestrictLocksmithsToPortalMiddleware.",
+    )
     sees_all_jobs_for_testing = models.BooleanField(
         default=False,
         help_text="Portal shows every job scheduled today instead of only "

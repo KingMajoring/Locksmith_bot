@@ -11,6 +11,10 @@ class RestrictLocksmithsToPortalMiddleware:
     pages (margins, other locksmiths' performance, etc.) just by typing
     the URL. Enforced here at the request level rather than annotating
     every view.
+
+    Locksmith.office_access is the one escape hatch — admin-configured
+    per locksmith, for the rare person who does both field work and
+    office work, so they aren't forced to keep two separate logins.
     """
 
     def __init__(self, get_response):
@@ -22,6 +26,7 @@ class RestrictLocksmithsToPortalMiddleware:
             user is not None
             and user.is_authenticated
             and hasattr(user, "locksmith_profile")
+            and not user.locksmith_profile.office_access
             and not request.path.startswith(_ALLOWED_PREFIXES)
         ):
             return redirect("/locksmith/")
