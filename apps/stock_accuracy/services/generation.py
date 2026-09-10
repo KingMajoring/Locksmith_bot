@@ -18,7 +18,7 @@ from django.utils import timezone
 from apps.integrations.handl import get_handl_client
 from apps.locksmiths.models import Locksmith
 
-from ..models import StockCheckItem, WeeklyStockCheck
+from ..models import StockCheckItem, VirtualStockItem, WeeklyStockCheck
 
 
 def _recently_checked_part_codes(locksmith: Locksmith, weeks: int) -> set[str]:
@@ -35,6 +35,17 @@ def _choose_lines(locksmith: Locksmith) -> list:
     handl = get_handl_client()
     since = date.today() - timedelta(days=settings.STOCK_CHECK_USAGE_WINDOW_DAYS)
     usage = handl.get_stock_usage(locksmith.soter_id_list, since)
+
+    # Some Handl SKUs (e.g. a 3D job token) get "disposed" against jobs
+    # for tracking/billing but aren't physical van stock a locksmith
+    # actually holds — asking them to count it makes no sense. Admin
+    # manages the excluded list (see VirtualStockItem), matched
+    # case-insensitively since SKU casing isn't guaranteed consistent.
+    virtual_codes = {
+        code.upper() for code in VirtualStockItem.objects.values_list("part_code", flat=True)
+    }
+    usage = [u for u in usage if u.part_code.upper() not in virtual_codes]
+
     usage_sorted = sorted(usage, key=lambda u: u.qty_used, reverse=True)
     pool = usage_sorted[: settings.STOCK_CHECK_POOL_SIZE]
 

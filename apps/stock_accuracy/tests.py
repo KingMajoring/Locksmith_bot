@@ -1,12 +1,14 @@
 from datetime import date, timedelta
+from unittest.mock import MagicMock, patch
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
 from django.urls import reverse
 
+from apps.integrations.handl import ExpectedStock, StockUsage
 from apps.locksmiths.models import Locksmith
 
-from .models import StockCheckItem, VarianceThreshold, WeeklyStockCheck
+from .models import StockCheckItem, VarianceThreshold, VirtualStockItem, WeeklyStockCheck
 from .services.generation import generate_weekly_check
 from .services.reporting import locksmith_summary
 
@@ -59,6 +61,43 @@ class GenerationTests(TestCase):
         # catalogue, some overlap is unavoidable once the pool is
         # exhausted — but the two draws should still differ.
         self.assertNotEqual(week1_codes, week2_codes)
+
+    def test_virtual_stock_items_are_never_selected(self):
+        VirtualStockItem.objects.create(part_code="3D-TOKEN", part_name="3D job token")
+
+        mock_handl = MagicMock()
+        mock_handl.get_stock_usage.return_value = [
+            StockUsage(part_code="3D-TOKEN", part_name="3D job token", qty_used=99),
+            StockUsage(part_code="TK-100", part_name="Transponder key blank", qty_used=5),
+        ]
+        mock_handl.get_expected_stock.return_value = {
+            "TK-100": ExpectedStock(part_code="TK-100", expected_qty=5, unit_cost=10.0),
+        }
+
+        with patch("apps.stock_accuracy.services.generation.get_handl_client", return_value=mock_handl):
+            weekly_check = generate_weekly_check(self.locksmith, date(2026, 9, 7))
+
+        codes = set(weekly_check.items.values_list("part_code", flat=True))
+        self.assertNotIn("3D-TOKEN", codes)
+        self.assertIn("TK-100", codes)
+
+    def test_virtual_stock_item_exclusion_is_case_insensitive(self):
+        VirtualStockItem.objects.create(part_code="3d-token")
+
+        mock_handl = MagicMock()
+        mock_handl.get_stock_usage.return_value = [
+            StockUsage(part_code="3D-TOKEN", part_name="3D job token", qty_used=99),
+            StockUsage(part_code="TK-100", part_name="Transponder key blank", qty_used=5),
+        ]
+        mock_handl.get_expected_stock.return_value = {
+            "TK-100": ExpectedStock(part_code="TK-100", expected_qty=5, unit_cost=10.0),
+        }
+
+        with patch("apps.stock_accuracy.services.generation.get_handl_client", return_value=mock_handl):
+            weekly_check = generate_weekly_check(self.locksmith, date(2026, 9, 7))
+
+        codes = set(weekly_check.items.values_list("part_code", flat=True))
+        self.assertNotIn("3D-TOKEN", codes)
 
 
 class VarianceFlaggingTests(TestCase):

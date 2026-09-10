@@ -69,6 +69,32 @@ class VarianceThreshold(models.Model):
         return cls.objects.create()
 
 
+class VirtualStockItem(models.Model):
+    """A Handl Inventory_Parts SKU that should never be drawn for a
+    weekly stock check line — it gets "disposed" against jobs for
+    tracking/billing purposes (e.g. a 3D job token) but isn't physical
+    van stock a locksmith actually holds and could count. Admin-managed
+    so office can add more of these without a code change; matched
+    case-insensitively against StockUsage.part_code from
+    HandlClient.get_stock_usage (see services.generation._choose_lines).
+    """
+
+    part_code = models.CharField(max_length=64, unique=True)
+    part_name = models.CharField(
+        max_length=200, blank=True, help_text="For reference only — not matched on."
+    )
+    note = models.CharField(max_length=300, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["part_code"]
+        verbose_name = "Virtual stock item (excluded from stock checks)"
+        verbose_name_plural = "Virtual stock items (excluded from stock checks)"
+
+    def __str__(self):
+        return self.part_code
+
+
 class WeeklyStockCheck(models.Model):
     """One locksmith's stock check for one week: the 10 lines drawn, and
     (eventually) reconciled against the counts they enter in the portal."""

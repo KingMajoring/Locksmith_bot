@@ -4,6 +4,7 @@ from .models import (
     StockCheckItem,
     StockCheckSchedule,
     VarianceThreshold,
+    VirtualStockItem,
     WeeklyStockCheck,
 )
 
@@ -25,6 +26,12 @@ class VarianceThresholdAdmin(admin.ModelAdmin):
         "repeat_offender_window_weeks",
     )
     list_filter = ("active",)
+
+
+@admin.register(VirtualStockItem)
+class VirtualStockItemAdmin(admin.ModelAdmin):
+    list_display = ("part_code", "part_name", "note", "created_at")
+    search_fields = ("part_code", "part_name")
 
 
 class StockCheckItemInline(admin.TabularInline):
