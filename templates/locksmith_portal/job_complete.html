@@ -10,7 +10,7 @@
   {% for slot in photo_slots %}
   <div class="field-group">
     <label>{{ slot.label }}{% if not slot.required %} <span class="sub">(if applicable)</span>{% endif %}</label>
-    <input type="file" name="photo_{{ slot.kind }}" accept="image/*" capture="environment" multiple {% if slot.required %}required{% endif %}>
+    <input type="file" name="photo_{{ slot.kind }}" accept="image/*" multiple {% if slot.required %}required{% endif %}>
   </div>
   {% endfor %}
 
