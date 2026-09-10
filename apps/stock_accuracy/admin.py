@@ -44,13 +44,23 @@ class PartUnitConversionAdmin(admin.ModelAdmin):
 class StockCheckItemInline(admin.TabularInline):
     model = StockCheckItem
     extra = 0
-    readonly_fields = ("part_code", "part_name", "expected_qty", "unit_cost")
-    fields = ("part_code", "part_name", "expected_qty", "unit_cost", "actual_qty", "entered_by")
+    readonly_fields = (
+        "part_code", "part_name", "expected_qty", "unit_cost",
+        "handl_synced", "handl_error",
+    )
+    fields = (
+        "part_code", "part_name", "expected_qty", "unit_cost", "actual_qty", "entered_by",
+        "handl_synced", "handl_error",
+    )
 
 
 @admin.register(WeeklyStockCheck)
 class WeeklyStockCheckAdmin(admin.ModelAdmin):
-    list_display = ("locksmith", "week_starting", "status", "generated_at", "completed_at")
+    list_display = (
+        "locksmith", "week_starting", "status", "generated_at", "completed_at",
+        "confirmed_at", "confirmed_by",
+    )
     list_filter = ("status", "week_starting")
     search_fields = ("locksmith__name",)
+    readonly_fields = ("confirmed_at", "confirmed_by")
     inlines = [StockCheckItemInline]

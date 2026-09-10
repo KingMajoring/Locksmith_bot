@@ -148,6 +148,17 @@ class WeeklyStockCheck(models.Model):
     generated_at = models.DateTimeField(auto_now_add=True)
     completed_at = models.DateTimeField(null=True, blank=True)
 
+    # Set once office confirms the (possibly office-corrected) counts
+    # are right and pushes them to Handl's own Inventory_Locksmith_Stock
+    # — see views.confirm_check. Distinct from completed_at/status,
+    # which only track whether every line has a count entered, not
+    # whether that count has actually been pushed to Handl.
+    confirmed_at = models.DateTimeField(null=True, blank=True)
+    confirmed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="+",
+    )
+
     class Meta:
         unique_together = ("locksmith", "week_starting")
         ordering = ["-week_starting"]
@@ -181,6 +192,13 @@ class StockCheckItem(models.Model):
         settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL
     )
     entered_at = models.DateTimeField(null=True, blank=True)
+
+    # Set by views.confirm_check when actual_qty is pushed to Handl's
+    # own Inventory_Locksmith_Stock — same handl_synced/handl_error
+    # pattern as apps.locksmith_portal.models.PortalDisposal, so office
+    # has a record of which lines failed to push and why.
+    handl_synced = models.BooleanField(default=False)
+    handl_error = models.TextField(blank=True)
 
     class Meta:
         ordering = ["part_code"]

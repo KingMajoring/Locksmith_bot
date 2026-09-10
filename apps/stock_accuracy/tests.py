@@ -282,3 +282,58 @@ class ViewsSmokeTests(TestCase):
         self.client.logout()
         response = self.client.get(reverse("stock_accuracy:dashboard"))
         self.assertEqual(response.status_code, 302)
+
+    def test_confirm_check_requires_every_line_entered(self):
+        url = reverse("stock_accuracy:confirm_check", args=[self.weekly_check.pk])
+        response = self.client.post(url)
+
+        self.assertRedirects(
+            response, reverse("stock_accuracy:entry_detail", args=[self.weekly_check.pk])
+        )
+        self.weekly_check.refresh_from_db()
+        self.assertIsNone(self.weekly_check.confirmed_at)
+
+    def test_confirm_check_pushes_counts_and_marks_confirmed(self):
+        entry_url = reverse("stock_accuracy:entry_detail", args=[self.weekly_check.pk])
+        items = list(self.weekly_check.items.all())
+        self.client.post(entry_url, {f"qty_{item.id}": item.expected_qty for item in items})
+
+        mock_handl = MagicMock()
+        with patch("apps.stock_accuracy.views.get_handl_client", return_value=mock_handl):
+            response = self.client.post(
+                reverse("stock_accuracy:confirm_check", args=[self.weekly_check.pk])
+            )
+
+        self.assertRedirects(response, entry_url)
+        self.assertEqual(mock_handl.set_locksmith_stock_quantity.call_count, len(items))
+
+        self.weekly_check.refresh_from_db()
+        self.assertIsNotNone(self.weekly_check.confirmed_at)
+        self.assertEqual(self.weekly_check.confirmed_by, self.user)
+        for item in self.weekly_check.items.all():
+            self.assertTrue(item.handl_synced)
+            self.assertEqual(item.handl_error, "")
+
+    def test_confirm_check_records_per_line_handl_errors_without_blocking_others(self):
+        entry_url = reverse("stock_accuracy:entry_detail", args=[self.weekly_check.pk])
+        items = list(self.weekly_check.items.all())
+        self.client.post(entry_url, {f"qty_{item.id}": item.expected_qty for item in items})
+
+        mock_handl = MagicMock()
+        mock_handl.set_locksmith_stock_quantity.side_effect = [
+            ValueError("No Inventory_Locksmith_Stock row found") if i == 0 else None
+            for i in range(len(items))
+        ]
+        with patch("apps.stock_accuracy.views.get_handl_client", return_value=mock_handl):
+            self.client.post(reverse("stock_accuracy:confirm_check", args=[self.weekly_check.pk]))
+
+        self.assertEqual(mock_handl.set_locksmith_stock_quantity.call_count, len(items))
+        self.weekly_check.refresh_from_db()
+        self.assertIsNotNone(self.weekly_check.confirmed_at)
+
+        synced_items = list(self.weekly_check.items.all())
+        failed = [item for item in synced_items if not item.handl_synced]
+        succeeded = [item for item in synced_items if item.handl_synced]
+        self.assertEqual(len(failed), 1)
+        self.assertIn("No Inventory_Locksmith_Stock row found", failed[0].handl_error)
+        self.assertEqual(len(succeeded), len(items) - 1)

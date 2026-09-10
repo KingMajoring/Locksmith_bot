@@ -968,6 +968,73 @@ class SQLHandlClientTests(TestCase):
         self.assertEqual(params["actioned_by"], 517)
         fake_conn.commit.assert_called_once()
 
+    def _set_stock_quantity(self, client, quantity, part_code="TK-100"):
+        client.set_locksmith_stock_quantity(
+            ["885", "887"],
+            part_code,
+            quantity,
+            actioned_by_user_id=517,
+            locksmith_display_name="WGTK - Blain H",
+        )
+
+    def test_set_locksmith_stock_quantity_updates_single_row(self):
+        fake_conn = MagicMock()
+        fake_conn.__enter__.return_value = fake_conn
+        fake_conn.__exit__.return_value = False
+        cursor = fake_conn.cursor.return_value
+        cursor.fetchall.return_value = [{"Id": "row-1", "Quantity": 3}]
+
+        client = SQLHandlClient()
+        with patch.object(client, "_write_connection", return_value=fake_conn):
+            self._set_stock_quantity(client, 8)
+
+        select_query, select_params = cursor.execute.call_args_list[0][0]
+        self.assertIn("Inventory_Locksmith_Stock", select_query)
+        self.assertIn("ORDER BY ils.Quantity DESC", select_query)
+        self.assertEqual(select_params["lid0"], 885)
+        self.assertEqual(select_params["lid1"], 887)
+        self.assertEqual(select_params["sku"], "TK-100")
+
+        update_query, update_params = cursor.execute.call_args_list[1][0]
+        self.assertIn("UPDATE Inventory_Locksmith_Stock", update_query)
+        self.assertEqual(update_params, {"qty": 8, "id": "row-1"})
+
+        # Only one UPDATE — nothing else to zero out.
+        update_calls = [c for c in cursor.execute.call_args_list if "UPDATE" in c[0][0]]
+        self.assertEqual(len(update_calls), 1)
+        fake_conn.commit.assert_called_once()
+
+    def test_set_locksmith_stock_quantity_zeros_other_rows(self):
+        fake_conn = MagicMock()
+        fake_conn.__enter__.return_value = fake_conn
+        fake_conn.__exit__.return_value = False
+        cursor = fake_conn.cursor.return_value
+        cursor.fetchall.return_value = [
+            {"Id": "row-big", "Quantity": 5},
+            {"Id": "row-small", "Quantity": 2},
+            {"Id": "row-empty", "Quantity": 0},
+        ]
+
+        client = SQLHandlClient()
+        with patch.object(client, "_write_connection", return_value=fake_conn):
+            self._set_stock_quantity(client, 10)
+
+        update_calls = [c for c in cursor.execute.call_args_list if "UPDATE" in c[0][0]]
+        self.assertEqual(len(update_calls), 2)
+        self.assertEqual(update_calls[0][0][1], {"qty": 10, "id": "row-big"})
+        self.assertEqual(update_calls[1][0][1], {"id": "row-small"})
+
+    def test_set_locksmith_stock_quantity_raises_when_no_row_found(self):
+        fake_conn = MagicMock()
+        fake_conn.__enter__.return_value = fake_conn
+        fake_conn.__exit__.return_value = False
+        fake_conn.cursor.return_value.fetchall.return_value = []
+        client = SQLHandlClient()
+        with patch.object(client, "_write_connection", return_value=fake_conn):
+            with self.assertRaises(ValueError):
+                self._set_stock_quantity(client, 8)
+        fake_conn.commit.assert_not_called()
+
 
 class GetHandlClientTests(TestCase):
     @override_settings(HANDL_SQL_SERVER="")

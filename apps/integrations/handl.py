@@ -256,6 +256,36 @@ class HandlClient(ABC):
         table, so we store photos ourselves and only leave a link here).
         WRITES to Handl — same write-capable connection as record_disposal."""
 
+    @abstractmethod
+    def set_locksmith_stock_quantity(
+        self,
+        soter_locksmith_ids: list[str],
+        part_code: str,
+        quantity: int,
+        *,
+        actioned_by_user_id: int,
+        locksmith_display_name: str,
+    ) -> None:
+        """Corrects a locksmith's recorded Inventory_Locksmith_Stock for
+        this part to exactly `quantity` — an absolute correction, unlike
+        record_disposal's relative decrement, used when office confirms
+        a physical stock-check count as correct and wants Handl's own
+        stock record to actually match it (not just noted as a variance
+        in our own reporting; see apps.stock_accuracy.views.confirm_check).
+
+        Summed across all of soter_locksmith_ids the same way
+        get_expected_stock reports it: the largest existing row is set
+        to `quantity` and any other rows for the same part are zeroed,
+        so the new summed total comes out exactly right regardless of
+        which of the locksmith's Soter ids the stock happened to sit
+        under. Raises ValueError if there's no existing
+        Inventory_Locksmith_Stock row for this locksmith+part at all —
+        deliberately does not create one (an insert into this table has
+        never been proven safe the way Inventory_Disposals' was — see
+        record_disposal's own schema notes); office should add it in
+        Handl directly first. WRITES to Handl — same write-capable
+        connection as record_disposal."""
+
 
 class MockHandlClient(HandlClient):
     """Deterministic fake data for local dev/tests, standing in until the
@@ -480,6 +510,17 @@ class MockHandlClient(HandlClient):
         return any(code == part_code for code, _name in self._CATALOGUE)
 
     def add_report_note(self, report_id: str, notes: str, *, actioned_by_user_id: int) -> None:
+        pass
+
+    def set_locksmith_stock_quantity(
+        self,
+        soter_locksmith_ids: list[str],
+        part_code: str,
+        quantity: int,
+        *,
+        actioned_by_user_id: int,
+        locksmith_display_name: str,
+    ) -> None:
         pass
 
 
@@ -1266,6 +1307,57 @@ class SQLHandlClient(HandlClient):
                 cursor, report_id=report_id, notes=notes,
                 actioned_by_user_id=actioned_by_user_id, when=_handl_now(),
             )
+            conn.commit()
+
+    def set_locksmith_stock_quantity(
+        self,
+        soter_locksmith_ids: list[str],
+        part_code: str,
+        quantity: int,
+        *,
+        actioned_by_user_id: int,
+        locksmith_display_name: str,
+    ) -> None:
+        # Same table record_disposal already writes to, but an absolute
+        # correction rather than a relative decrement — see this
+        # method's own docstring for why the largest-row-wins,
+        # zero-the-rest approach, same "mostly emptied historical rows
+        # alongside one live one" pattern documented in record_disposal.
+        with self._write_connection() as conn:
+            cursor = conn.cursor()
+
+            id_placeholders = ", ".join(f"%(lid{i})s" for i in range(len(soter_locksmith_ids)))
+            params = {f"lid{i}": int(lid) for i, lid in enumerate(soter_locksmith_ids)}
+            params["sku"] = part_code
+            cursor.execute(
+                f"""
+                SELECT ils.Id, ils.Quantity
+                FROM Inventory_Locksmith_Stock ils
+                JOIN Inventory_Parts ipa ON ils.PartId = ipa.Id
+                WHERE ils.LookupLocksmithId IN ({id_placeholders}) AND ipa.SKU = %(sku)s
+                ORDER BY ils.Quantity DESC
+                """,
+                params,
+            )
+            rows = cursor.fetchall()
+            if not rows:
+                raise ValueError(
+                    f"No Inventory_Locksmith_Stock row found for {locksmith_display_name} "
+                    f"and SKU {part_code!r} — add it in Handl directly first."
+                )
+
+            primary_id = rows[0]["Id"]
+            cursor.execute(
+                "UPDATE Inventory_Locksmith_Stock SET Quantity = %(qty)s WHERE Id = %(id)s",
+                {"qty": quantity, "id": primary_id},
+            )
+            for row in rows[1:]:
+                if row["Quantity"]:
+                    cursor.execute(
+                        "UPDATE Inventory_Locksmith_Stock SET Quantity = 0 WHERE Id = %(id)s",
+                        {"id": row["Id"]},
+                    )
+
             conn.commit()
 
     def list_locksmith_user_ids(self) -> dict[str, int]:

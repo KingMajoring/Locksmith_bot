@@ -3,10 +3,21 @@
 {% block content %}
 <h1>{{ weekly_check.locksmith.name }} — week of {{ weekly_check.week_starting }}</h1>
 
-<form method="post" class="card">
+{% if weekly_check.confirmed_at %}
+  <div class="card">
+    Confirmed by {{ weekly_check.confirmed_by }} on {{ weekly_check.confirmed_at|date:"j M Y, H:i" }} —
+    Handl's stock was updated to match these counts at that time. Editing and confirming again
+    will push whatever's saved now.
+  </div>
+{% endif %}
+
+<form method="post" action="{% url 'stock_accuracy:entry_detail' pk=weekly_check.pk %}" class="card">
   {% csrf_token %}
   <table>
-    <tr><th>Part code</th><th>Description</th><th>Counted quantity</th></tr>
+    <tr>
+      <th>Part code</th><th>Description</th><th>Counted quantity</th>
+      {% if weekly_check.confirmed_at %}<th>Pushed to Handl</th>{% endif %}
+    </tr>
     {% for item in items %}
     <tr>
       <td>{{ item.part_code }}</td>
@@ -15,9 +26,28 @@
         <input type="number" min="0" name="qty_{{ item.id }}"
                value="{% if item.actual_qty is not None %}{{ item.actual_qty }}{% endif %}">
       </td>
+      {% if weekly_check.confirmed_at %}
+        <td>
+          {% if item.handl_synced %}
+            &#10003; Yes
+          {% else %}
+            &#10007; {{ item.handl_error|default:"No" }}
+          {% endif %}
+        </td>
+      {% endif %}
     </tr>
     {% endfor %}
   </table>
   <p><button class="btn" type="submit">Save counts</button></p>
+</form>
+
+<form method="post" action="{% url 'stock_accuracy:confirm_check' pk=weekly_check.pk %}" class="card">
+  {% csrf_token %}
+  <p>
+    Once the counts above are right, confirm to actually update Handl's own stock
+    record for {{ weekly_check.locksmith.name }} to match them — this changes what
+    Handl thinks this locksmith's van holds, not just our own report.
+  </p>
+  <p><button class="btn" type="submit">Confirm &amp; update Handl stock</button></p>
 </form>
 {% endblock %}
