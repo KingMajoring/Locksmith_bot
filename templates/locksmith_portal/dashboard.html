@@ -89,7 +89,7 @@
             <span>Start this job</span>
           {% endif %}
         </a>
-        {% if job.client_phone or job.detail_of_loss %}
+        {% if job.client_phone or job.detail_of_loss or job.previous_visits %}
           <div class="job-extra-row">
             {% if job.client_phone %}
               <a class="job-call" href="tel:{{ job.client_phone }}">&#128222; Call{% if job.client_name %} {{ job.client_name }}{% endif %} — {{ job.client_phone }}</a>
@@ -97,6 +97,21 @@
             {% if job.detail_of_loss %}
               <button type="button" class="job-detail-btn" data-detail-for="loss-{{ forloop.counter }}">Detail of loss</button>
               <span id="loss-{{ forloop.counter }}" hidden>{{ job.detail_of_loss }}</span>
+            {% endif %}
+            {% if job.previous_visits %}
+              <button type="button" class="job-detail-btn" data-visits-for="visits-{{ forloop.counter }}">Previous visit{{ job.previous_visits|pluralize }}</button>
+              <div id="visits-{{ forloop.counter }}" hidden>
+                {% for v in job.previous_visits %}
+                  <div class="previous-visit">
+                    <p><strong>{{ v.locksmith_name }}</strong> — {{ v.when|date:"j M Y, H:i" }}{% if v.outcome %} · {{ v.outcome }}{% endif %}</p>
+                    {% if v.parts %}
+                      <ul>{% for part in v.parts %}<li>{{ part }}</li>{% endfor %}</ul>
+                    {% else %}
+                      <p class="sub">No parts recorded.</p>
+                    {% endif %}
+                  </div>
+                {% endfor %}
+              </div>
             {% endif %}
           </div>
         {% endif %}
@@ -113,13 +128,19 @@
   <button type="button" class="btn-secondary" id="detail-of-loss-close">Close</button>
 </dialog>
 
+<dialog id="previous-visits-dialog">
+  <h3>Previous visit(s)</h3>
+  <div id="previous-visits-body"></div>
+  <button type="button" class="btn-secondary" id="previous-visits-close">Close</button>
+</dialog>
+
 <script>
   (function () {
     var dialog = document.getElementById('detail-of-loss-dialog');
     var dialogText = document.getElementById('detail-of-loss-text');
     if (!dialog) return;
 
-    document.querySelectorAll('.job-detail-btn').forEach(function (btn) {
+    document.querySelectorAll('.job-detail-btn[data-detail-for]').forEach(function (btn) {
       btn.addEventListener('click', function () {
         var source = document.getElementById(btn.dataset.detailFor);
         dialogText.textContent = source ? source.textContent : '';
@@ -128,6 +149,31 @@
     });
 
     var closeButton = document.getElementById('detail-of-loss-close');
+    if (closeButton) {
+      closeButton.addEventListener('click', function () { dialog.close(); });
+    }
+  })();
+
+  (function () {
+    var dialog = document.getElementById('previous-visits-dialog');
+    var body = document.getElementById('previous-visits-body');
+    if (!dialog) return;
+
+    // innerHTML, not textContent — this popup keeps the locksmith
+    // name/date/parts-list structure, not just a single block of text
+    // like Detail of loss. Safe to copy as-is: the source element's
+    // markup was already produced by Django's own auto-escaping when
+    // the page was first rendered, so nothing unescaped is introduced
+    // by moving it into the dialog.
+    document.querySelectorAll('.job-detail-btn[data-visits-for]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var source = document.getElementById(btn.dataset.visitsFor);
+        body.innerHTML = source ? source.innerHTML : '';
+        dialog.showModal();
+      });
+    });
+
+    var closeButton = document.getElementById('previous-visits-close');
     if (closeButton) {
       closeButton.addEventListener('click', function () { dialog.close(); });
     }

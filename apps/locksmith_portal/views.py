@@ -559,6 +559,46 @@ def _locksmith_stats(locksmith):
     }
 
 
+def _previous_visits_summary(report_id, exclude_order_no):
+    """Every locksmith's past visit to this same claim (any date, any
+    locksmith — a warranty return is very often a different person to
+    whoever attended originally) for the dashboard's "Previous visit(s)"
+    popup on a warranty job: who attended, when, and what parts they
+    used. Sourced from our own JobVisit/PortalDisposal records (not
+    Handl's Policy_History note text — those are free text we'd have
+    to pattern-match against our own wording, where this is already
+    exactly the structured data behind it) — a job worked before this
+    app existed simply won't have a JobVisit row, so returns nothing
+    for it."""
+    visits = list(
+        JobVisit.objects.filter(report_id=report_id)
+        .exclude(order_no=exclude_order_no)
+        .select_related("locksmith")
+        .order_by("-created_at")
+    )
+    if not visits:
+        return []
+
+    disposals = PortalDisposal.objects.filter(
+        order_no__in=[v.order_no for v in visits]
+    ).order_by("part_code")
+    parts_by_order = {}
+    for d in disposals:
+        parts_by_order.setdefault(d.order_no, []).append(
+            f"{d.quantity} × {d.part_name} ({d.part_code})"
+        )
+
+    return [
+        {
+            "locksmith_name": v.locksmith.name if v.locksmith else "Unknown locksmith",
+            "when": v.completed_at or v.arrived_at or v.on_route_at or v.created_at,
+            "outcome": v.get_outcome_display() if v.outcome else "",
+            "parts": parts_by_order.get(v.order_no, []),
+        }
+        for v in visits
+    ]
+
+
 @login_required
 def dashboard(request):
     locksmith = _locksmith_for_request(request)
@@ -600,6 +640,11 @@ def dashboard(request):
         job["client_phone"] = details.client_phone if details else ""
         job["broker"] = details.broker if details else ""
         job["detail_of_loss"] = details.detail_of_loss if details else ""
+        job["previous_visits"] = (
+            _previous_visits_summary(job["report_id"], job["order_no"])
+            if job["supplied_service"] and "warranty" in job["supplied_service"].lower()
+            else []
+        )
 
     return render(
         request,

@@ -359,7 +359,8 @@ input[type=number] { width: 5rem; }
 }
 .job-detail-btn:active { background: var(--wgtk-green-pale); }
 
-dialog#detail-of-loss-dialog {
+dialog#detail-of-loss-dialog,
+dialog#previous-visits-dialog {
   border: none;
   border-radius: var(--radius);
   box-shadow: var(--shadow-md);
@@ -367,14 +368,24 @@ dialog#detail-of-loss-dialog {
   max-width: 90vw;
   width: 480px;
   max-height: 80vh;
+  overflow-y: auto;
 }
-dialog#detail-of-loss-dialog::backdrop { background: rgba(22, 36, 29, 0.5); }
-dialog#detail-of-loss-dialog h3 { margin-top: 0; }
+dialog#detail-of-loss-dialog::backdrop,
+dialog#previous-visits-dialog::backdrop { background: rgba(22, 36, 29, 0.5); }
+dialog#detail-of-loss-dialog h3,
+dialog#previous-visits-dialog h3 { margin-top: 0; }
 dialog#detail-of-loss-dialog p {
   white-space: pre-wrap;
   color: var(--ink);
   line-height: 1.5;
 }
+.previous-visit {
+  padding: 0.6rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.previous-visit:last-child { border-bottom: none; }
+.previous-visit p { margin: 0 0 0.3rem; color: var(--ink); }
+.previous-visit ul { margin: 0; padding-left: 1.1rem; color: var(--ink-soft); font-size: 0.9rem; }
 
 .nav-icon { vertical-align: -3px; margin-right: 0.3rem; }
 

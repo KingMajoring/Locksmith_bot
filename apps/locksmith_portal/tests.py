@@ -310,6 +310,94 @@ class DashboardTests(TestCase):
 
     @patch("apps.locksmith_portal.views.get_handl_client")
     @patch("apps.locksmith_portal.views.get_optimo_client")
+    def test_dashboard_shows_previous_visits_for_a_warranty_job(self, mock_get_optimo, mock_get_handl):
+        today = timezone.localdate()
+        order_no = f"1001_{today.isoformat()}"
+        mock_optimo = MagicMock()
+        mock_optimo.list_orders_for_date.return_value = [
+            OptimoOrderSummary(
+                order_no=order_no, driver_serial="011", distance_metres=0, travel_time_seconds=0
+            ),
+        ]
+        mock_get_optimo.return_value = mock_optimo
+        mock_handl = MagicMock()
+        mock_handl.get_job_details.return_value = {
+            "1001": JobDetails(
+                report_id="1001", make="Ford", model="Focus", year="2020", reg="AB20 CDE", vin="VIN1",
+                service_type="Car", loss_type="LOST", supplied_service="Warranty", net_cost=100.0,
+            )
+        }
+        mock_get_handl.return_value = mock_handl
+
+        # A different locksmith attended the original job — the popup
+        # should show every past locksmith's visit, not just this one's.
+        other_locksmith = Locksmith.objects.create(
+            name="WGTK - Other", email="other@wgtk.co.uk", active=True
+        )
+        past_order_no = "1001_2026-08-01"
+        JobVisit.objects.create(
+            locksmith=other_locksmith, order_no=past_order_no, report_id="1001",
+            stage=JobVisit.Stage.DONE, outcome=JobVisit.Outcome.COMPLETED,
+            completed_at=timezone.now() - timedelta(days=30),
+        )
+        PortalDisposal.objects.create(
+            locksmith=other_locksmith, order_no=past_order_no, report_id="1001",
+            part_code="TK-100", part_name="Transponder key blank", quantity=2,
+        )
+
+        response = self.client.get(reverse("locksmith_portal:dashboard"))
+        job = response.context["jobs"][0]
+        self.assertEqual(len(job["previous_visits"]), 1)
+        self.assertEqual(job["previous_visits"][0]["locksmith_name"], "WGTK - Other")
+        self.assertIn("2 × Transponder key blank (TK-100)", job["previous_visits"][0]["parts"])
+        self.assertContains(response, "Previous visit")
+        self.assertContains(response, "WGTK - Other")
+        self.assertContains(response, "Transponder key blank")
+
+    @patch("apps.locksmith_portal.views.get_handl_client")
+    @patch("apps.locksmith_portal.views.get_optimo_client")
+    def test_dashboard_hides_previous_visits_button_for_non_warranty_job(
+        self, mock_get_optimo, mock_get_handl
+    ):
+        today = timezone.localdate()
+        order_no = f"1001_{today.isoformat()}"
+        mock_optimo = MagicMock()
+        mock_optimo.list_orders_for_date.return_value = [
+            OptimoOrderSummary(
+                order_no=order_no, driver_serial="011", distance_metres=0, travel_time_seconds=0
+            ),
+        ]
+        mock_get_optimo.return_value = mock_optimo
+        mock_handl = MagicMock()
+        mock_handl.get_job_details.return_value = {
+            "1001": JobDetails(
+                report_id="1001", make="Ford", model="Focus", year="2020", reg="AB20 CDE", vin="VIN1",
+                service_type="Car", loss_type="LOST", supplied_service="Key Cutting", net_cost=100.0,
+            )
+        }
+        mock_get_handl.return_value = mock_handl
+
+        # A prior JobVisit exists for this same claim, but the current
+        # job isn't a warranty return — the button shouldn't show.
+        other_locksmith = Locksmith.objects.create(
+            name="WGTK - Other", email="other@wgtk.co.uk", active=True
+        )
+        JobVisit.objects.create(
+            locksmith=other_locksmith, order_no="1001_2026-08-01", report_id="1001",
+            stage=JobVisit.Stage.DONE, outcome=JobVisit.Outcome.COMPLETED,
+        )
+
+        response = self.client.get(reverse("locksmith_portal:dashboard"))
+        job = response.context["jobs"][0]
+        self.assertEqual(job["previous_visits"], [])
+        # The dialog and its JS are always in the page markup (shared
+        # across every job card, and the JS selector itself mentions
+        # "data-visits-for") — what must be absent is this job's own
+        # rendered trigger button for it.
+        self.assertNotContains(response, 'data-visits-for="visits-1"')
+
+    @patch("apps.locksmith_portal.views.get_handl_client")
+    @patch("apps.locksmith_portal.views.get_optimo_client")
     def test_dashboard_hides_location_without_postcode(self, mock_get_optimo, mock_get_handl):
         today = timezone.localdate()
         order_no = f"1001_{today.isoformat()}"
