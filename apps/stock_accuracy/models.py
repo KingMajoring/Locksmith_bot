@@ -95,6 +95,40 @@ class VirtualStockItem(models.Model):
         return self.part_code
 
 
+class PartUnitConversion(models.Model):
+    """Admin-configurable multiplier for a Handl SKU whose stock is
+    recorded in a different unit than what a locksmith physically
+    counts — e.g. VXRP2 is tracked in Handl as packs of 10, but
+    locksmiths count individual pins, which made every stock check on
+    it show a wildly wrong variance. Applied once, at generation time,
+    to the frozen expected_qty on the StockCheckItem (see
+    services.generation.generate_weekly_check) — not a live
+    conversion — so it's comparable to the individual-unit count
+    the locksmith actually enters. Matched case-insensitively, same as
+    VirtualStockItem.
+    """
+
+    part_code = models.CharField(max_length=64, unique=True)
+    part_name = models.CharField(
+        max_length=200, blank=True, help_text="For reference only — not matched on."
+    )
+    units_per_pack = models.PositiveIntegerField(
+        default=1,
+        help_text="Handl's expected_qty for this SKU is in packs of this size — "
+        "multiplied by this before comparing to the locksmith's individual-unit count.",
+    )
+    note = models.CharField(max_length=300, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["part_code"]
+        verbose_name = "Part unit conversion (pack size mismatch)"
+        verbose_name_plural = "Part unit conversions (pack size mismatches)"
+
+    def __str__(self):
+        return f"{self.part_code} (×{self.units_per_pack})"
+
+
 class WeeklyStockCheck(models.Model):
     """One locksmith's stock check for one week: the 10 lines drawn, and
     (eventually) reconciled against the counts they enter in the portal."""

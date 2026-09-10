@@ -1,6 +1,7 @@
 from django.contrib import admin
 
 from .models import (
+    PartUnitConversion,
     StockCheckItem,
     StockCheckSchedule,
     VarianceThreshold,
@@ -31,6 +32,12 @@ class VarianceThresholdAdmin(admin.ModelAdmin):
 @admin.register(VirtualStockItem)
 class VirtualStockItemAdmin(admin.ModelAdmin):
     list_display = ("part_code", "part_name", "note", "created_at")
+    search_fields = ("part_code", "part_name")
+
+
+@admin.register(PartUnitConversion)
+class PartUnitConversionAdmin(admin.ModelAdmin):
+    list_display = ("part_code", "part_name", "units_per_pack", "note", "created_at")
     search_fields = ("part_code", "part_name")
 
 

@@ -8,7 +8,13 @@ from django.urls import reverse
 from apps.integrations.handl import ExpectedStock, StockUsage
 from apps.locksmiths.models import Locksmith
 
-from .models import StockCheckItem, VarianceThreshold, VirtualStockItem, WeeklyStockCheck
+from .models import (
+    PartUnitConversion,
+    StockCheckItem,
+    VarianceThreshold,
+    VirtualStockItem,
+    WeeklyStockCheck,
+)
 from .services.generation import generate_weekly_check
 from .services.reporting import locksmith_summary
 
@@ -98,6 +104,45 @@ class GenerationTests(TestCase):
 
         codes = set(weekly_check.items.values_list("part_code", flat=True))
         self.assertNotIn("3D-TOKEN", codes)
+
+    def test_part_unit_conversion_scales_expected_qty_and_unit_cost(self):
+        # update_or_create, not create — a real VXRP2 conversion is
+        # already seeded by migration 0007, so a plain create() here
+        # would collide with it.
+        PartUnitConversion.objects.update_or_create(
+            part_code="VXRP2", defaults={"units_per_pack": 10}
+        )
+
+        mock_handl = MagicMock()
+        mock_handl.get_stock_usage.return_value = [
+            StockUsage(part_code="VXRP2", part_name="Flip blade pins", qty_used=5),
+        ]
+        mock_handl.get_expected_stock.return_value = {
+            "VXRP2": ExpectedStock(part_code="VXRP2", expected_qty=41, unit_cost=10.0),
+        }
+
+        with patch("apps.stock_accuracy.services.generation.get_handl_client", return_value=mock_handl):
+            weekly_check = generate_weekly_check(self.locksmith, date(2026, 9, 7))
+
+        item = weekly_check.items.get(part_code="VXRP2")
+        self.assertEqual(item.expected_qty, 410)
+        self.assertEqual(item.unit_cost, 1.0)
+
+    def test_no_conversion_leaves_expected_qty_and_unit_cost_unchanged(self):
+        mock_handl = MagicMock()
+        mock_handl.get_stock_usage.return_value = [
+            StockUsage(part_code="TK-100", part_name="Transponder key blank", qty_used=5),
+        ]
+        mock_handl.get_expected_stock.return_value = {
+            "TK-100": ExpectedStock(part_code="TK-100", expected_qty=8, unit_cost=12.5),
+        }
+
+        with patch("apps.stock_accuracy.services.generation.get_handl_client", return_value=mock_handl):
+            weekly_check = generate_weekly_check(self.locksmith, date(2026, 9, 7))
+
+        item = weekly_check.items.get(part_code="TK-100")
+        self.assertEqual(item.expected_qty, 8)
+        self.assertEqual(item.unit_cost, 12.5)
 
 
 class VarianceFlaggingTests(TestCase):

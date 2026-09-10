@@ -18,7 +18,7 @@ from django.utils import timezone
 from apps.integrations.handl import get_handl_client
 from apps.locksmiths.models import Locksmith
 
-from ..models import StockCheckItem, VirtualStockItem, WeeklyStockCheck
+from ..models import PartUnitConversion, StockCheckItem, VirtualStockItem, WeeklyStockCheck
 
 
 def _recently_checked_part_codes(locksmith: Locksmith, weeks: int) -> set[str]:
@@ -76,6 +76,20 @@ def generate_weekly_check(locksmith: Locksmith, week_starting: date) -> WeeklySt
         locksmith.soter_id_list, [u.part_code for u in chosen]
     )
 
+    # Some SKUs (e.g. VXRP2 — pins sold to locksmiths in packs of 10)
+    # are recorded in Handl by the pack, but a locksmith physically
+    # counting van stock counts individual pins, not packs — comparing
+    # Handl's expected_qty directly against that count produced a
+    # wildly wrong variance. Applied once here, at generation time, to
+    # the frozen expected_qty/unit_cost, so it's comparable to the
+    # individual-unit count the locksmith actually enters (unit_cost is
+    # divided by the same factor so £ impact stays meaningful in those
+    # same individual units).
+    conversions = {
+        c.part_code.upper(): c.units_per_pack
+        for c in PartUnitConversion.objects.all()
+    }
+
     weekly_check = WeeklyStockCheck.objects.create(
         locksmith=locksmith, week_starting=week_starting
     )
@@ -84,8 +98,14 @@ def generate_weekly_check(locksmith: Locksmith, week_starting: date) -> WeeklySt
             weekly_check=weekly_check,
             part_code=u.part_code,
             part_name=u.part_name,
-            expected_qty=expected[u.part_code].expected_qty,
-            unit_cost=expected[u.part_code].unit_cost,
+            expected_qty=(
+                expected[u.part_code].expected_qty
+                * conversions.get(u.part_code.upper(), 1)
+            ),
+            unit_cost=(
+                expected[u.part_code].unit_cost
+                / conversions.get(u.part_code.upper(), 1)
+            ),
         )
         for u in chosen
     )
