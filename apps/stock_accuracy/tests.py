@@ -87,6 +87,31 @@ class GenerationTests(TestCase):
         self.assertNotIn("3D-TOKEN", codes)
         self.assertIn("TK-100", codes)
 
+    def test_parts_never_tracked_as_real_van_stock_are_never_selected(self):
+        # A client-supplied part (see HandlClient.record_client_supplied_
+        # disposal) shows up in disposal history but deliberately never
+        # gets an Inventory_Locksmith_Stock row, since it never came out
+        # of this locksmith's van — get_expected_stock has nothing for
+        # it at all. Reported live: it was still getting drawn as a
+        # stock-check line, asking the locksmith to count something
+        # they never actually carried.
+        mock_handl = MagicMock()
+        mock_handl.get_stock_usage.return_value = [
+            StockUsage(part_code="CLIENT-SUPPLIED", part_name="Client's own key", qty_used=99),
+            StockUsage(part_code="TK-100", part_name="Transponder key blank", qty_used=5),
+        ]
+        mock_handl.get_expected_stock.return_value = {
+            "TK-100": ExpectedStock(part_code="TK-100", expected_qty=5, unit_cost=10.0),
+            # No entry for "CLIENT-SUPPLIED" — never tracked as van stock.
+        }
+
+        with patch("apps.stock_accuracy.services.generation.get_handl_client", return_value=mock_handl):
+            weekly_check = generate_weekly_check(self.locksmith, date(2026, 9, 7))
+
+        codes = set(weekly_check.items.values_list("part_code", flat=True))
+        self.assertNotIn("CLIENT-SUPPLIED", codes)
+        self.assertIn("TK-100", codes)
+
     def test_virtual_stock_item_exclusion_is_case_insensitive(self):
         VirtualStockItem.objects.create(part_code="3d-token")
 
