@@ -26,7 +26,7 @@
     <p><button type="button" class="btn" id="open-disclaimer-signature">Tap to sign</button></p>
     <input type="hidden" name="disclaimer_signature" id="disclaimer_signature">
 
-    <label>Photos of the door frame</label>
+    <label>Photos of the door frame <span class="sub">(up to 3 photos)</span></label>
     <input type="file" name="photo_door_frame" accept="image/*" multiple>
   </div>
 
@@ -173,5 +173,17 @@
       }
     });
   })();
+
+  // Server also caps this at 3 (see MAX_PHOTOS_PER_KIND) — this just
+  // saves a round trip by telling the locksmith straight away rather
+  // than silently dropping the extras after upload.
+  document.querySelectorAll('input[type=file][multiple]').forEach(function (input) {
+    input.addEventListener('change', function () {
+      if (input.files.length > 3) {
+        alert('Only 3 photos allowed here — please choose 3 or fewer.');
+        input.value = '';
+      }
+    });
+  });
 </script>
 {% endblock %}

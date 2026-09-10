@@ -9,7 +9,7 @@
 
   {% for slot in photo_slots %}
   <div class="field-group">
-    <label>{{ slot.label }}{% if not slot.required %} <span class="sub">(if applicable)</span>{% endif %}</label>
+    <label>{{ slot.label }}{% if not slot.required %} <span class="sub">(if applicable)</span>{% endif %} <span class="sub">(up to 3 photos)</span></label>
     <input type="file" name="photo_{{ slot.kind }}" accept="image/*" multiple {% if slot.required %}required{% endif %}>
   </div>
   {% endfor %}
@@ -352,5 +352,17 @@
     recognition.addEventListener('end', function () { setListening(false); });
     recognition.addEventListener('error', function () { setListening(false); });
   })();
+
+  // Server also caps this at 3 (see MAX_PHOTOS_PER_KIND) — this just
+  // saves a round trip by telling the locksmith straight away rather
+  // than silently dropping the extras after upload.
+  document.querySelectorAll('input[type=file][multiple]').forEach(function (input) {
+    input.addEventListener('change', function () {
+      if (input.files.length > 3) {
+        alert('Only 3 photos allowed here — please choose 3 or fewer.');
+        input.value = '';
+      }
+    });
+  });
 </script>
 {% endblock %}

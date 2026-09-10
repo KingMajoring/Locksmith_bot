@@ -171,8 +171,14 @@ def _needs_access_method(report_id):
 def _arrival_photo_slots(loss_label):
     """(kind, required) pairs for the arrival step's photo prompts. A
     service not specifically modelled here just gets one generic
-    "before" photo, the original behaviour."""
-    return _ARRIVAL_PHOTO_SLOTS_BY_SERVICE.get(loss_label, [(JobVisitPhoto.Kind.BEFORE, True)])
+    "before" photo, the original behaviour. Every job except a genuine
+    "Gain access" (property lockout, no vehicle involved) also asks for
+    a mileage photo — there's no mileage to record on a property
+    lockout."""
+    slots = list(_ARRIVAL_PHOTO_SLOTS_BY_SERVICE.get(loss_label, [(JobVisitPhoto.Kind.BEFORE, True)]))
+    if loss_label != _GAIN_ACCESS_SERVICE_LABEL:
+        slots.append((JobVisitPhoto.Kind.MILEAGE, True))
+    return slots
 
 
 def _after_photo_slots(loss_label):
@@ -270,6 +276,7 @@ def _navigation_urls(postcode):
 
 _PREVIEW_SESSION_KEY = "locksmith_portal_preview_id"
 MAX_PHOTO_BYTES = 15 * 1024 * 1024
+MAX_PHOTOS_PER_KIND = 3
 
 
 def _locksmith_for_request(request):
@@ -493,16 +500,23 @@ def _update_optimo_status(order_no, status, *, start_time=None, end_time=None):
         logger.exception("Failed to push Optimo status %s for order %s", status, order_no)
 
 
-def _photo_links_html(urls):
+def _photo_links_html(label, urls):
     """Handl's own Notes field isn't HTML-escaped on display (confirmed
     live: an existing "File Closed" note's <strong> tag renders as real
     bold text, not literal angle brackets) — so a real <a> tag here
     renders as an actual clickable link in Handl's activity feed,
     rather than a plain-text URL office staff would have to copy out.
     urls are always our own generated blob URLs (get_photo_storage()),
-    never locksmith-typed text, so this is safe without escaping."""
+    never locksmith-typed text, so this is safe without escaping.
+
+    Link text is `label` (what the photo actually is, e.g. "Mileage" or
+    "Damage") rather than a meaningless position like "Photo 1" — a
+    number is only appended when there's more than one for the same
+    label, to tell them apart."""
+    if len(urls) == 1:
+        return f'<a href="{urls[0]}" target="_blank">{label}</a>'
     return ", ".join(
-        f'<a href="{url}" target="_blank">Photo {i}</a>' for i, url in enumerate(urls, start=1)
+        f'<a href="{url}" target="_blank">{label} {i}</a>' for i, url in enumerate(urls, start=1)
     )
 
 
@@ -512,7 +526,17 @@ def _save_visit_photos(request, visit, report_id, stage, kind, files):
     the Handl note) — a file that fails type/size validation is
     skipped with an error message rather than aborting the whole
     batch, so one bad file doesn't lose the rest of a locksmith's
-    photos."""
+    photos. Capped at MAX_PHOTOS_PER_KIND per slot — any beyond that are
+    dropped with a message rather than saved, so a slot can't grow
+    unbounded."""
+    if len(files) > MAX_PHOTOS_PER_KIND:
+        messages.warning(
+            request,
+            f"Only the first {MAX_PHOTOS_PER_KIND} photos of "
+            f"{JobVisitPhoto.Kind(kind).label} were saved — {MAX_PHOTOS_PER_KIND} max per photo.",
+        )
+        files = files[:MAX_PHOTOS_PER_KIND]
+
     storage = get_photo_storage()
     urls = []
     for f in files:
@@ -915,7 +939,8 @@ def job_arrived(request, order_no):
                 urls = _save_visit_photos(request, visit, report_id, kind, kind, files)
                 if urls:
                     any_uploaded = True
-                    note_parts.append(f"{JobVisitPhoto.Kind(kind).label}: {_photo_links_html(urls)}")
+                    kind_label = JobVisitPhoto.Kind(kind).label
+                    note_parts.append(f"{kind_label}: {_photo_links_html(kind_label, urls)}")
 
             if not any_uploaded:
                 # Every attached file failed image/size validation (see
@@ -1025,7 +1050,8 @@ def job_access_method(request, order_no):
                 visit.disclaimer_signed_at = timezone.now()
                 note_parts.append(
                     f"'{locksmith.van_soter_display_name}' is attempting access via airbag — "
-                    f"customer signed the damage disclaimer: {_photo_links_html([signature_url])}"
+                    "customer signed the damage disclaimer: "
+                    f"{_photo_links_html(JobVisitPhoto.Kind.DISCLAIMER_SIGNATURE.label, [signature_url])}"
                 )
 
             for kind, files in slot_files.items():
@@ -1033,7 +1059,8 @@ def job_access_method(request, order_no):
                     continue
                 urls = _save_visit_photos(request, visit, report_id, kind, kind, files)
                 if urls:
-                    note_parts.append(f"{JobVisitPhoto.Kind(kind).label}: {_photo_links_html(urls)}")
+                    kind_label = JobVisitPhoto.Kind(kind).label
+                    note_parts.append(f"{kind_label}: {_photo_links_html(kind_label, urls)}")
 
             visit.access_method = access_method
             visit.pick_used = pick_used if access_method == JobVisit.AccessMethod.PICKED else ""
@@ -1163,7 +1190,8 @@ def job_complete(request, order_no):
                     continue
                 urls = _save_visit_photos(request, visit, report_id, kind, kind, files)
                 if urls:
-                    note_parts.append(f"{JobVisitPhoto.Kind(kind).label}: {_photo_links_html(urls)}")
+                    kind_label = JobVisitPhoto.Kind(kind).label
+                    note_parts.append(f"{kind_label}: {_photo_links_html(kind_label, urls)}")
 
             if failure_category is not None:
                 detail = ""
@@ -1188,8 +1216,8 @@ def job_complete(request, order_no):
                 )
                 visit.completion_signed_at = timezone.now()
                 note_parts.append(
-                    f"Customer signed to confirm they're happy with the job: "
-                    f"{_photo_links_html([signature_url])}"
+                    "Customer signed to confirm they're happy with the job: "
+                    f"{_photo_links_html(JobVisitPhoto.Kind.COMPLETION_SIGNATURE.label, [signature_url])}"
                 )
 
             if outcome == JobVisit.Outcome.COMPLETED and further_work_required:

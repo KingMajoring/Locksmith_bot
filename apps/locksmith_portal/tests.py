@@ -1934,13 +1934,17 @@ class JobVisitWorkflowTests(TestCase):
             stage=JobVisit.Stage.ON_ROUTE, on_route_at=timezone.now(),
         )
         url = reverse("locksmith_portal:job_arrived", args=[self.order_no])
-        response = self.client.post(url, {"photo_before": [_fake_photo()]})
+        response = self.client.post(url, {
+            "photo_before": [_fake_photo()],
+            "photo_mileage": [_fake_photo(name="mileage.jpg")],
+        })
 
         visit = self._visit()
         self.assertEqual(visit.stage, JobVisit.Stage.ARRIVED)
         self.assertIsNotNone(visit.arrived_at)
-        self.assertEqual(visit.photos.count(), 1)
-        self.assertEqual(visit.photos.first().kind, JobVisitPhoto.Kind.BEFORE)
+        self.assertEqual(visit.photos.count(), 2)
+        before_photo = visit.photos.get(kind=JobVisitPhoto.Kind.BEFORE)
+        mileage_photo = visit.photos.get(kind=JobVisitPhoto.Kind.MILEAGE)
         self.assertRedirects(
             response,
             f"{reverse('locksmith_portal:job_overview', args=[self.order_no])}?date={self.today.isoformat()}",
@@ -1949,8 +1953,11 @@ class JobVisitWorkflowTests(TestCase):
         self.assertIn("arrived", note_text)
         # A real <a> tag, not a bare URL — Handl's Notes field renders raw
         # HTML (confirmed live: an existing note's <strong> tag renders as
-        # bold, not literal angle brackets), so this is a clickable link.
-        self.assertIn(f'<a href="{visit.photos.first().url}" target="_blank">Photo 1</a>', note_text)
+        # bold, not literal angle brackets), so this is a clickable link,
+        # and its text is what the photo actually is (not a meaningless
+        # "Photo 1"/"Photo 2" position).
+        self.assertIn(f'<a href="{before_photo.url}" target="_blank">Before</a>', note_text)
+        self.assertIn(f'<a href="{mileage_photo.url}" target="_blank">Mileage</a>', note_text)
         self.mock_optimo.update_completion_status.assert_called_once_with(
             self.order_no, "servicing", start_time=visit.arrived_at, end_time=None
         )
@@ -1968,7 +1975,10 @@ class JobVisitWorkflowTests(TestCase):
             stage=JobVisit.Stage.ON_ROUTE, on_route_at=timezone.now(),
         )
         url = f"{reverse('locksmith_portal:job_arrived', args=[past_order_no])}?date={yesterday.isoformat()}"
-        response = self.client.post(url, {"photo_before": [_fake_photo()]})
+        response = self.client.post(url, {
+            "photo_before": [_fake_photo()],
+            "photo_mileage": [_fake_photo(name="mileage.jpg")],
+        })
 
         visit = JobVisit.objects.get(locksmith=self.locksmith, order_no=past_order_no)
         self.assertEqual(visit.stage, JobVisit.Stage.ARRIVED)
@@ -1987,6 +1997,7 @@ class JobVisitWorkflowTests(TestCase):
         url = reverse("locksmith_portal:job_arrived", args=[self.order_no])
         self.client.post(url, {
             "photo_before": [_fake_photo()],
+            "photo_mileage": [_fake_photo(name="mileage.jpg")],
             "arrival_latitude": "51.5072", "arrival_longitude": "-0.1276",
         })
         visit = self._visit()
@@ -2001,7 +2012,10 @@ class JobVisitWorkflowTests(TestCase):
             stage=JobVisit.Stage.ON_ROUTE, on_route_at=timezone.now(),
         )
         url = reverse("locksmith_portal:job_arrived", args=[self.order_no])
-        response = self.client.post(url, {"photo_before": [_fake_photo()]})
+        response = self.client.post(url, {
+            "photo_before": [_fake_photo()],
+            "photo_mileage": [_fake_photo(name="mileage.jpg")],
+        })
         self.assertEqual(response.status_code, 302)
         visit = self._visit()
         self.assertIsNone(visit.arrival_latitude)
@@ -2016,7 +2030,14 @@ class JobVisitWorkflowTests(TestCase):
         )
         url = reverse("locksmith_portal:job_arrived", args=[self.order_no])
         bad_file = SimpleUploadedFile("notes.txt", b"hello", content_type="text/plain")
-        response = self.client.post(url, {"photo_before": [bad_file]})
+        # Both required slots (before + mileage) get a bad file — a
+        # valid photo succeeding in either slot would advance the stage
+        # on its own (any_uploaded), which isn't what this test is
+        # checking for.
+        response = self.client.post(url, {
+            "photo_before": [bad_file],
+            "photo_mileage": [SimpleUploadedFile("notes2.txt", b"hello", content_type="text/plain")],
+        })
 
         self.assertEqual(self._visit().stage, JobVisit.Stage.ON_ROUTE)
         self.assertContains(response, "isn&#x27;t an image")
@@ -2550,6 +2571,77 @@ class JobVisitWorkflowTests(TestCase):
         )
         self.assertEqual(self._visit().stage, JobVisit.Stage.ARRIVED)
 
+    def test_gain_access_arrival_does_not_ask_for_mileage(self):
+        # A property lockout has no vehicle involved — nothing to
+        # photograph a mileage reading of.
+        self._set_loss_type("LOCKED IN PROPERTY")
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            stage=JobVisit.Stage.ON_ROUTE, on_route_at=timezone.now(),
+        )
+        url = reverse("locksmith_portal:job_arrived", args=[self.order_no])
+        response = self.client.get(url)
+        self.assertNotContains(response, "Mileage")
+
+        response = self.client.post(url, {
+            "photo_front_of_car": [_fake_photo(name="a.jpg")],
+            "photo_door_lock": [_fake_photo(name="b.jpg")],
+        })
+        self.assertEqual(self._visit().stage, JobVisit.Stage.ARRIVED)
+        self.assertEqual(self._visit().photos.filter(kind=JobVisitPhoto.Kind.MILEAGE).count(), 0)
+
+    def test_akl_arrival_asks_for_mileage(self):
+        # Every job except a genuine "Gain access" property lockout
+        # needs a mileage photo too.
+        self._set_loss_type("LOST")
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            stage=JobVisit.Stage.ON_ROUTE, on_route_at=timezone.now(),
+        )
+        url = reverse("locksmith_portal:job_arrived", args=[self.order_no])
+        response = self.client.get(url)
+        self.assertContains(response, "Mileage")
+
+        response = self.client.post(url, {"photo_front_of_car": [_fake_photo(name="a.jpg")]})
+        self.assertContains(response, "Add at least one photo: Mileage")
+        self.assertEqual(self._visit().stage, JobVisit.Stage.ON_ROUTE)
+
+    def test_arrived_caps_photos_per_slot_at_three(self):
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            stage=JobVisit.Stage.ON_ROUTE, on_route_at=timezone.now(),
+        )
+        url = reverse("locksmith_portal:job_arrived", args=[self.order_no])
+        response = self.client.post(url, {
+            "photo_before": [
+                _fake_photo(name="a.jpg"), _fake_photo(name="b.jpg"),
+                _fake_photo(name="c.jpg"), _fake_photo(name="d.jpg"),
+            ],
+            "photo_mileage": [_fake_photo(name="m.jpg")],
+        }, follow=True)
+        self.assertContains(response, "Only the first 3 photos")
+        visit = self._visit()
+        self.assertEqual(visit.stage, JobVisit.Stage.ARRIVED)
+        self.assertEqual(visit.photos.filter(kind=JobVisitPhoto.Kind.BEFORE).count(), 3)
+
+    def test_multiple_photos_in_one_slot_get_numbered_link_text(self):
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            stage=JobVisit.Stage.ON_ROUTE, on_route_at=timezone.now(),
+        )
+        url = reverse("locksmith_portal:job_arrived", args=[self.order_no])
+        self.client.post(url, {
+            "photo_before": [_fake_photo(name="a.jpg"), _fake_photo(name="b.jpg")],
+            "photo_mileage": [_fake_photo(name="m.jpg")],
+        })
+        note_text = self.mock_handl.add_report_note.call_args[0][1]
+        before_photos = list(self._visit().photos.filter(kind=JobVisitPhoto.Kind.BEFORE).order_by("id"))
+        self.assertIn(f'<a href="{before_photos[0].url}" target="_blank">Before 1</a>', note_text)
+        self.assertIn(f'<a href="{before_photos[1].url}" target="_blank">Before 2</a>', note_text)
+        # Mileage only has one photo, so no numbering needed for it.
+        mileage_photo = self._visit().photos.get(kind=JobVisitPhoto.Kind.MILEAGE)
+        self.assertIn(f'<a href="{mileage_photo.url}" target="_blank">Mileage</a>', note_text)
+
     def test_gain_access_completion_get_shows_named_photo_slots(self):
         self._set_loss_type("LOCKED IN PROPERTY")
         self._parts_done_visit()
@@ -2613,7 +2705,10 @@ class JobVisitWorkflowTests(TestCase):
             stage=JobVisit.Stage.ON_ROUTE, on_route_at=timezone.now(),
         )
         url = reverse("locksmith_portal:job_arrived", args=[self.order_no])
-        response = self.client.post(url, {"photo_front_of_car": [_fake_photo(name="a.jpg")]})
+        response = self.client.post(url, {
+            "photo_front_of_car": [_fake_photo(name="a.jpg")],
+            "photo_mileage": [_fake_photo(name="m.jpg")],
+        })
         self.assertRedirects(
             response,
             f"{reverse('locksmith_portal:job_overview', args=[self.order_no])}?date={self.today.isoformat()}",
