@@ -31,9 +31,21 @@
 
   <div class="field-group completed-branch signature-branch" hidden>
     <label>Customer signature — happy with the completed job</label>
-    <canvas id="completion-signature-pad" class="signature-pad" width="600" height="200"></canvas>
-    <p><button type="button" class="btn-secondary" id="clear-completion-signature">Clear signature</button></p>
+    <div class="signature-preview" id="completion-signature-preview">Not signed yet</div>
+    <p><button type="button" class="btn" id="open-completion-signature">Tap to sign</button></p>
     <input type="hidden" name="completion_signature" id="completion_signature">
+  </div>
+
+  <div class="signature-modal" id="completion-signature-modal" hidden>
+    <div class="signature-modal-header">
+      <span>Customer signature</span>
+      <button type="button" class="signature-modal-close" id="close-completion-signature" aria-label="Close">&times;</button>
+    </div>
+    <canvas id="completion-signature-pad" class="signature-pad-fullscreen"></canvas>
+    <div class="signature-modal-actions">
+      <button type="button" class="btn-secondary" id="clear-completion-signature">Clear</button>
+      <button type="button" class="btn" id="done-completion-signature">Done</button>
+    </div>
   </div>
 
   <div class="field-group completed-branch not-present-branch" hidden>
@@ -166,21 +178,35 @@
   })();
 
   (function () {
-    function setUpSignaturePad(canvasId, clearButtonId) {
-      var canvas = document.getElementById(canvasId);
-      if (!canvas) return null;
+    // Signing happens in a full-screen pop-out rather than a small
+    // inline canvas — confirmed live the inline version was too
+    // cramped to sign legibly on a phone. The canvas only gets a real
+    // pixel size once the modal is actually visible (a hidden element
+    // reports zero size), so it's sized on each open instead of once
+    // upfront — which also means no fixed-resolution/CSS-scale split,
+    // pointer coordinates are plain offsets against the canvas's own
+    // rendered size.
+    function setUpSignatureField(config) {
+      var canvas = document.getElementById(config.padId);
+      var modal = document.getElementById(config.modalId);
+      var preview = document.getElementById(config.previewId);
+      var hiddenInput = document.getElementById(config.hiddenInputId);
+      var branch = document.querySelector(config.branchSelector);
+      if (!canvas || !modal || !preview || !hiddenInput) return null;
+
       var ctx = canvas.getContext('2d');
-      ctx.lineWidth = 2;
-      ctx.lineCap = 'round';
-      ctx.strokeStyle = '#16241d';
       var drawing = false;
       var hasSignature = false;
 
+      function applyPenStyle() {
+        ctx.lineWidth = 3;
+        ctx.lineCap = 'round';
+        ctx.strokeStyle = '#16241d';
+      }
+
       function point(e) {
         var rect = canvas.getBoundingClientRect();
-        var scaleX = canvas.width / rect.width;
-        var scaleY = canvas.height / rect.height;
-        return { x: (e.clientX - rect.left) * scaleX, y: (e.clientY - rect.top) * scaleY };
+        return { x: e.clientX - rect.left, y: e.clientY - rect.top };
       }
 
       function start(e) {
@@ -215,22 +241,60 @@
       canvas.addEventListener('pointerup', end);
       canvas.addEventListener('pointercancel', end);
 
-      var clearButton = document.getElementById(clearButtonId);
-      if (clearButton) {
-        clearButton.addEventListener('click', function () {
-          ctx.clearRect(0, 0, canvas.width, canvas.height);
-          hasSignature = false;
+      function openModal() {
+        modal.hidden = false;
+        document.body.style.overflow = 'hidden';
+        // Wait a frame so the now-visible modal has real dimensions
+        // before sizing the canvas to match — sizing while still
+        // hidden would give it 0x0.
+        requestAnimationFrame(function () {
+          var rect = canvas.getBoundingClientRect();
+          canvas.width = rect.width;
+          canvas.height = rect.height;
+          applyPenStyle();
         });
       }
+
+      function closeModal() {
+        modal.hidden = true;
+        document.body.style.overflow = '';
+      }
+
+      document.getElementById(config.openButtonId).addEventListener('click', openModal);
+      document.getElementById(config.closeButtonId).addEventListener('click', closeModal);
+      document.getElementById(config.clearButtonId).addEventListener('click', function () {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        hasSignature = false;
+      });
+      document.getElementById(config.doneButtonId).addEventListener('click', function () {
+        if (!hasSignature) {
+          alert('Please sign before tapping Done.');
+          return;
+        }
+        hiddenInput.value = canvas.toDataURL('image/png');
+        preview.textContent = '✓ Signed';
+        preview.classList.add('signature-preview-done');
+        closeModal();
+      });
 
       return {
         hasSignature: function () { return hasSignature; },
         dataUrl: function () { return canvas.toDataURL('image/png'); },
-        visible: function () { return !canvas.closest('[hidden]'); },
+        visible: function () { return branch && !branch.hidden && !branch.closest('[hidden]'); },
       };
     }
 
-    var completionPad = setUpSignaturePad('completion-signature-pad', 'clear-completion-signature');
+    var completionPad = setUpSignatureField({
+      padId: 'completion-signature-pad',
+      modalId: 'completion-signature-modal',
+      previewId: 'completion-signature-preview',
+      hiddenInputId: 'completion_signature',
+      openButtonId: 'open-completion-signature',
+      closeButtonId: 'close-completion-signature',
+      clearButtonId: 'clear-completion-signature',
+      doneButtonId: 'done-completion-signature',
+      branchSelector: '.signature-branch',
+    });
 
     document.getElementById('complete-form').addEventListener('submit', function (e) {
       if (completionPad && completionPad.visible()) {
