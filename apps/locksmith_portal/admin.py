@@ -1,6 +1,7 @@
 from django.contrib import admin
 
 from .models import (
+    JobTimingSummary,
     JobVisit,
     JobVisitPhoto,
     PortalDisposal,
@@ -48,6 +49,28 @@ class SafetyAlertAdmin(admin.ModelAdmin):
     list_display = ("triggered_at", "kind", "locksmith", "job_visit", "notified_contacts")
     list_filter = ("kind", "locksmith")
     search_fields = ("locksmith__name", "notified_contacts")
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(JobTimingSummary)
+class JobTimingSummaryAdmin(admin.ModelAdmin):
+    """Read-only — written by job_complete only, for office reporting
+    on travel/job durations without a live Handl round trip each time."""
+
+    list_display = (
+        "created_at", "locksmith", "order_no", "reg", "make", "model_name",
+        "travel_time", "job_time", "skus_used",
+    )
+    list_filter = ("locksmith",)
+    search_fields = ("order_no", "report_id", "reg", "vin", "locksmith__name")
 
     def has_add_permission(self, request):
         return False

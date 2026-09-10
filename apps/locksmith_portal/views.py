@@ -51,7 +51,14 @@ from apps.job_completion.services.pulling import _report_id_from_order_no
 from apps.locksmiths.models import Locksmith
 from apps.stock_accuracy.models import WeeklyStockCheck
 
-from .models import JobVisit, JobVisitPhoto, PortalDisposal, SafetyAlert, SeniorStaffContact
+from .models import (
+    JobTimingSummary,
+    JobVisit,
+    JobVisitPhoto,
+    PortalDisposal,
+    SafetyAlert,
+    SeniorStaffContact,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -400,6 +407,71 @@ def _write_handl_note(locksmith, report_id, text):
         handl.add_report_note(report_id, text, actioned_by_user_id=actioned_by)
     except Exception:
         logger.exception("Failed to write Handl note for report %s", report_id)
+
+
+def _format_duration(td):
+    """"1h 05m" (or "42m" under an hour) — td is a datetime.timedelta."""
+    total_minutes = max(int(td.total_seconds() // 60), 0)
+    hours, minutes = divmod(total_minutes, 60)
+    if hours:
+        return f"{hours}h {minutes:02d}m"
+    return f"{minutes}m"
+
+
+def _record_job_timing(locksmith, report_id, order_no, visit):
+    """Travel time (on route -> arrived) and job time (arrived ->
+    complete), both from the visit's own stage timestamps: left as a
+    short, standalone Handl note — deliberately separate from the
+    longer completion note built in job_complete, so it's easy to spot
+    and read at a glance on the claim — and saved as a JobTimingSummary
+    row alongside the vehicle details and SKUs used, for office
+    reporting without a live Handl round trip each time. Best-effort,
+    same rationale as _write_handl_note: never blocks the locksmith's
+    own progress through the job."""
+    travel_time = (
+        visit.arrived_at - visit.on_route_at
+        if visit.on_route_at and visit.arrived_at else None
+    )
+    job_time = (
+        visit.completed_at - visit.arrived_at
+        if visit.arrived_at and visit.completed_at else None
+    )
+    if travel_time is None and job_time is None:
+        return
+
+    note_lines = ["Job timing summary:"]
+    if travel_time is not None:
+        note_lines.append(f"Travel time (on route → arrived): {_format_duration(travel_time)}")
+    if job_time is not None:
+        note_lines.append(f"Job time (arrived → complete): {_format_duration(job_time)}")
+    _write_handl_note(locksmith, report_id, "<br />".join(note_lines))
+
+    try:
+        details = get_handl_client().get_job_details([report_id]).get(report_id)
+    except Exception:
+        logger.exception("Failed to fetch Handl job details for timing summary, report %s", report_id)
+        details = None
+
+    skus_used = ", ".join(
+        PortalDisposal.objects.filter(locksmith=locksmith, order_no=order_no)
+        .values_list("part_code", flat=True)
+    )
+
+    JobTimingSummary.objects.update_or_create(
+        visit=visit,
+        defaults={
+            "order_no": order_no,
+            "report_id": report_id,
+            "locksmith": locksmith,
+            "reg": details.reg if details else "",
+            "make": details.make if details else "",
+            "model_name": details.model if details else "",
+            "vin": details.vin if details else "",
+            "travel_time": travel_time,
+            "job_time": job_time,
+            "skus_used": skus_used,
+        },
+    )
 
 
 def _update_optimo_status(order_no, status, *, start_time=None, end_time=None):
@@ -1101,6 +1173,7 @@ def job_complete(request, order_no):
             ])
 
             _write_handl_note(locksmith, report_id, " ".join(note_parts))
+            _record_job_timing(locksmith, report_id, order_no, visit)
             if selected_date == timezone.localdate():
                 _update_optimo_status(
                     order_no,

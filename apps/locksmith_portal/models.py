@@ -216,6 +216,61 @@ class JobVisitPhoto(models.Model):
         return f"{self.get_kind_display()} photo for {self.visit.order_no}"
 
 
+class JobTimingSummary(models.Model):
+    """One flat row per completed JobVisit — vehicle details (from Handl,
+    at the moment the job was marked done) plus the travel/on-site
+    durations computed from the visit's own stage timestamps, held here
+    in our own database so office can query/report on this directly
+    without a live Handl SQL round trip each time. Written alongside
+    (not instead of) the plain-English timing note left on the Handl
+    claim itself — see views.job_complete.
+
+    Purely a reporting summary: never read back to drive behaviour
+    anywhere else in the portal, so it's fine for this to be best-effort
+    and missing for a handful of visits (e.g. Handl's job details
+    temporarily unreachable when the job was completed).
+    """
+
+    visit = models.OneToOneField(
+        JobVisit, on_delete=models.CASCADE, related_name="timing_summary"
+    )
+    order_no = models.CharField(max_length=100)
+    report_id = models.CharField(max_length=100)
+    locksmith = models.ForeignKey(
+        Locksmith, on_delete=models.CASCADE, related_name="job_timing_summaries"
+    )
+
+    reg = models.CharField(max_length=20, blank=True)
+    make = models.CharField(max_length=100, blank=True)
+    model_name = models.CharField(max_length=100, blank=True)
+    vin = models.CharField(max_length=50, blank=True)
+
+    travel_time = models.DurationField(
+        null=True, blank=True,
+        help_text="on_route_at to arrived_at — how long the locksmith was travelling to this job.",
+    )
+    job_time = models.DurationField(
+        null=True, blank=True,
+        help_text="arrived_at to completed_at — how long the locksmith was on site for this job.",
+    )
+
+    # Comma-separated part_code values (see PortalDisposal.part_code) —
+    # a plain string rather than a relation since a disposal can be
+    # edited/added after this summary is first written and this is a
+    # point-in-time snapshot, not a live view.
+    skus_used = models.CharField(max_length=500, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "Job timing summary"
+        verbose_name_plural = "Job timing summaries"
+
+    def __str__(self):
+        return f"Timing summary for {self.order_no}"
+
+
 class SeniorStaffContact(models.Model):
     """Who gets a lone-worker safety alert (panic button, overdue-job
     escalation — see views.panic_alert and the check_overdue_visits

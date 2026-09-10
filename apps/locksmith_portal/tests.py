@@ -16,6 +16,7 @@ from apps.stock_accuracy.models import WeeklyStockCheck
 from apps.stock_accuracy.services.generation import generate_weekly_check
 
 from .models import (
+    JobTimingSummary,
     JobVisit,
     JobVisitPhoto,
     PortalDisposal,
@@ -1543,6 +1544,71 @@ class JobVisitWorkflowTests(TestCase):
         self.mock_optimo.update_completion_status.assert_called_once_with(
             self.order_no, "success", start_time=visit.arrived_at, end_time=visit.completed_at
         )
+
+    def test_complete_writes_separate_timing_note_and_creates_summary_row(self):
+        self.mock_handl.get_job_details.return_value = {
+            "496390": JobDetails(
+                report_id="496390", make="Ford", model="Focus", year="2020",
+                reg="AB12 CDE", vin="VIN12345", service_type="", loss_type="",
+                supplied_service="", net_cost=None,
+            ),
+        }
+        arrived_at = timezone.now()
+        on_route_at = arrived_at - timedelta(minutes=42)
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            stage=JobVisit.Stage.PARTS_DONE, on_route_at=on_route_at, arrived_at=arrived_at,
+            parts_done_at=timezone.now(),
+        )
+        PortalDisposal.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            part_code="TK-100", part_name="Transponder key blank", quantity=1,
+        )
+
+        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        response = self.client.post(
+            url,
+            {
+                "photo_after": [_fake_photo(name="after.jpg")], "notes": "",
+                "outcome": "completed", "completion_signature": "data:image/png;base64,aGVsbG8=",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+
+        self.assertEqual(self.mock_handl.add_report_note.call_count, 2)
+        timing_note = self.mock_handl.add_report_note.call_args_list[1][0][1]
+        self.assertIn("Travel time (on route → arrived): 42m", timing_note)
+        self.assertIn("Job time (arrived → complete):", timing_note)
+
+        summary = JobTimingSummary.objects.get(visit=self._visit())
+        self.assertEqual(summary.order_no, self.order_no)
+        self.assertEqual(summary.locksmith, self.locksmith)
+        self.assertEqual(summary.reg, "AB12 CDE")
+        self.assertEqual(summary.make, "Ford")
+        self.assertEqual(summary.model_name, "Focus")
+        self.assertEqual(summary.vin, "VIN12345")
+        self.assertEqual(summary.travel_time, timedelta(minutes=42))
+        self.assertIsNotNone(summary.job_time)
+        self.assertEqual(summary.skus_used, "TK-100")
+
+    def test_complete_without_stage_timestamps_skips_timing_summary(self):
+        # Existing behaviour — none of the other complete tests set
+        # on_route_at/arrived_at, so add_report_note should still be
+        # called exactly once (the completion note only).
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            stage=JobVisit.Stage.PARTS_DONE, parts_done_at=timezone.now(),
+        )
+        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        self.client.post(
+            url,
+            {
+                "photo_after": [_fake_photo(name="after.jpg")], "notes": "",
+                "outcome": "completed", "completion_signature": "data:image/png;base64,aGVsbG8=",
+            },
+        )
+        self.assertEqual(self.mock_handl.add_report_note.call_count, 1)
+        self.assertFalse(JobTimingSummary.objects.exists())
 
     def test_complete_for_a_past_day_marks_done_but_does_not_push_optimo(self):
         yesterday = self.today - timedelta(days=1)
