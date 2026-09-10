@@ -9,6 +9,12 @@ urlpatterns = [
     path("job-failures/", views.job_failures, name="job_failures"),
     path("job-failures/jobs/", views.failed_jobs_list, name="failed_jobs_list"),
     path("jobs/categorize/", views.categorize_jobs, name="categorize_jobs"),
+    path("disposal-reviews/", views.disposal_reviews, name="disposal_reviews"),
+    path(
+        "disposal-reviews/mark-reviewed/",
+        views.mark_disposal_edits_reviewed,
+        name="mark_disposal_edits_reviewed",
+    ),
     path("model-analysis/", views.model_analysis, name="model_analysis"),
     path("failure-trend/", views.failure_trend, name="failure_trend"),
     path("by-day/", views.jobs_by_day, name="jobs_by_day"),

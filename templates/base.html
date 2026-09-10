@@ -20,6 +20,7 @@
           <a class="section-title" href="{% url 'job_completion:dashboard' %}">Job Completion</a>
           <a class="sub-link" href="{% url 'job_completion:dashboard' %}">Dashboard</a>
           <a class="sub-link" href="{% url 'job_completion:jobs_by_day' %}">By Day</a>
+          <a class="sub-link" href="{% url 'job_completion:disposal_reviews' %}">Disposal edits{% if unreviewed_disposal_edits_count %} <span class="badge">{{ unreviewed_disposal_edits_count }}</span>{% endif %}</a>
         </div>
         <div class="section">
           <a class="section-title" href="{% url 'job_completion:job_failures' %}">Job Failures{% if needs_categorization_count %} <span class="badge">{{ needs_categorization_count }}</span>{% endif %}</a>

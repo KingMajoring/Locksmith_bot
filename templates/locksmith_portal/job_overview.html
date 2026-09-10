@@ -81,6 +81,8 @@
       {% if not is_gain_access or visit.access_method %}
       <a class="btn" href="{% url 'locksmith_portal:job_detail' order_no=order_no %}?date={{ selected_date|date:'Y-m-d' }}">Dispose parts</a>
       {% endif %}
+    {% elif visit.stage == "done" %}
+      <a class="btn-secondary" href="{% url 'locksmith_portal:job_detail' order_no=order_no %}?date={{ selected_date|date:'Y-m-d' }}">Edit parts</a>
     {% endif %}
   </div>
 

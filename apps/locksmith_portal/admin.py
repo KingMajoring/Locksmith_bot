@@ -5,6 +5,7 @@ from .models import (
     JobVisit,
     JobVisitPhoto,
     PortalDisposal,
+    PortalDisposalEdit,
     SafetyAlert,
     SeniorStaffContact,
 )
@@ -20,6 +21,31 @@ class PortalDisposalAdmin(admin.ModelAdmin):
     )
     list_filter = ("handl_synced", "locksmith")
     search_fields = ("order_no", "report_id", "part_code", "locksmith__name")
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(PortalDisposalEdit)
+class PortalDisposalEditAdmin(admin.ModelAdmin):
+    """Read-only — written by edit_disposal/job_detail only. The main
+    place office reviews these is job_completion's "Disposal edits"
+    page, but this gives a searchable fallback."""
+
+    list_display = (
+        "performed_at", "kind", "disposal", "reason", "reviewed_at",
+    )
+    list_filter = ("kind", "reviewed_at")
+    search_fields = (
+        "disposal__order_no", "disposal__report_id", "disposal__locksmith__name",
+        "old_part_code", "new_part_code", "reason",
+    )
 
     def has_add_permission(self, request):
         return False

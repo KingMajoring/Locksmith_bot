@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% load job_completion_extras %}
+{% block title %}Disposal edits — Job Completion{% endblock %}
+{% block content %}
+<h1>Disposal edits</h1>
+<p class="sub">Every time a locksmith edits, voids, or adds a part after a job is already done — always with a reason. Each one also leaves a matching note on the Handl claim.</p>
+
+{% if edits %}
+<form method="post" action="{% url 'job_completion:mark_disposal_edits_reviewed' %}">
+  {% csrf_token %}
+  <table>
+    <tr>
+      <th></th><th>When</th><th>Locksmith</th><th>Job</th><th>Type</th>
+      <th>Change</th><th>Reason</th><th>Reviewed</th>
+    </tr>
+    {% for e in edits %}
+    <tr{% if not e.reviewed_at %} style="font-weight:600;"{% endif %}>
+      <td>{% if not e.reviewed_at %}<input type="checkbox" name="edit_id" value="{{ e.pk }}">{% endif %}</td>
+      <td>{{ e.performed_at|date:"D j M, H:i" }}</td>
+      <td>{{ e.disposal.locksmith.name }}</td>
+      <td><a href="{{ e.disposal.report_id|handl_claim_url }}" target="_blank">{{ e.disposal.order_no }}</a></td>
+      <td>{{ e.get_kind_display }}</td>
+      <td>
+        {% if e.kind == "late_add" %}
+          added {{ e.new_quantity }} x {{ e.new_part_name }} ({{ e.new_part_code }})
+        {% elif e.new_quantity == 0 %}
+          voided {{ e.old_quantity }} x {{ e.old_part_name }} ({{ e.old_part_code }})
+        {% else %}
+          {{ e.old_quantity }} x {{ e.old_part_name }} ({{ e.old_part_code }}) &rarr;
+          {{ e.new_quantity }} x {{ e.new_part_name }} ({{ e.new_part_code }})
+        {% endif %}
+        {% if e.handl_note_error %}<br><span class="sub">Handl wasn't updated: {{ e.handl_note_error }}</span>{% endif %}
+      </td>
+      <td>{{ e.reason }}</td>
+      <td>
+        {% if e.reviewed_at %}
+          {{ e.reviewed_at|date:"D j M" }}{% if e.reviewed_by %} by {{ e.reviewed_by.email }}{% endif %}
+        {% else %}
+          —
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  <p><button class="btn" type="submit">Mark selected reviewed</button></p>
+</form>
+{% else %}
+<p class="empty">No disposal edits recorded yet.</p>
+{% endif %}
+{% endblock %}

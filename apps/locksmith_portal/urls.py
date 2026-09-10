@@ -21,6 +21,11 @@ urlpatterns = [
     path("jobs/<path:order_no>/access-method/", views.job_access_method, name="job_access_method"),
     path("jobs/<path:order_no>/parts/continue/", views.job_parts_continue, name="job_parts_continue"),
     path("jobs/<path:order_no>/parts/", views.job_detail, name="job_detail"),
+    path(
+        "jobs/<path:order_no>/parts/<int:disposal_id>/edit/",
+        views.edit_disposal,
+        name="edit_disposal",
+    ),
     path("jobs/<path:order_no>/complete/", views.job_complete, name="job_complete"),
     path("jobs/<path:order_no>/", views.job_overview, name="job_overview"),
     path("preview/stop/", views.stop_preview, name="stop_preview"),

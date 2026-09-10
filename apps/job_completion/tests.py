@@ -8,6 +8,7 @@ from django.urls import reverse
 from apps.integrations.handl import JobDetails
 from apps.integrations.optimo import OptimoCompletion, OptimoOrderSummary
 from apps.locksmiths.models import Locksmith, OptimoDriverId
+from apps.locksmith_portal.models import PortalDisposal, PortalDisposalEdit
 
 from .models import CompletedJob, FailureCategory, SLATarget
 from .services.benchmarking import duration_benchmark
@@ -1301,6 +1302,63 @@ class CategorizeJobsBulkViewTests(TestCase):
         self.assertContains(response, reverse("job_completion:categorize_jobs"))
         self.assertContains(response, f'name="category_{self.job1.pk}"')
         self.assertContains(response, f'name="category_{self.job2.pk}"')
+
+
+class DisposalReviewsViewTests(TestCase):
+    """Office/manager review page for locksmith-portal disposal edits,
+    voids, and late adds — see apps.locksmith_portal.views.edit_disposal
+    and job_detail's is_late_add path."""
+
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username="office_admin", email="admin@wgtk.co.uk", password="x", is_staff=True
+        )
+        self.client.force_login(self.user)
+        self.locksmith = _make_locksmith()
+        self.disposal = PortalDisposal.objects.create(
+            locksmith=self.locksmith, order_no="1_2026-09-01", report_id="1",
+            part_code="TK-100", part_name="Transponder key blank", quantity=3,
+        )
+        self.edit = PortalDisposalEdit.objects.create(
+            disposal=self.disposal, kind=PortalDisposalEdit.Kind.EDIT,
+            reason="Actually used one more than logged",
+            old_part_code="TK-100", old_part_name="Transponder key blank", old_quantity=2,
+            new_part_code="TK-100", new_part_name="Transponder key blank", new_quantity=3,
+        )
+
+    def test_lists_unreviewed_edit_with_reason_and_change(self):
+        response = self.client.get(reverse("job_completion:disposal_reviews"))
+        self.assertContains(response, "Actually used one more than logged")
+        self.assertContains(response, self.locksmith.name)
+        self.assertContains(response, "TK-100")
+
+    def test_mark_reviewed_sets_reviewed_at_and_by(self):
+        response = self.client.post(
+            reverse("job_completion:mark_disposal_edits_reviewed"),
+            {"edit_id": [str(self.edit.pk)]},
+        )
+        self.assertRedirects(response, reverse("job_completion:disposal_reviews"))
+        self.edit.refresh_from_db()
+        self.assertIsNotNone(self.edit.reviewed_at)
+        self.assertEqual(self.edit.reviewed_by, self.user)
+
+    def test_mark_reviewed_with_nothing_selected_shows_error(self):
+        response = self.client.post(
+            reverse("job_completion:mark_disposal_edits_reviewed"), {}
+        )
+        self.assertRedirects(response, reverse("job_completion:disposal_reviews"))
+        self.edit.refresh_from_db()
+        self.assertIsNone(self.edit.reviewed_at)
+
+    def test_unreviewed_count_context_processor_feeds_nav_badge(self):
+        response = self.client.get(reverse("job_completion:dashboard"))
+        self.assertEqual(response.context["unreviewed_disposal_edits_count"], 1)
+        self.assertContains(response, "Disposal edits")
+
+    def test_login_required(self):
+        self.client.logout()
+        response = self.client.get(reverse("job_completion:disposal_reviews"))
+        self.assertEqual(response.status_code, 302)
 
 
 class PullCompletedJobsCommandTests(TestCase):

@@ -6,6 +6,13 @@
 {% if not is_today %}
   <p class="sub">Adding disposals for {{ selected_date|date:"D j M Y" }}.</p>
 {% endif %}
+
+{% if is_late_add %}
+<div class="card" style="border-left: 4px solid #c0392b;">
+  <p><strong>This job is already marked done.</strong> Anything you add below needs a reason — it's logged on the Handl claim and shown to the office for review.</p>
+</div>
+{% endif %}
+
 <p>Search for a part by SKU or name to record it as used/disposed of on this job. Add more parts if you used more than one.</p>
 
 {% if previous_disposals %}
@@ -14,8 +21,10 @@
   <ul class="disposal-list">
     {% for d in previous_disposals %}
       <li>
-        {{ d.quantity }} x {{ d.part_name }} <span class="sub">({{ d.part_code }})</span>
-        <span class="sub">— {{ d.created_at|date:"D j M, H:i" }}{% if d.handl_error %}, not yet synced to Soter{% endif %}</span>
+        {% if d.quantity == 0 %}<s>{{ d.part_name }} <span class="sub">({{ d.part_code }})</span></s> <span class="sub">— voided</span>
+        {% else %}{{ d.quantity }} x {{ d.part_name }} <span class="sub">({{ d.part_code }})</span>{% endif %}
+        <span class="sub">— {{ d.created_at|date:"D j M, H:i" }}{% if d.handl_error %}, not yet synced to Soter{% endif %}{% if d.needs_review %}, edited{% endif %}</span>
+        <a class="sub" href="{% url 'locksmith_portal:edit_disposal' order_no=order_no disposal_id=d.pk %}?date={{ selected_date|date:'Y-m-d' }}">Edit</a>
       </li>
     {% endfor %}
   </ul>
@@ -44,6 +53,12 @@
     </div>
   </div>
   <p><button type="button" class="btn-secondary" id="add-row">+ Add another part</button></p>
+  {% if is_late_add %}
+    <p>
+      <label for="late_add_reason">Why are you adding this now?</label><br>
+      <textarea name="late_add_reason" id="late_add_reason" rows="2" style="width:100%;" required></textarea>
+    </p>
+  {% endif %}
   <p style="margin-top:1rem;"><button class="btn" type="submit" id="submit-dispose">Save disposals</button></p>
 </form>
 

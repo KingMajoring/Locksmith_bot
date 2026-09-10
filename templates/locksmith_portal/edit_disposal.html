@@ -1,0 +1,87 @@
+{% extends "locksmith_portal/base.html" %}
+{% block title %}Edit part — WGTK Locksmith Portal{% endblock %}
+{% block content %}
+<a class="back-link" href="{{ job_detail_url }}">&larr; Back</a>
+<h1>Edit recorded part</h1>
+<p class="sub">Currently: {{ disposal.quantity }} x {{ disposal.part_name }} ({{ disposal.part_code }})</p>
+
+{{ stock_options|json_script:"stock-options-data" }}
+{{ all_parts_options|json_script:"all-parts-options-data" }}
+
+<form method="post" class="card">
+  {% csrf_token %}
+  <div class="part-search">
+    <input type="text" name="part_code" id="part_code" placeholder="Search SKU or part name" autocomplete="off"
+           value="{{ disposal.part_code }} — {{ disposal.part_name }}">
+    <div class="part-suggestions" hidden></div>
+  </div>
+  <p>
+    <label for="quantity">Quantity (0 voids this disposal entirely)</label><br>
+    <input type="number" min="0" inputmode="numeric" name="quantity" id="quantity" value="{{ disposal.quantity }}">
+  </p>
+  <p>
+    <label for="reason">Why are you changing this?</label><br>
+    <textarea name="reason" id="reason" rows="3" style="width:100%;" required></textarea>
+  </p>
+  <p class="sub">This is logged on the Handl claim and reviewed by the office.</p>
+  <button class="btn" type="submit">Save correction</button>
+</form>
+
+<script>
+  // Same custom suggestions dropdown as the "dispose parts" page (native
+  // <datalist> is unreliable on mobile) — here against a single input,
+  // searching both this locksmith's own van stock and the full parts
+  // catalogue (a correction might need a part they don't personally carry).
+  var stockOptions = JSON.parse(document.getElementById('stock-options-data').textContent);
+  var allPartsOptions = JSON.parse(document.getElementById('all-parts-options-data').textContent);
+  var seenCodes = {};
+  var options = [];
+  stockOptions.concat(allPartsOptions).forEach(function (opt) {
+    if (seenCodes[opt.code]) return;
+    seenCodes[opt.code] = true;
+    options.push(opt);
+  });
+
+  function optionLabel(opt) {
+    return opt.code + ' — ' + opt.name + (opt.qty !== undefined ? ' (have ' + opt.qty + ')' : '');
+  }
+  function optionValue(opt) {
+    return opt.code + ' — ' + opt.name;
+  }
+  function matchingOptions(query) {
+    query = query.trim().toLowerCase();
+    if (!query) return [];
+    return options.filter(function (opt) {
+      return opt.code.toLowerCase().indexOf(query) !== -1 || opt.name.toLowerCase().indexOf(query) !== -1;
+    }).slice(0, 20);
+  }
+
+  var input = document.getElementById('part_code');
+  var box = input.nextElementSibling;
+
+  function closeSuggestions() {
+    box.innerHTML = '';
+    box.hidden = true;
+  }
+  function showSuggestions() {
+    var matches = matchingOptions(input.value);
+    box.innerHTML = '';
+    if (matches.length === 0) { box.hidden = true; return; }
+    matches.forEach(function (opt) {
+      var item = document.createElement('div');
+      item.className = 'part-suggestion';
+      item.textContent = optionLabel(opt);
+      item.addEventListener('mousedown', function (e) {
+        e.preventDefault();
+        input.value = optionValue(opt);
+        closeSuggestions();
+      });
+      box.appendChild(item);
+    });
+    box.hidden = false;
+  }
+  input.addEventListener('input', showSuggestions);
+  input.addEventListener('focus', function () { if (input.value.trim()) showSuggestions(); });
+  input.addEventListener('blur', function () { closeSuggestions(); });
+</script>
+{% endblock %}

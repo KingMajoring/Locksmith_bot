@@ -56,6 +56,7 @@ from .models import (
     JobVisit,
     JobVisitPhoto,
     PortalDisposal,
+    PortalDisposalEdit,
     SafetyAlert,
     SeniorStaffContact,
 )
@@ -346,11 +347,14 @@ def _selected_date(request):
 def _disposal_totals(locksmith, order_nos):
     """order_no -> {"quantity": total parts disposed, "parts": distinct
     disposal lines} for jobs already actioned through the portal — the
-    green tick + count shown against each job on the dashboard."""
+    green tick + count shown against each job on the dashboard. Excludes
+    disposals voided down to 0 via edit_disposal — nothing was really
+    disposed, so it shouldn't count."""
     if not order_nos:
         return {}
     rows = (
         PortalDisposal.objects.filter(locksmith=locksmith, order_no__in=order_nos)
+        .exclude(quantity=0)
         .values("order_no")
         .annotate(quantity=Sum("quantity"), parts=Count("id"))
     )
@@ -454,6 +458,7 @@ def _record_job_timing(locksmith, report_id, order_no, visit):
 
     skus_used = ", ".join(
         PortalDisposal.objects.filter(locksmith=locksmith, order_no=order_no)
+        .exclude(quantity=0)
         .values_list("part_code", flat=True)
     )
 
@@ -579,9 +584,11 @@ def _previous_visits_summary(report_id, exclude_order_no):
     if not visits:
         return []
 
-    disposals = PortalDisposal.objects.filter(
-        order_no__in=[v.order_no for v in visits]
-    ).order_by("part_code")
+    disposals = (
+        PortalDisposal.objects.filter(order_no__in=[v.order_no for v in visits])
+        .exclude(quantity=0)
+        .order_by("part_code")
+    )
     parts_by_order = {}
     for d in disposals:
         parts_by_order.setdefault(d.order_no, []).append(
@@ -723,9 +730,11 @@ def job_overview(request, order_no):
     locksmith = ctx["locksmith"]
     report_id = ctx["report_id"]
 
-    disposal_count = PortalDisposal.objects.filter(
-        locksmith=locksmith, order_no=order_no
-    ).count()
+    disposal_count = (
+        PortalDisposal.objects.filter(locksmith=locksmith, order_no=order_no)
+        .exclude(quantity=0)
+        .count()
+    )
 
     # For the "Mark on route" step's navigation offer/auto-open — best
     # effort, same as every other Handl job-details lookup on this page.
@@ -1277,11 +1286,16 @@ def job_detail(request, order_no):
     visit = ctx["visit"]
 
     overview_url = f"{reverse('locksmith_portal:job_overview', args=[order_no])}?date={selected_date.isoformat()}"
-    if visit.stage not in (JobVisit.Stage.ARRIVED, JobVisit.Stage.PARTS_DONE):
+    if visit.stage not in (JobVisit.Stage.ARRIVED, JobVisit.Stage.PARTS_DONE, JobVisit.Stage.DONE):
         messages.error(request, "Mark yourself arrived (with before photos) first.")
         return redirect(overview_url)
 
-    if not visit.access_method and _needs_access_method(report_id):
+    # Once a job's marked done there's no further "arrived"/"access
+    # method" gating to worry about — this is purely the late-add path,
+    # and every part added here needs a reason (see below).
+    is_late_add = visit.stage == JobVisit.Stage.DONE
+
+    if not is_late_add and not visit.access_method and _needs_access_method(report_id):
         messages.error(request, "Record how you gained access first.")
         return redirect(
             f"{reverse('locksmith_portal:job_access_method', args=[order_no])}?date={selected_date.isoformat()}"
@@ -1298,6 +1312,16 @@ def job_detail(request, order_no):
     ).order_by("-created_at")
 
     if request.method == "POST":
+        late_add_reason = request.POST.get("late_add_reason", "").strip()
+        if is_late_add and not late_add_reason:
+            messages.error(
+                request,
+                "This job is already marked done — add a short note explaining "
+                "why you're adding a part now (it's logged for office review).",
+            )
+            job_url = f"{reverse('locksmith_portal:job_detail', args=[order_no])}?date={selected_date.isoformat()}"
+            return redirect(job_url)
+
         by_code = {line.part_code.upper(): line for line in stock_lines}
         by_name = {line.part_name.lower(): line for line in stock_lines}
         catalogue_by_code = {code.upper(): (code, name) for code, name in all_parts}
@@ -1375,6 +1399,7 @@ def job_detail(request, order_no):
             requested[line.part_code] = requested.get(line.part_code, 0) + qty
 
         disposed_any = False
+        created_disposals: list[PortalDisposal] = []
         for part_code, qty in requested.items():
             line = by_code[part_code.upper()]
             if qty > line.qty:
@@ -1400,6 +1425,7 @@ def job_detail(request, order_no):
                 part_name=line.part_name,
                 quantity=qty,
             )
+            created_disposals.append(disposal)
             try:
                 handl.record_disposal(
                     soter_id,
@@ -1441,6 +1467,7 @@ def job_detail(request, order_no):
                 quantity=qty,
                 client_supplied=True,
             )
+            created_disposals.append(disposal)
             # Written against the same "(V)" van id as a normal disposal
             # (see record_disposal) purely so it's attributed to this
             # locksmith in Handl's reporting — record_client_supplied_disposal
@@ -1484,6 +1511,38 @@ def job_detail(request, order_no):
             disposal.save(update_fields=["handl_synced"])
             disposed_any = True
 
+        if is_late_add and created_disposals:
+            parts_summary = ", ".join(
+                f"{d.quantity} x {d.part_name} ({d.part_code})" for d in created_disposals
+            )
+            note = (
+                f"'{locksmith.van_soter_display_name}' added a part to this job after "
+                f"it was already marked done: {parts_summary}. Reason: {late_add_reason}"
+            )
+            try:
+                handl.add_report_note(
+                    report_id, note,
+                    actioned_by_user_id=(
+                        locksmith.soter_user_id or settings.HANDL_PORTAL_CREATED_BY_USER_ID
+                    ),
+                )
+                note_error = ""
+            except Exception as exc:
+                note_error = str(exc)
+            for d in created_disposals:
+                PortalDisposalEdit.objects.create(
+                    disposal=d,
+                    kind=PortalDisposalEdit.Kind.LATE_ADD,
+                    reason=late_add_reason,
+                    performed_by=request.user,
+                    new_part_code=d.part_code,
+                    new_part_name=d.part_name,
+                    new_quantity=d.quantity,
+                    handl_note_error=note_error,
+                )
+                d.needs_review = True
+                d.save(update_fields=["needs_review"])
+
         if disposed_any:
             messages.success(request, "Parts disposed and saved.")
         job_url = f"{reverse('locksmith_portal:job_detail', args=[order_no])}?date={selected_date.isoformat()}"
@@ -1508,6 +1567,197 @@ def job_detail(request, order_no):
             "is_today": selected_date == timezone.localdate(),
             "dashboard_url": dashboard_url,
             "overview_url": overview_url,
+            "is_preview": _is_preview(request),
+            "is_late_add": is_late_add,
+        },
+    )
+
+
+@login_required
+def edit_disposal(request, order_no, disposal_id):
+    """Correct an already-recorded disposal — any part, any time, but
+    always with a reason: locksmiths can edit any of their own recorded
+    parts, but every edit (including voiding one down to 0, when it
+    shouldn't have been recorded at all) is logged as a
+    PortalDisposalEdit plus a Handl note, for office/managers to review
+    (see apps.job_completion.views.disposal_reviews).
+
+    Reuses the already-proven set_locksmith_stock_quantity (absolute
+    correction) rather than writing new low-level Inventory_Disposals/
+    Inventory_Locksmith_Stock SQL: read the current summed stock via
+    get_expected_stock, work out what it should become after giving
+    back the old quantity and/or taking the new one, and set it. Never
+    touches the original Inventory_Disposals row from when this was
+    first recorded — that stays as the historical fact; the correction
+    is its own new event (stock adjustment + note), same as the real
+    world (void + reissue) rather than editing history in place."""
+    ctx, early = _job_visit_context(request, order_no)
+    if ctx is None:
+        return early
+    locksmith = ctx["locksmith"]
+    report_id = ctx["report_id"]
+    selected_date = ctx["selected_date"]
+    job_detail_url = f"{reverse('locksmith_portal:job_detail', args=[order_no])}?date={selected_date.isoformat()}"
+
+    disposal = get_object_or_404(
+        PortalDisposal, pk=disposal_id, locksmith=locksmith, order_no=order_no
+    )
+
+    handl = get_handl_client()
+    soter_ids = locksmith.soter_id_list
+    stock_lines = handl.list_current_stock(soter_ids)
+    all_parts = handl.list_all_parts()
+
+    if request.method == "POST":
+        reason = request.POST.get("reason", "").strip()
+        raw_part = request.POST.get("part_code", "").strip()
+        raw_qty = request.POST.get("quantity", "").strip()
+
+        if not reason:
+            messages.error(request, "Add a reason for this correction — it's logged for review.")
+            return redirect(request.path)
+
+        try:
+            new_quantity = int(raw_qty)
+        except ValueError:
+            messages.error(request, f"'{raw_qty}' isn't a valid quantity.")
+            return redirect(request.path)
+        if new_quantity < 0:
+            messages.error(request, "Quantity can't be negative.")
+            return redirect(request.path)
+
+        old_part_code, old_part_name, old_quantity = (
+            disposal.part_code, disposal.part_name, disposal.quantity,
+        )
+
+        by_code = {line.part_code.upper(): line for line in stock_lines}
+        by_name = {line.part_name.lower(): line for line in stock_lines}
+        catalogue_by_code = {code.upper(): (code, name) for code, name in all_parts}
+        catalogue_by_name = {name.lower(): (code, name) for code, name in all_parts}
+
+        def _resolve_any_part(raw_input):
+            candidate = raw_input.split(" — ", 1)[0].strip()
+            line = (
+                by_code.get(candidate.upper())
+                or by_name.get(candidate.lower())
+                or by_name.get(raw_input.strip().lower())
+            )
+            if line is not None:
+                return (line.part_code, line.part_name)
+            return (
+                catalogue_by_code.get(candidate.upper())
+                or catalogue_by_name.get(candidate.lower())
+                or catalogue_by_name.get(raw_input.strip().lower())
+            )
+
+        if new_quantity == 0 or not raw_part:
+            # Voiding doesn't need a part typed in — there's nothing new
+            # to resolve to, just correct the original back to 0. Same
+            # if the part field was left untouched/blank for any other
+            # reason: no part change, just a quantity correction.
+            new_part_code, new_part_name = old_part_code, old_part_name
+        else:
+            resolved = _resolve_any_part(raw_part)
+            if resolved is None:
+                messages.error(request, f"Couldn't find '{raw_part}' in Handl's parts list.")
+                return redirect(request.path)
+            new_part_code, new_part_name = resolved
+
+        if old_part_code == new_part_code and old_quantity == new_quantity:
+            messages.error(request, "That's the same as what's already recorded — nothing to change.")
+            return redirect(request.path)
+
+        actioned_by = locksmith.soter_user_id or settings.HANDL_PORTAL_CREATED_BY_USER_ID
+        display_name = locksmith.van_soter_display_name
+        handl_error = ""
+        try:
+            expected = handl.get_expected_stock(soter_ids, list({old_part_code, new_part_code}))
+
+            # Work out and validate both corrections *before* writing
+            # either — a same-part correction is one absolute-set, a
+            # part change is two (give back the old, take the new), and
+            # neither should partially apply if the other is short on
+            # stock (giving back the old part while failing to take the
+            # new one would leave Handl's van stock overcorrected).
+            if old_part_code == new_part_code:
+                current_qty = expected[old_part_code].expected_qty if old_part_code in expected else 0
+                corrected = current_qty + old_quantity - new_quantity
+                if corrected < 0:
+                    raise ValueError(
+                        f"Only {current_qty + old_quantity} of {old_part_code} available — "
+                        f"can't take {new_quantity}."
+                    )
+                corrections = [(old_part_code, corrected)]
+            else:
+                old_current_qty = expected[old_part_code].expected_qty if old_part_code in expected else 0
+                corrections = [(old_part_code, old_current_qty + old_quantity)]
+                if new_quantity > 0:
+                    new_current_qty = expected[new_part_code].expected_qty if new_part_code in expected else 0
+                    corrected_new = new_current_qty - new_quantity
+                    if corrected_new < 0:
+                        raise ValueError(
+                            f"Only {new_current_qty} of {new_part_code} available — "
+                            f"can't take {new_quantity}."
+                        )
+                    corrections.append((new_part_code, corrected_new))
+
+            for code, quantity in corrections:
+                handl.set_locksmith_stock_quantity(
+                    soter_ids, code, quantity,
+                    actioned_by_user_id=actioned_by, locksmith_display_name=display_name,
+                )
+
+            if new_quantity == 0:
+                note = (
+                    f"'{display_name}' voided a previous disposal on this job: "
+                    f"{old_quantity} x {old_part_name} ({old_part_code}). Reason: {reason}"
+                )
+            else:
+                note = (
+                    f"'{display_name}' corrected a disposal on this job: "
+                    f"{old_quantity} x {old_part_name} ({old_part_code}) is now "
+                    f"{new_quantity} x {new_part_name} ({new_part_code}). Reason: {reason}"
+                )
+            handl.add_report_note(report_id, note, actioned_by_user_id=actioned_by)
+        except Exception as exc:
+            handl_error = str(exc)
+            messages.warning(
+                request,
+                f"Saved the correction here, but Handl wasn't updated: {exc}. "
+                "The office will need to fix this in Handl directly.",
+            )
+
+        PortalDisposalEdit.objects.create(
+            disposal=disposal,
+            kind=PortalDisposalEdit.Kind.EDIT,
+            reason=reason,
+            performed_by=request.user,
+            old_part_code=old_part_code, old_part_name=old_part_name, old_quantity=old_quantity,
+            new_part_code=new_part_code, new_part_name=new_part_name, new_quantity=new_quantity,
+            handl_note_error=handl_error,
+        )
+        disposal.part_code = new_part_code
+        disposal.part_name = new_part_name
+        disposal.quantity = new_quantity
+        disposal.needs_review = True
+        disposal.save(update_fields=["part_code", "part_name", "quantity", "needs_review"])
+
+        if not handl_error:
+            messages.success(request, "Correction saved and sent to Handl.")
+        return redirect(job_detail_url)
+
+    return render(
+        request,
+        "locksmith_portal/edit_disposal.html",
+        {
+            "locksmith": locksmith,
+            "disposal": disposal,
+            "stock_options": [
+                {"code": line.part_code, "name": line.part_name, "qty": line.qty}
+                for line in stock_lines
+            ],
+            "all_parts_options": [{"code": code, "name": name} for code, name in all_parts],
+            "job_detail_url": job_detail_url,
             "is_preview": _is_preview(request),
         },
     )

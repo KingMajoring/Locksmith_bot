@@ -7,6 +7,7 @@ from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.management import call_command
 from django.core.management.base import CommandError
+from django.db import models
 from django.http import HttpResponseForbidden, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
@@ -14,6 +15,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 
 from apps.locksmiths.models import Locksmith
+from apps.locksmith_portal.models import PortalDisposalEdit
 
 from .models import CompletedJob, FailureCategory
 from .services.benchmarking import duration_benchmark
@@ -171,6 +173,36 @@ def categorize_jobs(request):
     else:
         messages.error(request, "Nothing selected — choose a reason for at least one job.")
     return redirect("job_completion:job_failures")
+
+
+@login_required
+def disposal_reviews(request):
+    """Every locksmith-portal disposal edit, void, or late add — a
+    locksmith can correct any part they've recorded, but every such
+    correction requires a reason and lands here for office/managers to
+    review (in addition to the matching note left on the Handl claim
+    itself). Same "no separate manager role" access as the rest of this
+    app — anyone with office access can see and mark these reviewed."""
+    edits = list(
+        PortalDisposalEdit.objects.select_related(
+            "disposal", "disposal__locksmith", "performed_by", "reviewed_by",
+        ).order_by(models.F("reviewed_at").asc(nulls_first=True), "-performed_at")
+    )
+    return render(request, "job_completion/disposal_reviews.html", {"edits": edits})
+
+
+@login_required
+@require_POST
+def mark_disposal_edits_reviewed(request):
+    ids = [pk for pk in request.POST.getlist("edit_id") if pk.isdigit()]
+    updated = PortalDisposalEdit.objects.filter(pk__in=ids, reviewed_at__isnull=True).update(
+        reviewed_at=timezone.now(), reviewed_by=request.user,
+    )
+    if updated:
+        messages.success(request, f"Marked {updated} entr{'y' if updated == 1 else 'ies'} reviewed.")
+    else:
+        messages.error(request, "Nothing selected.")
+    return redirect("job_completion:disposal_reviews")
 
 
 @login_required

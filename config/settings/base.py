@@ -67,6 +67,7 @@ TEMPLATES = [
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
                 "apps.job_completion.context_processors.needs_categorization_count",
+                "apps.job_completion.context_processors.unreviewed_disposal_edits_count",
                 "apps.locksmith_portal.context_processors.panic_contact",
             ],
         },

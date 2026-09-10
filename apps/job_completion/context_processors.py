@@ -12,3 +12,15 @@ def needs_categorization_count(request):
     from .services.reporting import needs_categorization_queryset
 
     return {"needs_categorization_count": needs_categorization_queryset().count()}
+
+
+def unreviewed_disposal_edits_count(request):
+    if not request.user.is_authenticated:
+        return {}
+    from apps.locksmith_portal.models import PortalDisposalEdit
+
+    return {
+        "unreviewed_disposal_edits_count": PortalDisposalEdit.objects.filter(
+            reviewed_at__isnull=True
+        ).count()
+    }

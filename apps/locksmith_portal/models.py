@@ -36,11 +36,72 @@ class PortalDisposal(models.Model):
     # historical parts-usage reporting still has it.
     client_supplied = models.BooleanField(default=False)
 
+    # Set once this row has at least one PortalDisposalEdit against it
+    # (an edit, a void, or a late add) — a quick flag for the "edited"
+    # indicator on the locksmith's own job page, without joining out to
+    # `edits` just to check whether any exist.
+    needs_review = models.BooleanField(default=False)
+
     class Meta:
         ordering = ["-created_at"]
 
     def __str__(self):
         return f"{self.locksmith} disposed {self.quantity} x {self.part_code} on {self.order_no}"
+
+
+class PortalDisposalEdit(models.Model):
+    """Audit trail entry for a PortalDisposal that was changed after the
+    fact: either an office-visible correction to an already-recorded
+    disposal (kind=EDIT — includes voiding one entirely, by editing its
+    quantity down to 0), or a brand new disposal added once the job was
+    already marked done (kind=LATE_ADD, where old_* is left blank since
+    there's nothing to compare against).
+
+    Locksmiths can edit any of their own recorded disposals at any time,
+    but a reason is always required — this table, plus the matching
+    Policy_History note left on the Handl claim (see
+    apps.locksmith_portal.views.edit_disposal/job_detail), is what lets
+    office/managers see what changed, when, by whom, and why.
+    """
+
+    class Kind(models.TextChoices):
+        EDIT = "edit", "Edited"
+        LATE_ADD = "late_add", "Added after job completed"
+
+    disposal = models.ForeignKey(PortalDisposal, on_delete=models.CASCADE, related_name="edits")
+    kind = models.CharField(max_length=20, choices=Kind.choices)
+    reason = models.TextField()
+    performed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+    performed_at = models.DateTimeField(auto_now_add=True)
+
+    old_part_code = models.CharField(max_length=64, blank=True)
+    old_part_name = models.CharField(max_length=200, blank=True)
+    old_quantity = models.PositiveIntegerField(null=True, blank=True)
+
+    new_part_code = models.CharField(max_length=64, blank=True)
+    new_part_name = models.CharField(max_length=200, blank=True)
+    new_quantity = models.PositiveIntegerField(null=True, blank=True)
+
+    # Set if pushing the correction/note to Handl failed — the local
+    # record still stands (office can fix Handl directly), same
+    # best-effort spirit as PortalDisposal.handl_error.
+    handl_note_error = models.TextField(blank=True)
+
+    # Office/manager review, from the disposal_reviews page — separate
+    # from the Handl write succeeding: this is "someone looked at this
+    # and it's fine", not "Handl was updated".
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+
+    class Meta:
+        ordering = ["-performed_at"]
+
+    def __str__(self):
+        return f"{self.get_kind_display()} — {self.disposal} ({self.performed_at:%Y-%m-%d %H:%M})"
 
 
 class JobVisit(models.Model):
