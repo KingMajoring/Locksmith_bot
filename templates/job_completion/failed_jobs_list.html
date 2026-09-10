@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load job_completion_extras %}
 {% block title %}{{ heading }} — Job Completion{% endblock %}
 {% block content %}
 <a class="back-link" href="{% url 'job_completion:job_failures' %}">&larr; Back to Job Failures</a>
@@ -26,7 +27,7 @@
     <tr>
       <td>{{ job.job_date }}</td>
       <td>{% if job.locksmith %}<a href="{% url 'job_completion:locksmith_report' job.locksmith.pk %}">{{ job.locksmith.name }}</a>{% else %}Unmatched ({{ job.driver_serial }}){% endif %}</td>
-      <td>{{ job.order_no }}</td>
+      <td><a href="{{ job.report_id|handl_claim_url }}" target="_blank">{{ job.order_no }}</a></td>
       <td>{{ job.make }}</td>
       <td>{{ job.model }}</td>
       <td>{{ job.loss_type }}</td>

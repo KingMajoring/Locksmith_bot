@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load job_completion_extras %}
 {% block title %}Job Failures — Job Completion{% endblock %}
 {% block content %}
 <h1>Job Failures</h1>
@@ -12,7 +13,7 @@
       <tr><th>Order</th><th>Date</th><th>Locksmith</th><th>Service</th><th>Note</th><th>Parts cost</th><th>Selling price</th><th>Category</th><th>Sufficient notes?</th></tr>
       {% for job in needs_categorization %}
       <tr>
-        <td>{{ job.order_no }}</td>
+        <td><a href="{{ job.report_id|handl_claim_url }}" target="_blank">{{ job.order_no }}</a></td>
         <td>{{ job.job_date }}</td>
         <td>{% if job.locksmith %}{{ job.locksmith.name }}{% else %}Unmatched ({{ job.driver_serial }}){% endif %}</td>
         <td>{{ job.service_type }}</td>

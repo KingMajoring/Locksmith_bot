@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load job_completion_extras %}
 {% block title %}Jobs by Day — Job Completion{% endblock %}
 {% block content %}
 <h1>Jobs by Day</h1>
@@ -52,7 +53,7 @@
     {% for job in jobs %}
     <tr class="{% if job.review_flags %}row-warn{% endif %}">
       <td>{% if job.locksmith %}<a href="{% url 'job_completion:locksmith_report' job.locksmith.pk %}">{{ job.locksmith.name }}</a>{% else %}Unmatched ({{ job.driver_serial }}){% endif %}</td>
-      <td>{{ job.order_no }}</td>
+      <td><a href="{{ job.report_id|handl_claim_url }}" target="_blank">{{ job.order_no }}</a></td>
       <td>{{ job.get_status_display }}</td>
       <td>{{ job.make }}</td>
       <td>{{ job.model }}</td>

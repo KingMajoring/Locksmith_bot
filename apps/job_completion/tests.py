@@ -43,6 +43,24 @@ from .services.trends import (
 )
 
 
+class HandlClaimUrlFilterTests(TestCase):
+    def test_formats_report_id_into_the_template(self):
+        from .templatetags.job_completion_extras import handl_claim_url
+
+        with override_settings(
+            HANDL_CLAIM_URL_TEMPLATE="https://example.test/Claim?ReportID={report_id}"
+        ):
+            self.assertEqual(
+                handl_claim_url("499490"), "https://example.test/Claim?ReportID=499490"
+            )
+
+    def test_blank_report_id_returns_empty_string(self):
+        from .templatetags.job_completion_extras import handl_claim_url
+
+        self.assertEqual(handl_claim_url(""), "")
+        self.assertEqual(handl_claim_url(None), "")
+
+
 class FakeOptimoClient:
     """Deterministic stand-in for OptimoClient, for tests that need exact
     control rather than the (seeded-but-opaque) MockOptimoClient."""
@@ -976,6 +994,17 @@ class ViewsSmokeTests(TestCase):
         self.assertEqual(job.parts_cost, 25.0)
         self.assertContains(response, "£25.0")
         self.assertContains(response, "£150.0")
+
+    def test_job_failures_order_links_to_handl_claim(self):
+        CompletedJob.objects.create(
+            order_no="499490_2026-09-09", report_id="499490", job_date=date(2026, 9, 1),
+            status=CompletedJob.Status.FAILED, locksmith=self.locksmith,
+        )
+        response = self.client.get(reverse("job_completion:job_failures"))
+        self.assertContains(
+            response,
+            'href="https://soterdev1.azurewebsites.net/ClaimDetails.cshtml?ReportID=499490"',
+        )
 
     def test_job_failures_category_and_master_reason_link_to_failed_jobs_list(self):
         category = FailureCategory.objects.create(name="Wrong parts")

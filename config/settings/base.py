@@ -104,6 +104,16 @@ HANDL_SQL_WRITE_PASSWORD = env("HANDL_SQL_WRITE_PASSWORD", default="")
 # was added, so their own id isn't known yet.
 HANDL_PORTAL_CREATED_BY_USER_ID = env.int("HANDL_PORTAL_CREATED_BY_USER_ID", default=0)
 
+# Handl's own claim page, for office reports to link an order/ReportID
+# straight through to the real claim in Handl's UI rather than making
+# someone paste the ReportID into Handl's own search by hand. Must
+# contain "{report_id}", filled in with the plain numeric ReportID (no
+# date suffix) — see templates using handl_claim_url in job_completion.
+HANDL_CLAIM_URL_TEMPLATE = env(
+    "HANDL_CLAIM_URL_TEMPLATE",
+    default="https://soterdev1.azurewebsites.net/ClaimDetails.cshtml?ReportID={report_id}",
+)
+
 # Locksmith portal job-visit photos (on-route/arrived/completed — see
 # apps/integrations/photos.py for why this can't just go into Handl).
 # Until set, get_photo_storage() falls back to MockPhotoStorage (local
