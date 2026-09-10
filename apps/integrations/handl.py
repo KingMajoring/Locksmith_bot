@@ -447,6 +447,19 @@ class MockHandlClient(HandlClient):
         pass
 
 
+def _handl_now():
+    """Naive UK wall-clock time (BST-aware), for timestamp columns Handl
+    itself displays as-is with no timezone conversion — confirmed live:
+    using plain UTC here (as this used to) wrote timestamps that showed
+    up in Handl's own UI a full hour behind real UK time whenever BST is
+    in effect. Handl's own DB columns are plain `datetime`, not
+    timezone-aware, so this deliberately strips tzinfo after converting
+    rather than passing an aware datetime through to pymssql."""
+    from django.utils import timezone as django_timezone
+
+    return django_timezone.localtime(django_timezone.now()).replace(tzinfo=None)
+
+
 def _insert_policy_history_note(cursor, *, report_id: str, notes: str, actioned_by_user_id: int, when) -> None:
     """Shared by record_disposal and add_report_note — StatusID=23/
     PersonID=NULL is the exact combination confirmed live against
@@ -949,8 +962,6 @@ class SQLHandlClient(HandlClient):
         # Soter user id (see Locksmith.soter_user_id, wiki.LocksmithLogin)
         # — confirmed live that real disposals attribute to the
         # individual locksmith, not a shared account.
-        from datetime import datetime as _datetime
-
         with self._write_connection() as conn:
             cursor = conn.cursor()
 
@@ -1017,7 +1028,7 @@ class SQLHandlClient(HandlClient):
                     f"in Inventory_Locksmith_Stock for locksmith {soter_locksmith_id!r}."
                 )
 
-            now = _datetime.utcnow()
+            now = _handl_now()
             cursor.execute(
                 """
                 INSERT INTO Inventory_Disposals
@@ -1068,8 +1079,6 @@ class SQLHandlClient(HandlClient):
         # (record_disposal's table has no trigger doing this
         # automatically either — confirmed via sys.triggers — so simply
         # not running that UPDATE is enough).
-        from datetime import datetime as _datetime
-
         with self._write_connection() as conn:
             cursor = conn.cursor()
 
@@ -1089,7 +1098,7 @@ class SQLHandlClient(HandlClient):
                 # back to a plain note instead.
                 return False
 
-            now = _datetime.utcnow()
+            now = _handl_now()
             cursor.execute(
                 """
                 INSERT INTO Inventory_Disposals
@@ -1122,13 +1131,11 @@ class SQLHandlClient(HandlClient):
         return True
 
     def add_report_note(self, report_id: str, notes: str, *, actioned_by_user_id: int) -> None:
-        from datetime import datetime as _datetime
-
         with self._write_connection() as conn:
             cursor = conn.cursor()
             _insert_policy_history_note(
                 cursor, report_id=report_id, notes=notes,
-                actioned_by_user_id=actioned_by_user_id, when=_datetime.utcnow(),
+                actioned_by_user_id=actioned_by_user_id, when=_handl_now(),
             )
             conn.commit()
 

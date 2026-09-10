@@ -172,6 +172,35 @@ def _fake_connection_multi(*fetchall_results):
     return conn
 
 
+class HandlNowTests(TestCase):
+    """_handl_now() writes timestamps Handl displays as-is with no
+    timezone conversion of its own — confirmed live that plain UTC
+    (datetime.utcnow(), what this used to be) showed up in Handl's UI a
+    full hour behind real UK time whenever BST is in effect."""
+
+    def test_returns_naive_uk_local_time_during_bst(self):
+        from .handl import _handl_now
+
+        # 2026-09-10 10:00 UTC is during BST, so UK local is 11:00.
+        aware_utc = datetime(2026, 9, 10, 10, 0, 0, tzinfo=dt_timezone.utc)
+        with patch("django.utils.timezone.now", return_value=aware_utc):
+            result = _handl_now()
+
+        self.assertIsNone(result.tzinfo)
+        self.assertEqual(result, datetime(2026, 9, 10, 11, 0, 0))
+
+    def test_returns_naive_uk_local_time_outside_bst(self):
+        from .handl import _handl_now
+
+        # 2026-01-10 10:00 UTC is outside BST, so UK local matches UTC.
+        aware_utc = datetime(2026, 1, 10, 10, 0, 0, tzinfo=dt_timezone.utc)
+        with patch("django.utils.timezone.now", return_value=aware_utc):
+            result = _handl_now()
+
+        self.assertIsNone(result.tzinfo)
+        self.assertEqual(result, datetime(2026, 1, 10, 10, 0, 0))
+
+
 class SQLHandlClientTests(TestCase):
     """Exercises the real Soter queries against a mocked pymssql connection
     (no live DB access from this environment) — catches SQL/mapping bugs
