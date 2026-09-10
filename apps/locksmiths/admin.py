@@ -56,7 +56,16 @@ class LocksmithAdmin(admin.ModelAdmin):
     search_fields = ("name", "email", "soter_ids__soter_locksmith_id")
     inlines = [SoterLocksmithIdInline, OptimoDriverIdInline]
     actions = [assign_stock_check_schedule]
-    readonly_fields = ("user",)
+    # Editable, not read-only: the automatic email-match linking (see
+    # apps/accounts/adapter.py) only ever runs the first time someone
+    # signs in. If their Handl/Soter-synced email (here) doesn't match
+    # their real Microsoft sign-in email, that first login can't find
+    # a match and provisions them as a full office/admin account
+    # instead — with no way for that mismatch to self-correct on a
+    # later login. This field lets office staff link that existing
+    # login to the right Locksmith by hand once the mismatch is found,
+    # without deleting and recreating their account.
+    autocomplete_fields = ("user",)
 
     def get_queryset(self, request):
         return super().get_queryset(request).select_related("stock_check_schedule", "user")

@@ -26,7 +26,11 @@ class Locksmith(models.Model):
         related_name="locksmith_profile",
         help_text="Linked automatically the first time this locksmith signs in "
         "with a Microsoft account matching their email — grants access to the "
-        "self-service portal at /locksmith/ instead of office/admin access.",
+        "self-service portal at /locksmith/ instead of office/admin access. If "
+        "their Soter-synced email above doesn't match their real sign-in "
+        "email, that automatic match fails on their first ever login and "
+        "can't self-correct later — pick the right existing account here by "
+        "hand instead of deleting and recreating it.",
     )
     office_access = models.BooleanField(
         default=False,

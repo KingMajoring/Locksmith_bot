@@ -256,6 +256,23 @@ class SyncFromSoterViewTests(TestCase):
         self.assertContains(response, "WGTK - Dean S")
 
 
+class LocksmithAdminUserFieldTests(TestCase):
+    def test_user_field_is_editable_so_a_mismatched_login_can_be_relinked_by_hand(self):
+        from django.contrib.admin.sites import site as admin_site
+        from django.test import RequestFactory
+
+        from .admin import LocksmithAdmin
+
+        request = RequestFactory().get("/")
+        request.user = get_user_model().objects.create_user(
+            username="office_admin", email="admin@wgtk.co.uk", password="x",
+            is_staff=True, is_superuser=True,
+        )
+        model_admin = LocksmithAdmin(Locksmith, admin_site)
+        self.assertNotIn("user", model_admin.get_readonly_fields(request))
+        self.assertIn("user", model_admin.autocomplete_fields)
+
+
 class AssignScheduleActionTests(TestCase):
     def setUp(self):
         from apps.stock_accuracy.models import StockCheckSchedule
