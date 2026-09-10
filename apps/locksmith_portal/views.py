@@ -172,14 +172,8 @@ def _needs_access_method(report_id):
 def _arrival_photo_slots(loss_label):
     """(kind, required) pairs for the arrival step's photo prompts. A
     service not specifically modelled here just gets one generic
-    "before" photo, the original behaviour. Every job except a genuine
-    "Gain access" (property lockout, no vehicle involved) also asks for
-    a mileage photo — there's no mileage to record on a property
-    lockout."""
-    slots = list(_ARRIVAL_PHOTO_SLOTS_BY_SERVICE.get(loss_label, [(JobVisitPhoto.Kind.BEFORE, True)]))
-    if loss_label != _GAIN_ACCESS_SERVICE_LABEL:
-        slots.append((JobVisitPhoto.Kind.MILEAGE, True))
-    return slots
+    "before" photo, the original behaviour."""
+    return _ARRIVAL_PHOTO_SLOTS_BY_SERVICE.get(loss_label, [(JobVisitPhoto.Kind.BEFORE, True)])
 
 
 def _after_photo_slots(loss_label):
@@ -187,8 +181,15 @@ def _after_photo_slots(loss_label):
     service not specifically modelled here just gets one generic
     "after" photo, the original behaviour. Note this is separate from
     job_access_method's own door-frame photo for an airbag entry, which
-    happens earlier, before parts disposal — see _access_method_photo_slots."""
-    return _AFTER_PHOTO_SLOTS_BY_SERVICE.get(loss_label, [(JobVisitPhoto.Kind.AFTER, True)])
+    happens earlier, before parts disposal — see _access_method_photo_slots.
+
+    Every job except a genuine "Gain access" (property lockout, no
+    vehicle involved) also asks for a mileage photo on the way out —
+    there's no mileage to record on a property lockout."""
+    slots = list(_AFTER_PHOTO_SLOTS_BY_SERVICE.get(loss_label, [(JobVisitPhoto.Kind.AFTER, True)]))
+    if loss_label != _GAIN_ACCESS_SERVICE_LABEL:
+        slots.append((JobVisitPhoto.Kind.MILEAGE, True))
+    return slots
 
 
 def _access_method_photo_slots(access_method):
@@ -620,12 +621,23 @@ def _previous_visits_summary(report_id, exclude_order_no):
             f"{d.quantity} × {d.part_name} ({d.part_code})"
         )
 
+    # Every photo from that visit (before/after/mileage/damage/etc, and
+    # yes the signatures too) — a warranty return often hinges on
+    # exactly what the previous locksmith actually saw/did, which the
+    # parts list alone doesn't show.
+    photos_by_visit = {}
+    for p in JobVisitPhoto.objects.filter(visit__in=visits).order_by("uploaded_at"):
+        photos_by_visit.setdefault(p.visit_id, []).append(
+            {"label": p.get_kind_display(), "url": p.url}
+        )
+
     return [
         {
             "locksmith_name": v.locksmith.name if v.locksmith else "Unknown locksmith",
             "when": v.completed_at or v.arrived_at or v.on_route_at or v.created_at,
             "outcome": v.get_outcome_display() if v.outcome else "",
             "parts": parts_by_order.get(v.order_no, []),
+            "photos": photos_by_visit.get(v.id, []),
         }
         for v in visits
     ]

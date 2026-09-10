@@ -386,6 +386,27 @@ dialog#detail-of-loss-dialog p {
 .previous-visit:last-child { border-bottom: none; }
 .previous-visit p { margin: 0 0 0.3rem; color: var(--ink); }
 .previous-visit ul { margin: 0; padding-left: 1.1rem; color: var(--ink-soft); font-size: 0.9rem; }
+.previous-visit-photos { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.4rem; }
+.previous-visit-photo {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 4.5rem;
+  text-decoration: none;
+}
+.previous-visit-photo img {
+  width: 4.5rem;
+  height: 4.5rem;
+  object-fit: cover;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+}
+.previous-visit-photo .sub {
+  margin-top: 0.2rem;
+  font-size: 0.75rem;
+  text-align: center;
+  line-height: 1.2;
+}
 
 .nav-icon { vertical-align: -3px; margin-right: 0.3rem; }
 

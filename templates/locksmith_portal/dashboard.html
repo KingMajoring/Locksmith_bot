@@ -109,6 +109,18 @@
                     {% else %}
                       <p class="sub">No parts recorded.</p>
                     {% endif %}
+                    {% if v.photos %}
+                      <div class="previous-visit-photos">
+                        {% for photo in v.photos %}
+                          <a href="{{ photo.url }}" target="_blank" class="previous-visit-photo">
+                            <img src="{{ photo.url }}" alt="{{ photo.label }}" loading="lazy">
+                            <span class="sub">{{ photo.label }}</span>
+                          </a>
+                        {% endfor %}
+                      </div>
+                    {% else %}
+                      <p class="sub">No photos recorded.</p>
+                    {% endif %}
                   </div>
                 {% endfor %}
               </div>
