@@ -1801,6 +1801,54 @@ class PartsCostForJobsTests(TestCase):
             costs = parts_cost_for_jobs([job])
         self.assertEqual(costs["a"], 2.5)
 
+    def test_client_supplied_part_excluded_from_cost(self):
+        # Handl's own Inventory_Disposals carries no "client supplied"
+        # flag, so the part still shows up in disposed_skus — but WGTK
+        # never paid for it, so it must not count toward the job's cost.
+        job = self._make_job("a", "TK-100, TK-101")
+        PortalDisposal.objects.create(
+            locksmith=self.locksmith, order_no="a", report_id="a",
+            part_code="TK-101", part_name="Remote key fob", quantity=1,
+            client_supplied=True,
+        )
+        with patch(
+            "apps.job_completion.services.costing.get_handl_client",
+            return_value=FakeCostHandlClient({"TK-100": 2.5, "TK-101": 200.0}),
+        ):
+            costs = parts_cost_for_jobs([job])
+        self.assertEqual(costs["a"], 2.5)
+
+    def test_job_with_only_client_supplied_parts_costs_zero_not_omitted(self):
+        job = self._make_job("a", "TK-101")
+        PortalDisposal.objects.create(
+            locksmith=self.locksmith, order_no="a", report_id="a",
+            part_code="TK-101", part_name="Remote key fob", quantity=1,
+            client_supplied=True,
+        )
+        with patch(
+            "apps.job_completion.services.costing.get_handl_client",
+            return_value=FakeCostHandlClient({"TK-101": 200.0}),
+        ):
+            costs = parts_cost_for_jobs([job])
+        self.assertIn("a", costs)
+        self.assertEqual(costs["a"], 0.0)
+
+    def test_client_supplied_on_a_different_job_does_not_affect_this_one(self):
+        job_a = self._make_job("a", "TK-101")
+        job_b = self._make_job("b", "TK-101")
+        PortalDisposal.objects.create(
+            locksmith=self.locksmith, order_no="b", report_id="b",
+            part_code="TK-101", part_name="Remote key fob", quantity=1,
+            client_supplied=True,
+        )
+        with patch(
+            "apps.job_completion.services.costing.get_handl_client",
+            return_value=FakeCostHandlClient({"TK-101": 200.0}),
+        ):
+            costs = parts_cost_for_jobs([job_a, job_b])
+        self.assertEqual(costs["a"], 200.0)
+        self.assertEqual(costs["b"], 0.0)
+
 
 class JobInformationTests(TestCase):
     """Margin/timing drill-down (Make -> model family -> Year), all
