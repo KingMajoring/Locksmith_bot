@@ -354,6 +354,7 @@ class JobTimingSummary(models.Model):
     reg = models.CharField(max_length=20, blank=True)
     make = models.CharField(max_length=100, blank=True)
     model_name = models.CharField(max_length=100, blank=True)
+    year = models.CharField(max_length=10, blank=True)
     vin = models.CharField(max_length=50, blank=True)
 
     travel_time = models.DurationField(

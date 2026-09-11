@@ -117,7 +117,7 @@ class JobTimingSummaryAdmin(admin.ModelAdmin):
     on travel/job durations without a live Handl round trip each time."""
 
     list_display = (
-        "created_at", "locksmith", "order_no", "reg", "make", "model_name",
+        "created_at", "locksmith", "order_no", "reg", "make", "model_name", "year", "vin",
         "travel_time", "job_time", "skus_used",
     )
     list_filter = ("locksmith",)

@@ -480,6 +480,7 @@ def _record_job_timing(locksmith, report_id, order_no, visit):
             "reg": details.reg if details else "",
             "make": details.make if details else "",
             "model_name": details.model if details else "",
+            "year": details.year if details else "",
             "vin": details.vin if details else "",
             "travel_time": travel_time,
             "job_time": job_time,

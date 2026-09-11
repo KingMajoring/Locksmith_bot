@@ -2430,6 +2430,7 @@ class JobVisitWorkflowTests(TestCase):
         self.assertEqual(summary.reg, "AB12 CDE")
         self.assertEqual(summary.make, "Ford")
         self.assertEqual(summary.model_name, "Focus")
+        self.assertEqual(summary.year, "2020")
         self.assertEqual(summary.vin, "VIN12345")
         self.assertEqual(summary.travel_time, timedelta(minutes=42))
         self.assertIsNotNone(summary.job_time)
