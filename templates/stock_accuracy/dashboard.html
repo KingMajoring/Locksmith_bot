@@ -4,21 +4,28 @@
 <h1>Stock Accuracy</h1>
 
 <div class="card">
-  <h2>Awaiting count entry</h2>
-  {% if pending %}
+  <h2>Ready to confirm</h2>
+  <p class="sub">Every line's been counted by the locksmith — confirm to push these counts to Handl's own stock record.</p>
+  {% if ready_to_confirm %}
   <table>
-    <tr><th>Locksmith</th><th>Week</th><th>Generated</th><th></th></tr>
-    {% for wc in pending %}
+    <tr><th>Locksmith</th><th>Week</th><th>Completed</th><th></th><th></th></tr>
+    {% for wc in ready_to_confirm %}
     <tr>
       <td>{{ wc.locksmith.name }}</td>
       <td>{{ wc.week_starting }}</td>
-      <td>{{ wc.generated_at|date:"d M H:i" }}</td>
-      <td><a class="btn" href="{% url 'stock_accuracy:entry_detail' wc.pk %}">Enter counts</a></td>
+      <td>{{ wc.completed_at|date:"d M H:i" }}</td>
+      <td><a href="{% url 'stock_accuracy:entry_detail' wc.pk %}">Review counts</a></td>
+      <td>
+        <form method="post" action="{% url 'stock_accuracy:confirm_check' pk=wc.pk %}">
+          {% csrf_token %}
+          <button class="btn" type="submit">Confirm &amp; update Handl</button>
+        </form>
+      </td>
     </tr>
     {% endfor %}
   </table>
   {% else %}
-  <p>Nothing outstanding.</p>
+  <p>Nothing waiting to be confirmed.</p>
   {% endif %}
 </div>
 

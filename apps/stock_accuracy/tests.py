@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
 from django.urls import reverse
+from django.utils import timezone
 
 from apps.integrations.handl import ExpectedStock, StockUsage
 from apps.locksmiths.models import Locksmith
@@ -266,10 +267,32 @@ class ViewsSmokeTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Sam Lee")
 
-    def test_dashboard_lists_generated_check_as_pending(self):
+    def test_dashboard_does_not_list_a_freshly_generated_check_as_ready_to_confirm(self):
+        # Locksmiths enter their own counts in the portal now — a check
+        # that's just been generated (nothing counted yet) isn't
+        # office's to chase, so it shouldn't show up here at all.
+        response = self.client.get(reverse("stock_accuracy:dashboard"))
+        self.assertEqual(list(response.context["ready_to_confirm"]), [])
+
+    def test_dashboard_lists_a_completed_unconfirmed_check_as_ready_to_confirm(self):
+        self.weekly_check.status = WeeklyStockCheck.Status.COMPLETED
+        self.weekly_check.completed_at = timezone.now()
+        self.weekly_check.save(update_fields=["status", "completed_at"])
+
         response = self.client.get(reverse("stock_accuracy:dashboard"))
         self.assertContains(response, "Sam Lee")
-        self.assertEqual(list(response.context["pending"]), [self.weekly_check])
+        self.assertContains(response, "Confirm &amp; update Handl")
+        self.assertEqual(list(response.context["ready_to_confirm"]), [self.weekly_check])
+
+    def test_dashboard_hides_an_already_confirmed_check(self):
+        self.weekly_check.status = WeeklyStockCheck.Status.COMPLETED
+        self.weekly_check.completed_at = timezone.now()
+        self.weekly_check.confirmed_at = timezone.now()
+        self.weekly_check.confirmed_by = self.user
+        self.weekly_check.save(update_fields=["status", "completed_at", "confirmed_at", "confirmed_by"])
+
+        response = self.client.get(reverse("stock_accuracy:dashboard"))
+        self.assertEqual(list(response.context["ready_to_confirm"]), [])
 
     def test_locksmith_report_renders(self):
         response = self.client.get(

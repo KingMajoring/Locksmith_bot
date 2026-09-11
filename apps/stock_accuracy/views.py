@@ -14,10 +14,16 @@ from .services.reporting import flagged_items_queryset, line_summary, locksmith_
 
 @login_required
 def dashboard(request):
-    pending = (
-        WeeklyStockCheck.objects.filter(completed_at__isnull=True)
+    # Locksmiths enter their own counts in the portal now, so there's
+    # nothing for office to chase here — this only surfaces checks
+    # they've *finished* (every line counted) but Handl's own stock
+    # hasn't been updated to match yet (see confirm_check).
+    ready_to_confirm = (
+        WeeklyStockCheck.objects.filter(
+            status=WeeklyStockCheck.Status.COMPLETED, confirmed_at__isnull=True
+        )
         .select_related("locksmith")
-        .order_by("week_starting")
+        .order_by("completed_at")
     )
     locksmiths = Locksmith.objects.filter(active=True)
     summaries = [locksmith_summary(l) for l in locksmiths]
@@ -26,7 +32,7 @@ def dashboard(request):
         request,
         "stock_accuracy/dashboard.html",
         {
-            "pending": pending,
+            "ready_to_confirm": ready_to_confirm,
             "summaries": summaries,
             "top_lines": top_lines,
         },
