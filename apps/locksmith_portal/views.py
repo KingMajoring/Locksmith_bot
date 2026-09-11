@@ -757,9 +757,14 @@ def stock_check_entry(request, pk):
 def job_overview(request, order_no):
     """The stepper landing page for one job: on route -> arrived (before
     photos) -> [Gain access only: access method + disclaimer] -> parts
-    disposed -> complete (after photos, notes, outcome) — each step's
-    action link only shown once the previous one is done, per stage in
-    JobVisit.Stage."""
+    disposed and/or complete (after photos, notes, outcome) — each
+    step's action link only shown once its own precondition is met, per
+    stage in JobVisit.Stage. Parts and completion are deliberately not
+    strictly ordered relative to each other: a locksmith can finish the
+    job (photos, signature) straight from arrived and let the client go
+    before doing parts admin, or dispose parts first as before — either
+    is fine, and parts remain editable after the job's done either way
+    (see job_detail's is_late_add)."""
     ctx, early = _job_visit_context(request, order_no)
     if ctx is None:
         return early
@@ -1134,9 +1139,20 @@ def job_complete(request, order_no):
     if visit.stage == JobVisit.Stage.DONE:
         messages.info(request, "This job is already marked done.")
         return redirect(overview_url)
-    if visit.stage != JobVisit.Stage.PARTS_DONE:
-        messages.error(request, "Dispose parts (or continue past that step) first.")
+    # Parts are optional before finishing — a locksmith can go straight
+    # from arrived to completion photos/signature (letting the client
+    # go) and dispose parts afterward instead, or dispose parts first
+    # as before; either order is fine. Gain access jobs still need the
+    # access method/disclaimer recorded first regardless of which order
+    # they pick.
+    if visit.stage not in (JobVisit.Stage.ARRIVED, JobVisit.Stage.PARTS_DONE):
+        messages.error(request, "Mark yourself arrived (with before photos) first.")
         return redirect(overview_url)
+    if not visit.access_method and _needs_access_method(report_id):
+        messages.error(request, "Record how you gained access first.")
+        return redirect(
+            f"{reverse('locksmith_portal:job_access_method', args=[order_no])}?date={selected_date.isoformat()}"
+        )
 
     loss_label = _loss_label_for(report_id)
 
@@ -1331,12 +1347,20 @@ def job_detail(request, order_no):
         messages.error(request, "Mark yourself arrived (with before photos) first.")
         return redirect(overview_url)
 
-    # Once a job's marked done there's no further "arrived"/"access
-    # method" gating to worry about — this is purely the late-add path,
-    # and every part added here needs a reason (see below).
-    is_late_add = visit.stage == JobVisit.Stage.DONE
+    # A job marked done needs a reason for parts added/changed here only
+    # if something was already logged for it — a locksmith can
+    # deliberately finish the job (photos, signature) before doing any
+    # parts admin at all, so they can let the client go first (see
+    # job_complete's own relaxed stage check). That first parts entry,
+    # even though it happens after the job's marked done, is completely
+    # normal — no justification needed. Coming back a second time to
+    # add more, or to fix something already logged, is the genuine
+    # after-the-fact case that still needs a reason.
+    is_late_add = visit.stage == JobVisit.Stage.DONE and PortalDisposal.objects.filter(
+        locksmith=locksmith, order_no=order_no
+    ).exists()
 
-    if not is_late_add and not visit.access_method and _needs_access_method(report_id):
+    if visit.stage != JobVisit.Stage.DONE and not visit.access_method and _needs_access_method(report_id):
         messages.error(request, "Record how you gained access first.")
         return redirect(
             f"{reverse('locksmith_portal:job_access_method', args=[order_no])}?date={selected_date.isoformat()}"

@@ -1135,10 +1135,21 @@ class FaultyPartReportTests(TestCase):
 
 
 class JobDetailLateAddTests(TestCase):
-    """job_detail also has to work once a job is already marked done —
-    a locksmith going back to add a part they forgot, always with a
-    reason logged for office review (see edit_disposal for the sibling
-    "correct an existing entry" flow)."""
+    """job_detail also has to work once a job is already marked done.
+    Two different cases share this same page:
+
+    1. The locksmith deliberately finished the job (photos, signature)
+       before doing any parts admin at all, so they could let the
+       client go first — completing parts_done_visit here is their
+       *first* entry for this job, even though it happens after
+       completion. That's completely normal, no reason needed (see
+       JobDetailFinishBeforePartsTests below for the full flow through
+       job_complete itself).
+    2. They already disposed something before marking done, and are
+       now coming back to add more or fix something — a genuine
+       after-the-fact addition, which still needs a reason logged for
+       office review (see edit_disposal for the sibling "correct an
+       existing entry" flow)."""
 
     def setUp(self):
         self.locksmith, self.user = _make_locksmith_user(soter_ids=("885",), driver_serials=("011",))
@@ -1162,7 +1173,61 @@ class JobDetailLateAddTests(TestCase):
 
     @patch("apps.locksmith_portal.views.get_handl_client")
     @patch("apps.locksmith_portal.views.get_optimo_client")
-    def test_get_on_a_done_job_shows_late_add_banner(self, mock_get_optimo, mock_get_handl):
+    def test_get_on_a_done_job_with_no_prior_disposals_shows_no_late_add_banner(
+        self, mock_get_optimo, mock_get_handl
+    ):
+        self._mock_optimo(mock_get_optimo)
+        mock_handl = MagicMock()
+        mock_handl.list_current_stock.return_value = [
+            CurrentStockLine(part_code="TK-100", part_name="Transponder key blank", qty=4),
+        ]
+        mock_get_handl.return_value = mock_handl
+
+        response = self.client.get(reverse("locksmith_portal:job_detail", args=[self.order_no]))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "already marked done")
+        self.assertNotContains(response, "late_add_reason")
+
+    @patch("apps.locksmith_portal.views.get_handl_client")
+    @patch("apps.locksmith_portal.views.get_optimo_client")
+    def test_post_with_no_prior_disposals_creates_a_normal_disposal_no_reason_needed(
+        self, mock_get_optimo, mock_get_handl
+    ):
+        self._mock_optimo(mock_get_optimo)
+        mock_handl = MagicMock()
+        mock_handl.list_current_stock.return_value = [
+            CurrentStockLine(part_code="TK-100", part_name="Transponder key blank", qty=4),
+        ]
+        mock_get_handl.return_value = mock_handl
+
+        url = reverse("locksmith_portal:job_detail", args=[self.order_no])
+        response = self.client.post(
+            url, {"part_code": ["TK-100 — Transponder key blank"], "quantity": ["1"]}
+        )
+
+        self.assertRedirects(response, f"{url}?date={self.today.isoformat()}")
+        disposal = PortalDisposal.objects.get()
+        self.assertEqual(disposal.part_code, "TK-100")
+        self.assertFalse(disposal.needs_review)
+        self.assertFalse(PortalDisposalEdit.objects.exists())
+        mock_handl.record_disposal.assert_called_once()
+        # record_disposal itself writes the usual disposal note (inside
+        # the real SQL client) — no extra "already marked done"/reason
+        # summary note on top, since this wasn't treated as an exception.
+        mock_handl.add_report_note.assert_not_called()
+
+    def _existing_disposal(self):
+        return PortalDisposal.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            part_code="TK-101", part_name="Remote key fob", quantity=1,
+        )
+
+    @patch("apps.locksmith_portal.views.get_handl_client")
+    @patch("apps.locksmith_portal.views.get_optimo_client")
+    def test_get_on_a_done_job_with_prior_disposals_shows_late_add_banner(
+        self, mock_get_optimo, mock_get_handl
+    ):
+        self._existing_disposal()
         self._mock_optimo(mock_get_optimo)
         mock_handl = MagicMock()
         mock_handl.list_current_stock.return_value = [
@@ -1177,7 +1242,10 @@ class JobDetailLateAddTests(TestCase):
 
     @patch("apps.locksmith_portal.views.get_handl_client")
     @patch("apps.locksmith_portal.views.get_optimo_client")
-    def test_post_without_reason_is_rejected(self, mock_get_optimo, mock_get_handl):
+    def test_post_without_reason_is_rejected_when_something_already_recorded(
+        self, mock_get_optimo, mock_get_handl
+    ):
+        self._existing_disposal()
         self._mock_optimo(mock_get_optimo)
         mock_handl = MagicMock()
         mock_handl.list_current_stock.return_value = [
@@ -1191,7 +1259,7 @@ class JobDetailLateAddTests(TestCase):
         )
 
         self.assertRedirects(response, f"{url}?date={self.today.isoformat()}")
-        self.assertEqual(PortalDisposal.objects.count(), 0)
+        self.assertEqual(PortalDisposal.objects.count(), 1)  # only the pre-existing one
         mock_handl.record_disposal.assert_not_called()
 
     @patch("apps.locksmith_portal.views.get_handl_client")
@@ -1199,6 +1267,7 @@ class JobDetailLateAddTests(TestCase):
     def test_post_with_reason_creates_disposal_and_audit_row_and_handl_note(
         self, mock_get_optimo, mock_get_handl
     ):
+        self._existing_disposal()
         self._mock_optimo(mock_get_optimo)
         mock_handl = MagicMock()
         mock_handl.list_current_stock.return_value = [
@@ -1214,8 +1283,7 @@ class JobDetailLateAddTests(TestCase):
         })
 
         self.assertRedirects(response, f"{url}?date={self.today.isoformat()}")
-        disposal = PortalDisposal.objects.get()
-        self.assertEqual(disposal.part_code, "TK-100")
+        disposal = PortalDisposal.objects.get(part_code="TK-100")
         self.assertTrue(disposal.needs_review)
 
         edit = PortalDisposalEdit.objects.get()
@@ -2212,10 +2280,23 @@ class JobVisitWorkflowTests(TestCase):
 
     # --- complete -----------------------------------------------------
 
-    def test_complete_requires_parts_done_first(self):
+    def test_complete_reachable_directly_from_arrived_parts_are_optional(self):
+        # Parts are deliberately not a hard prerequisite for finishing —
+        # a locksmith can do completion photos/signature straight after
+        # arriving and let the client go, then handle parts admin
+        # afterward (see job_detail's is_late_add).
         JobVisit.objects.create(
             locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
             stage=JobVisit.Stage.ARRIVED, arrived_at=timezone.now(),
+        )
+        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+
+    def test_complete_requires_arrived_first(self):
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            stage=JobVisit.Stage.ON_ROUTE, on_route_at=timezone.now(),
         )
         url = reverse("locksmith_portal:job_complete", args=[self.order_no])
         response = self.client.get(url)
@@ -2236,6 +2317,38 @@ class JobVisitWorkflowTests(TestCase):
         self.assertEqual(self._visit().stage, JobVisit.Stage.PARTS_DONE)
         self.assertContains(response, "Add at least one photo")
         self.assertContains(response, "Choose Completed or Failed")
+
+    def test_complete_from_arrived_succeeds_with_no_parts_recorded(self):
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            stage=JobVisit.Stage.ARRIVED, arrived_at=timezone.now(),
+        )
+        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        response = self.client.post(url, {
+            "photo_after": [_fake_photo(name="after.jpg")],
+            "photo_mileage": [_fake_photo(name="mileage.jpg")],
+            "outcome": "completed", "completion_signature": "data:image/png;base64,aGVsbG8=",
+        })
+        self.assertRedirects(
+            response,
+            f"{reverse('locksmith_portal:job_overview', args=[self.order_no])}?date={self.today.isoformat()}",
+        )
+        visit = self._visit()
+        self.assertEqual(visit.stage, JobVisit.Stage.DONE)
+        self.assertEqual(PortalDisposal.objects.filter(order_no=self.order_no).count(), 0)
+
+    def test_complete_from_arrived_on_a_gain_access_job_still_needs_access_method_first(self):
+        self._set_loss_type("LOCKED IN PROPERTY")
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            stage=JobVisit.Stage.ARRIVED, arrived_at=timezone.now(),
+        )
+        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        response = self.client.get(url)
+        self.assertRedirects(
+            response,
+            f"{reverse('locksmith_portal:job_access_method', args=[self.order_no])}?date={self.today.isoformat()}",
+        )
 
     def test_complete_success_marks_done_and_writes_note_with_outcome_and_notes(self):
         JobVisit.objects.create(
@@ -2575,10 +2688,11 @@ class JobVisitWorkflowTests(TestCase):
             )
         }
 
-    def _parts_done_visit(self):
+    def _parts_done_visit(self, access_method=""):
         return JobVisit.objects.create(
             locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
             stage=JobVisit.Stage.PARTS_DONE, parts_done_at=timezone.now(),
+            access_method=access_method,
         )
 
     def _arrived_visit(self):
@@ -2771,7 +2885,7 @@ class JobVisitWorkflowTests(TestCase):
 
     def test_gain_access_completion_get_shows_named_photo_slots(self):
         self._set_loss_type("LOCKED IN PROPERTY")
-        self._parts_done_visit()
+        self._parts_done_visit(access_method=JobVisit.AccessMethod.PICKED)
         url = reverse("locksmith_portal:job_complete", args=[self.order_no])
         response = self.client.get(url)
         self.assertEqual(response.context["loss_label"], "Gain access")
@@ -2782,7 +2896,7 @@ class JobVisitWorkflowTests(TestCase):
         # A property lockout has no vehicle involved — nothing to
         # photograph a mileage reading of.
         self._set_loss_type("LOCKED IN PROPERTY")
-        self._parts_done_visit()
+        self._parts_done_visit(access_method=JobVisit.AccessMethod.PICKED)
         url = reverse("locksmith_portal:job_complete", args=[self.order_no])
         response = self.client.get(url)
         self.assertNotContains(response, "Mileage")
@@ -2808,7 +2922,7 @@ class JobVisitWorkflowTests(TestCase):
 
     def test_gain_access_completion_missing_required_slot_is_rejected(self):
         self._set_loss_type("LOCKED IN PROPERTY")
-        self._parts_done_visit()
+        self._parts_done_visit(access_method=JobVisit.AccessMethod.PICKED)
         url = reverse("locksmith_portal:job_complete", args=[self.order_no])
         response = self.client.post(url, {"outcome": "completed"})
         self.assertContains(response, "Add at least one photo: Door open")
@@ -2816,7 +2930,7 @@ class JobVisitWorkflowTests(TestCase):
 
     def test_gain_access_completion_key_in_hand_photo_is_optional(self):
         self._set_loss_type("LOCKED IN PROPERTY")
-        self._parts_done_visit()
+        self._parts_done_visit(access_method=JobVisit.AccessMethod.PICKED)
         url = reverse("locksmith_portal:job_complete", args=[self.order_no])
         response = self.client.post(url, {
             "photo_door_open": [_fake_photo(name="a.jpg")],

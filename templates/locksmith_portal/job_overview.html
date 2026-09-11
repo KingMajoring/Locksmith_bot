@@ -74,7 +74,7 @@
   <div class="stage-row {% if visit.parts_done_at %}stage-done{% endif %}">
     <span class="stage-num">{% if is_gain_access %}4{% else %}3{% endif %}</span>
     <div class="stage-body">
-      <strong>Parts disposed</strong>
+      <strong>Parts disposed</strong> <span class="sub">(optional here — can be done before or after finishing)</span>
       {% if disposal_count %}<span class="sub">{{ disposal_count }} recorded</span>{% endif %}
     </div>
     {% if visit.stage == "arrived" or visit.stage == "parts_done" %}
@@ -82,7 +82,7 @@
       <a class="btn" href="{% url 'locksmith_portal:job_detail' order_no=order_no %}?date={{ selected_date|date:'Y-m-d' }}">Dispose parts</a>
       {% endif %}
     {% elif visit.stage == "done" %}
-      <a class="btn-secondary" href="{% url 'locksmith_portal:job_detail' order_no=order_no %}?date={{ selected_date|date:'Y-m-d' }}">Edit parts</a>
+      <a class="btn-secondary" href="{% url 'locksmith_portal:job_detail' order_no=order_no %}?date={{ selected_date|date:'Y-m-d' }}">{% if disposal_count %}Edit parts{% else %}Dispose parts{% endif %}</a>
     {% endif %}
   </div>
 
@@ -92,8 +92,10 @@
       <strong>Completed — after photos, notes</strong>
       {% if visit.completed_at %}<span class="sub">{{ visit.get_outcome_display }} at {{ visit.completed_at|date:"H:i" }}</span>{% endif %}
     </div>
-    {% if visit.stage == "parts_done" %}
-    <a class="btn" href="{% url 'locksmith_portal:job_complete' order_no=order_no %}?date={{ selected_date|date:'Y-m-d' }}">Finish job</a>
+    {% if visit.stage == "arrived" or visit.stage == "parts_done" %}
+      {% if not is_gain_access or visit.access_method %}
+      <a class="btn" href="{% url 'locksmith_portal:job_complete' order_no=order_no %}?date={{ selected_date|date:'Y-m-d' }}">Finish job</a>
+      {% endif %}
     {% endif %}
   </div>
 </div>
