@@ -2743,28 +2743,35 @@ class JobVisitWorkflowTests(TestCase):
         note_text = self.mock_handl.add_report_note.call_args[0][1]
         self.assertIn("picking (pick used: Slim jim)", note_text)
 
-    def test_gain_access_key_code_requires_key_code_text(self):
+    def test_gain_access_key_code_success_notes_handl(self):
         self._set_loss_type("LOCKED IN PROPERTY")
         self._arrived_visit()
         url = reverse("locksmith_portal:job_access_method", args=[self.order_no])
         response = self.client.post(url, {"access_method": "key_code"})
-        self.assertContains(response, "Enter the key code supplied")
-
-    def test_gain_access_key_code_success_records_key_code_and_notes_handl(self):
-        self._set_loss_type("LOCKED IN PROPERTY")
-        self._arrived_visit()
-        url = reverse("locksmith_portal:job_access_method", args=[self.order_no])
-        response = self.client.post(url, {"access_method": "key_code", "key_code": "AB1234"})
         visit = self._visit()
         self.assertEqual(visit.stage, JobVisit.Stage.ARRIVED)
         self.assertEqual(visit.access_method, JobVisit.AccessMethod.KEY_CODE)
-        self.assertEqual(visit.key_code, "AB1234")
         self.assertRedirects(
             response,
             f"{reverse('locksmith_portal:job_overview', args=[self.order_no])}?date={self.today.isoformat()}",
         )
         note_text = self.mock_handl.add_report_note.call_args[0][1]
-        self.assertIn("supplied key code (key code: AB1234)", note_text)
+        self.assertIn("supplied key code", note_text)
+
+    def test_gain_access_dealer_key_success_notes_handl(self):
+        self._set_loss_type("LOCKED IN PROPERTY")
+        self._arrived_visit()
+        url = reverse("locksmith_portal:job_access_method", args=[self.order_no])
+        response = self.client.post(url, {"access_method": "dealer_key"})
+        visit = self._visit()
+        self.assertEqual(visit.stage, JobVisit.Stage.ARRIVED)
+        self.assertEqual(visit.access_method, JobVisit.AccessMethod.DEALER_KEY)
+        self.assertRedirects(
+            response,
+            f"{reverse('locksmith_portal:job_overview', args=[self.order_no])}?date={self.today.isoformat()}",
+        )
+        note_text = self.mock_handl.add_report_note.call_args[0][1]
+        self.assertIn("dealer-supplied, already-cut key", note_text)
 
     def test_gain_access_airbag_requires_signature(self):
         self._set_loss_type("LOCKED IN PROPERTY")

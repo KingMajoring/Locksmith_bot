@@ -12,17 +12,13 @@
       <label><input type="radio" name="access_method" value="picked" class="access-method-input" required> Picked</label>
       <label><input type="radio" name="access_method" value="airbag" class="access-method-input"> Airbag</label>
       <label><input type="radio" name="access_method" value="key_code" class="access-method-input"> Key code supplied</label>
+      <label><input type="radio" name="access_method" value="dealer_key" class="access-method-input"> Dealer-supplied key (pre-cut)</label>
     </div>
   </div>
 
   <div class="field-group access-branch" data-branch="picked" hidden>
     <label for="pick_used">What pick was used</label>
     <input type="text" id="pick_used" name="pick_used" placeholder="e.g. HU101, HON66">
-  </div>
-
-  <div class="field-group access-branch" data-branch="key_code" hidden>
-    <label for="key_code">Key code supplied</label>
-    <input type="text" id="key_code" name="key_code" placeholder="e.g. code supplied by dealer/DVLA">
   </div>
 
   <div class="field-group access-branch" data-branch="airbag" hidden>

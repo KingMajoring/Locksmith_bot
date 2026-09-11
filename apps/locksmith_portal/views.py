@@ -1029,20 +1029,18 @@ def job_access_method(request, order_no):
     if request.method == "POST":
         access_method = request.POST.get("access_method", "")
         pick_used = request.POST.get("pick_used", "").strip()
-        key_code = request.POST.get("key_code", "").strip()
         signature_data_url = request.POST.get("disclaimer_signature", "").strip()
 
         errors = []
         if access_method not in (
-            JobVisit.AccessMethod.PICKED, JobVisit.AccessMethod.AIRBAG, JobVisit.AccessMethod.KEY_CODE,
+            JobVisit.AccessMethod.PICKED, JobVisit.AccessMethod.AIRBAG,
+            JobVisit.AccessMethod.KEY_CODE, JobVisit.AccessMethod.DEALER_KEY,
         ):
             errors.append("Choose how you gained access.")
         elif access_method == JobVisit.AccessMethod.PICKED and not pick_used:
             errors.append("Enter what pick was used.")
         elif access_method == JobVisit.AccessMethod.AIRBAG and not signature_data_url:
             errors.append("The customer needs to sign the disclaimer before continuing.")
-        elif access_method == JobVisit.AccessMethod.KEY_CODE and not key_code:
-            errors.append("Enter the key code supplied.")
 
         slot_pairs = _access_method_photo_slots(access_method)
         slot_files = {}
@@ -1065,7 +1063,12 @@ def job_access_method(request, order_no):
             elif access_method == JobVisit.AccessMethod.KEY_CODE:
                 note_parts.append(
                     f"'{locksmith.van_soter_display_name}' gained access using a supplied "
-                    f"key code (key code: {escape(key_code)})."
+                    "key code."
+                )
+            elif access_method == JobVisit.AccessMethod.DEALER_KEY:
+                note_parts.append(
+                    f"'{locksmith.van_soter_display_name}' gained access using a "
+                    "dealer-supplied, already-cut key."
                 )
             else:
                 content_type, signature_bytes = _decode_data_url(signature_data_url)
@@ -1093,8 +1096,7 @@ def job_access_method(request, order_no):
 
             visit.access_method = access_method
             visit.pick_used = pick_used if access_method == JobVisit.AccessMethod.PICKED else ""
-            visit.key_code = key_code if access_method == JobVisit.AccessMethod.KEY_CODE else ""
-            visit.save(update_fields=["access_method", "pick_used", "key_code", "disclaimer_signed_at"])
+            visit.save(update_fields=["access_method", "pick_used", "disclaimer_signed_at"])
 
             _write_handl_note(locksmith, report_id, " ".join(note_parts))
 
