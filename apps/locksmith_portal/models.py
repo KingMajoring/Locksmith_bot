@@ -195,6 +195,7 @@ class JobVisit(models.Model):
         """Gain access jobs only — how the locksmith actually got in."""
         PICKED = "picked", "Picked"
         AIRBAG = "airbag", "Airbag"
+        KEY_CODE = "key_code", "Key code supplied"
 
     class FailureReason(models.TextChoices):
         WRONG_PARTS = "wrong_parts", "Wrong parts"
@@ -240,6 +241,7 @@ class JobVisit(models.Model):
     # image — disclaimer_signed_at is just the attestation timestamp).
     access_method = models.CharField(max_length=20, choices=AccessMethod.choices, blank=True)
     pick_used = models.CharField(max_length=200, blank=True)
+    key_code = models.CharField(max_length=100, blank=True)
     disclaimer_signed_at = models.DateTimeField(null=True, blank=True)
 
     # Failed jobs: why, and (for reasons that need it) the SKU still
