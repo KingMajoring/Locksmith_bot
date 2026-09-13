@@ -673,6 +673,7 @@ def dashboard(request):
         visit = visits.get(job["order_no"])
         job["visit_stage"] = visit.stage if visit else JobVisit.Stage.NOT_STARTED
         job["visit_stage_label"] = visit.get_stage_display() if visit else None
+        job["outcome"] = visit.outcome if visit else ""
         details = job_details.get(job["report_id"])
         job["make"] = details.make if details else ""
         job["model"] = details.model if details else ""

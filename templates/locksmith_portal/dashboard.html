@@ -61,7 +61,7 @@
   {% endif %}
   {% if jobs %}
     {% for job in jobs %}
-      <div class="job{% if job.visit_stage == 'done' or job.disposed_quantity %} job-done{% endif %}">
+      <div class="job{% if job.outcome == 'completed' %} job-completed{% elif job.outcome == 'failed' %} job-failed{% elif job.visit_stage == 'done' or job.disposed_quantity %} job-done{% endif %}">
         <a class="job-link"
            href="{% url 'locksmith_portal:job_overview' order_no=job.order_no %}?date={{ selected_date|date:'Y-m-d' }}">
           <span class="job-main">
@@ -80,7 +80,10 @@
             {% endif %}
           </span>
           {% if job.visit_stage == 'done' %}
-            <span class="job-tick">&#10003; Done{% if job.disposed_quantity %} — {{ job.disposed_quantity }} part{{ job.disposed_quantity|pluralize }} disposed{% endif %}</span>
+            <span class="job-tick">
+              {% if job.outcome == 'failed' %}&#10007; Failed{% elif job.outcome == 'cancelled' %}Cancelled{% else %}&#10003; Done{% endif %}
+              {% if job.disposed_quantity %} — {{ job.disposed_quantity }} part{{ job.disposed_quantity|pluralize }} disposed{% endif %}
+            </span>
           {% elif job.disposed_quantity %}
             <span class="job-tick">&#10003; {{ job.disposed_quantity }} part{{ job.disposed_quantity|pluralize }} disposed</span>
           {% elif job.visit_stage != 'not_started' %}

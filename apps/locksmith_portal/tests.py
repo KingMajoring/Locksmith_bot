@@ -454,6 +454,49 @@ class DashboardTests(TestCase):
         self.assertContains(response, "3 parts disposed")
 
     @patch("apps.locksmith_portal.views.get_optimo_client")
+    def test_dashboard_marks_completed_job_green(self, mock_get_optimo):
+        today = timezone.localdate()
+        order_no = f"1001_{today.isoformat()}"
+        mock_client = MagicMock()
+        mock_client.list_orders_for_date.return_value = [
+            OptimoOrderSummary(
+                order_no=order_no, driver_serial="011", distance_metres=0, travel_time_seconds=0
+            ),
+        ]
+        mock_get_optimo.return_value = mock_client
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=order_no, report_id="1001",
+            stage=JobVisit.Stage.DONE, outcome=JobVisit.Outcome.COMPLETED,
+            arrived_at=timezone.now(), completed_at=timezone.now(),
+        )
+
+        response = self.client.get(reverse("locksmith_portal:dashboard"))
+        self.assertContains(response, "job-completed")
+        self.assertNotContains(response, "job-failed")
+
+    @patch("apps.locksmith_portal.views.get_optimo_client")
+    def test_dashboard_marks_failed_job_red(self, mock_get_optimo):
+        today = timezone.localdate()
+        order_no = f"1001_{today.isoformat()}"
+        mock_client = MagicMock()
+        mock_client.list_orders_for_date.return_value = [
+            OptimoOrderSummary(
+                order_no=order_no, driver_serial="011", distance_metres=0, travel_time_seconds=0
+            ),
+        ]
+        mock_get_optimo.return_value = mock_client
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=order_no, report_id="1001",
+            stage=JobVisit.Stage.DONE, outcome=JobVisit.Outcome.FAILED,
+            arrived_at=timezone.now(), completed_at=timezone.now(),
+        )
+
+        response = self.client.get(reverse("locksmith_portal:dashboard"))
+        self.assertContains(response, "job-failed")
+        self.assertContains(response, "&#10007; Failed")
+        self.assertNotContains(response, "job-completed")
+
+    @patch("apps.locksmith_portal.views.get_optimo_client")
     def test_dashboard_date_navigation(self, mock_get_optimo):
         mock_client = MagicMock()
         mock_client.list_orders_for_date.return_value = []
