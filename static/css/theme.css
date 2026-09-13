@@ -169,6 +169,7 @@ tr:last-child td { border-bottom: none; }
 }
 .btn:hover { background: var(--wgtk-orange-dark); }
 .btn:active { transform: scale(0.98); }
+.btn:disabled, .btn-secondary:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
 
 .btn-secondary {
   display: inline-block;

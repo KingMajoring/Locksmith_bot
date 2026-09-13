@@ -26,6 +26,43 @@
   </header>
   <script>
     (function () {
+      // A save can take a while (photo uploads over a weak signal, plus
+      // the Handl/Optimo write-back) with nothing on screen to show it's
+      // working — that reads as "did nothing", inviting a repeat tap
+      // that re-submits the same job. Disable every submit button in the
+      // form and swap its label the moment a submission actually goes
+      // ahead. Listening on document (not each form) means this covers
+      // every form site-wide with one handler; it still runs after a
+      // page's own submit listener since bubbling reaches document last,
+      // so e.defaultPrevented correctly reflects that page's own
+      // validation blocking the submit.
+      document.addEventListener('submit', function (e) {
+        if (e.defaultPrevented) return;
+        var form = e.target;
+        if (!(form instanceof HTMLFormElement)) return;
+        form.querySelectorAll('button[type=submit]').forEach(function (button) {
+          button.dataset.originalLabel = button.textContent;
+          button.disabled = true;
+          button.textContent = 'Saving…';
+        });
+      });
+
+      // bfcache: navigating back to this page can restore the DOM
+      // exactly as it was mid-submit (button still disabled/"Saving…")
+      // even though that submission is long gone — put every such
+      // button back the way it loaded.
+      window.addEventListener('pageshow', function (e) {
+        if (!e.persisted) return;
+        document.querySelectorAll('button[type=submit][disabled]').forEach(function (button) {
+          button.disabled = false;
+          if (button.dataset.originalLabel) {
+            button.textContent = button.dataset.originalLabel;
+          }
+        });
+      });
+    })();
+
+    (function () {
       var button = document.getElementById('panic-button');
       if (!button) return;
       button.addEventListener('click', function () {
