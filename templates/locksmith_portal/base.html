@@ -78,6 +78,28 @@
       var JPEG_QUALITY = 0.72;
       var SKIP_BELOW_BYTES = 300 * 1024;
 
+      // Reassigning a file input's .files via DataTransfer is not
+      // reliable everywhere — some browsers (notably some iOS Safari
+      // versions) silently leave the input empty instead of throwing.
+      // An empty *required* photo field then blocks native form
+      // validation with no visible error, which reads as the whole
+      // page "just hanging" on submit. Tested once up front on a
+      // detached input; if it doesn't verifiably work, skip
+      // compression entirely for this whole page load rather than risk
+      // wiping out a locksmith's photo selection.
+      var canReassignFiles = (function () {
+        try {
+          var testInput = document.createElement('input');
+          testInput.type = 'file';
+          var dt = new DataTransfer();
+          dt.items.add(new File(['x'], 'test.txt', { type: 'text/plain' }));
+          testInput.files = dt.files;
+          return testInput.files.length === 1;
+        } catch (err) {
+          return false;
+        }
+      })();
+
       function compressImage(file) {
         return new Promise(function (resolve) {
           if (!file.type || file.type.indexOf('image/') !== 0 || file.size <= SKIP_BELOW_BYTES) {
@@ -127,18 +149,27 @@
       document.addEventListener('change', function (e) {
         var input = e.target;
         if (!input || input.tagName !== 'INPUT' || input.type !== 'file') return;
+        if (!canReassignFiles) return;
         if (!input.accept || input.accept.indexOf('image') === -1) return;
-        if (typeof DataTransfer === 'undefined' || input.files.length === 0) return;
+        if (input.files.length === 0) return;
 
         var files = Array.prototype.slice.call(input.files);
         var form = input.form;
         setFormBusy(form, true);
-        Promise.all(files.map(compressImage)).then(function (compressed) {
-          var dataTransfer = new DataTransfer();
-          compressed.forEach(function (f) { dataTransfer.items.add(f); });
-          input.files = dataTransfer.files;
-          setFormBusy(form, false);
-        });
+        // The .finally() is the important part: whatever goes wrong
+        // inside (a browser quirk the upfront test didn't catch, a
+        // decode failure, anything) must never leave a submit button
+        // stuck disabled forever.
+        Promise.all(files.map(compressImage))
+          .then(function (compressed) {
+            var dataTransfer = new DataTransfer();
+            compressed.forEach(function (f) { dataTransfer.items.add(f); });
+            if (dataTransfer.files.length === compressed.length) {
+              input.files = dataTransfer.files;
+            }
+          })
+          .catch(function () {})
+          .finally(function () { setFormBusy(form, false); });
       });
     })();
 
