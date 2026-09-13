@@ -63,6 +63,86 @@
     })();
 
     (function () {
+      // Photos come straight off a phone camera — often several MB
+      // apiece — and get uploaded one field at a time over whatever
+      // signal the locksmith has on site. Reported live: an upload
+      // stalling completely on a weak connection, the browser's own
+      // progress bar stuck partway and never finishing. Re-encoding to a
+      // smaller JPEG in the browser before it's ever sent typically
+      // cuts that payload by 5-10x — the difference between a slow
+      // upload and one that never completes. Falls back to the original
+      // file untouched on any failure (can't decode, DataTransfer
+      // unsupported, compression didn't actually shrink it), so this
+      // can only make an upload smaller, never block one.
+      var MAX_DIMENSION = 1600;
+      var JPEG_QUALITY = 0.72;
+      var SKIP_BELOW_BYTES = 300 * 1024;
+
+      function compressImage(file) {
+        return new Promise(function (resolve) {
+          if (!file.type || file.type.indexOf('image/') !== 0 || file.size <= SKIP_BELOW_BYTES) {
+            resolve(file);
+            return;
+          }
+          var img = new Image();
+          var url = URL.createObjectURL(file);
+          img.onload = function () {
+            URL.revokeObjectURL(url);
+            var scale = Math.min(1, MAX_DIMENSION / Math.max(img.width, img.height));
+            var canvas = document.createElement('canvas');
+            canvas.width = Math.round(img.width * scale) || img.width;
+            canvas.height = Math.round(img.height * scale) || img.height;
+            canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+            canvas.toBlob(function (blob) {
+              if (!blob || blob.size >= file.size) {
+                resolve(file);
+                return;
+              }
+              var newName = file.name.replace(/\.\w+$/, '') + '.jpg';
+              resolve(new File([blob], newName, { type: 'image/jpeg', lastModified: Date.now() }));
+            }, 'image/jpeg', JPEG_QUALITY);
+          };
+          img.onerror = function () {
+            URL.revokeObjectURL(url);
+            resolve(file);
+          };
+          img.src = url;
+        });
+      }
+
+      // Submitting mid-compression would send the original, uncompressed
+      // files — block the submit button(s) in that input's form for as
+      // long as any of its photos are still being processed. A counter
+      // (not a flag) copes with several file inputs on the same form
+      // finishing at different times.
+      function setFormBusy(form, busy) {
+        if (!form) return;
+        var count = Math.max((parseInt(form.dataset.photoProcessing, 10) || 0) + (busy ? 1 : -1), 0);
+        form.dataset.photoProcessing = String(count);
+        form.querySelectorAll('button[type=submit]').forEach(function (button) {
+          button.disabled = count > 0;
+        });
+      }
+
+      document.addEventListener('change', function (e) {
+        var input = e.target;
+        if (!input || input.tagName !== 'INPUT' || input.type !== 'file') return;
+        if (!input.accept || input.accept.indexOf('image') === -1) return;
+        if (typeof DataTransfer === 'undefined' || input.files.length === 0) return;
+
+        var files = Array.prototype.slice.call(input.files);
+        var form = input.form;
+        setFormBusy(form, true);
+        Promise.all(files.map(compressImage)).then(function (compressed) {
+          var dataTransfer = new DataTransfer();
+          compressed.forEach(function (f) { dataTransfer.items.add(f); });
+          input.files = dataTransfer.files;
+          setFormBusy(form, false);
+        });
+      });
+    })();
+
+    (function () {
       var button = document.getElementById('panic-button');
       if (!button) return;
       button.addEventListener('click', function () {
