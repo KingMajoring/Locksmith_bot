@@ -10,7 +10,9 @@ location clearly too far from the job (straight-line, see
 _MAX_HOME_STRAIGHT_LINE_MILES) is filtered out before ever calling
 Google — no point spending a real distance lookup, and a slot in the
 25-origins-per-request batch, confirming what a rough distance already
-rules out. Shift information (who's actually on today, via Microsoft
+rules out — and anyone whose real drive time comes back over
+_MAX_DRIVE_TIME_MINUTES doesn't make the list at all, home or future
+job alike. Shift information (who's actually on today, via Microsoft
 Teams Shifts) isn't wired up yet, so this ranks every eligible active
 locksmith rather than only ones on shift — a human still picks from
 the list.
@@ -38,6 +40,13 @@ _EARTH_RADIUS_MILES = 3958.8
 # straight-line, and this is filtering out candidates entirely, not
 # just how they're ranked.
 _MAX_HOME_STRAIGHT_LINE_MILES = 75
+
+# Beyond this real drive time, a locksmith isn't a sensible suggestion
+# regardless of which signal (home or a future job) got them onto the
+# list — a future-job postcode has no straight-line pre-filter like a
+# home lat/lng does (see _home_origin), so this is the only thing
+# stopping "already booked nearby" from meaning five hours away.
+_MAX_DRIVE_TIME_MINUTES = 120
 
 
 def _straight_line_miles(lat1, lng1, lat2, lng2):
@@ -153,6 +162,8 @@ def _nearest_locksmiths(job):
     best_by_locksmith = {}
     for locksmith, attendance, distance in zip(origin_locksmiths, origin_attendances, distances):
         if distance.status != "OK" or distance.distance_metres is None:
+            continue
+        if distance.duration_minutes is None or distance.duration_minutes > _MAX_DRIVE_TIME_MINUTES:
             continue
         current = best_by_locksmith.get(locksmith.pk)
         if current is None or distance.distance_metres < current[1].distance_metres:

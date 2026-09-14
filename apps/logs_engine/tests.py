@@ -191,7 +191,7 @@ class LogsEngineNearestLocksmithsTests(TestCase):
             get_future_locksmith_attendances=MagicMock(return_value=[]),
         )
         mock_get_maps.return_value = MagicMock(get_distances=MagicMock(return_value=[
-            LocksmithDistance(origin="G1 1AA", distance_metres=560000.0, duration_seconds=30000, status="OK"),
+            LocksmithDistance(origin="G1 1AA", distance_metres=90000.0, duration_seconds=5400, status="OK"),
         ]))
 
         response = self.client.get(reverse("logs_engine:lookup"), {"report_id": "501179"})
@@ -319,6 +319,71 @@ class LogsEngineNearestLocksmithsTests(TestCase):
         Locksmith.objects.create(name="WGTK - Bad Postcode", home_postcode="NOTREAL")
         mock_get_maps.return_value = MagicMock(get_distances=MagicMock(return_value=[
             LocksmithDistance(origin="NOTREAL", distance_metres=None, duration_seconds=None, status="NOT_FOUND"),
+        ]))
+
+        response = self.client.get(reverse("logs_engine:lookup"), {"report_id": "501179"})
+
+        self.assertEqual(response.context["nearest_locksmiths"], [])
+
+    @patch("apps.logs_engine.views.get_google_maps_client")
+    @patch("apps.logs_engine.views.get_handl_client")
+    def test_drive_time_over_two_hours_excluded_even_with_a_resolved_distance(self, mock_get_handl, mock_get_maps):
+        # A postcode-only home skips the straight-line pre-filter (see
+        # test_postcode_only_home_never_distance_filtered), so this real
+        # drive-time cutoff is what actually keeps something 3+ hours
+        # away off the list.
+        Locksmith.objects.create(name="WGTK - Too Slow", home_postcode="EH1 1AA")
+        mock_get_handl.return_value = MagicMock(
+            get_job_details=MagicMock(return_value={"501179": _job_with_location()}),
+            get_future_locksmith_attendances=MagicMock(return_value=[]),
+        )
+        mock_get_maps.return_value = MagicMock(get_distances=MagicMock(return_value=[
+            LocksmithDistance(origin="EH1 1AA", distance_metres=560000.0, duration_seconds=7260, status="OK"),
+        ]))
+
+        response = self.client.get(reverse("logs_engine:lookup"), {"report_id": "501179"})
+
+        self.assertEqual(response.context["nearest_locksmiths"], [])
+
+    @patch("apps.logs_engine.views.get_google_maps_client")
+    @patch("apps.logs_engine.views.get_handl_client")
+    def test_drive_time_at_exactly_two_hours_included(self, mock_get_handl, mock_get_maps):
+        Locksmith.objects.create(name="WGTK - Just Fine", home_postcode="EH1 1AA")
+        mock_get_handl.return_value = MagicMock(
+            get_job_details=MagicMock(return_value={"501179": _job_with_location()}),
+            get_future_locksmith_attendances=MagicMock(return_value=[]),
+        )
+        mock_get_maps.return_value = MagicMock(get_distances=MagicMock(return_value=[
+            LocksmithDistance(origin="EH1 1AA", distance_metres=190000.0, duration_seconds=7200, status="OK"),
+        ]))
+
+        response = self.client.get(reverse("logs_engine:lookup"), {"report_id": "501179"})
+
+        self.assertEqual(len(response.context["nearest_locksmiths"]), 1)
+
+    @patch("apps.logs_engine.views.get_google_maps_client")
+    @patch("apps.logs_engine.views.get_handl_client")
+    def test_future_job_beyond_drive_time_cap_excluded_too(self, mock_get_handl, mock_get_maps):
+        # The cap applies regardless of which signal put a locksmith on
+        # the list — an "already booked nearby" future job 3+ hours away
+        # is exactly as unhelpful as a far-off home postcode.
+        far_locksmith = Locksmith.objects.create(name="WGTK - Andrew S", home_postcode="")
+        SoterLocksmithId.objects.create(locksmith=far_locksmith, soter_locksmith_id="1204")
+        mock_get_handl.return_value = MagicMock(
+            get_job_details=MagicMock(return_value={"501179": _job_with_location()}),
+            get_future_locksmith_attendances=MagicMock(return_value=[
+                FutureLocksmithAttendance(
+                    report_id="502000",
+                    soter_locksmith_id="1204",
+                    locksmith_name="WGTK - Andrew S",
+                    available_from=datetime.now() + timedelta(days=1),
+                    vehicle_postcode="EH1 1AA",
+                    vehicle_reg="AB20 CDE",
+                ),
+            ]),
+        )
+        mock_get_maps.return_value = MagicMock(get_distances=MagicMock(return_value=[
+            LocksmithDistance(origin="EH1 1AA", distance_metres=560000.0, duration_seconds=7260, status="OK"),
         ]))
 
         response = self.client.get(reverse("logs_engine:lookup"), {"report_id": "501179"})
