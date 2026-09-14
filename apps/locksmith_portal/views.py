@@ -584,29 +584,84 @@ def _avg_duration_minutes(queryset):
     return round(sum(durations) / len(durations), 1) if durations else None
 
 
+def _todays_live_stats(locksmith, today):
+    """This locksmith's job counts/van earnings for *today* specifically,
+    computed live from JobVisit (+ a live Handl lookup for net_cost)
+    rather than CompletedJob, which only gets today's jobs once
+    tonight's pull_completed_jobs run happens — until then a job
+    finished five minutes ago in the portal wouldn't move the numbers
+    at all, which reads as the stats not updating. cancelled visits
+    (never attended) are excluded, same as CompletedJob's own
+    success/failed-only Status choices."""
+    visits_today = list(
+        JobVisit.objects.filter(
+            locksmith=locksmith, completed_at__date=today,
+            outcome__in=[JobVisit.Outcome.COMPLETED, JobVisit.Outcome.FAILED],
+        )
+    )
+    completed_today = [v for v in visits_today if v.outcome == JobVisit.Outcome.COMPLETED]
+
+    van_earnings = 0
+    if completed_today:
+        try:
+            details = get_handl_client().get_job_details([v.report_id for v in completed_today])
+        except Exception:
+            logger.exception("Failed to fetch Handl job details for today's live stats")
+            details = {}
+        van_earnings = sum(
+            details[v.report_id].net_cost
+            for v in completed_today
+            if v.report_id in details and details[v.report_id].net_cost
+        )
+
+    return {
+        "jobs": len(visits_today),
+        "completed": len(completed_today),
+        "failed": len(visits_today) - len(completed_today),
+        "van_earnings": van_earnings,
+    }
+
+
 def _locksmith_stats(locksmith):
     """This locksmith's own numbers for the portal dashboard — a
     self-visible counterpart to the office-only benchmarking already
     built for Job Completion (see services/benchmarking.py). Job count
-    and van earnings are month-to-date; own vs company average duration
-    uses the same 90-day/success-only window that service uses, just
-    aggregated across all loss types rather than one at a time."""
+    and van earnings are both month-to-date and today-only, so a
+    locksmith can see either; own vs company average duration uses the
+    same 90-day/success-only window that service uses, just aggregated
+    across all loss types rather than one at a time.
+
+    CompletedJob is synced overnight (see module docstring), so it's
+    always missing today's own jobs — month-to-date explicitly excludes
+    today from that query and adds _todays_live_stats' live numbers in
+    instead, rather than leaving today's contribution to catch up
+    whenever tonight's pull runs."""
     today = timezone.localdate()
     month_start = today.replace(day=1)
     window_start = today - timedelta(days=90)
 
-    month_to_date = CompletedJob.objects.filter(locksmith=locksmith, job_date__gte=month_start)
+    synced_mtd = CompletedJob.objects.filter(
+        locksmith=locksmith, job_date__gte=month_start, job_date__lt=today,
+    )
+    completed_synced = synced_mtd.filter(status=CompletedJob.Status.SUCCESS)
+    todays = _todays_live_stats(locksmith, today)
+
     successful_window = CompletedJob.objects.filter(
         status=CompletedJob.Status.SUCCESS, job_date__gte=window_start,
         start_time__isnull=False, end_time__isnull=False,
     )
-    completed_mtd = month_to_date.filter(status=CompletedJob.Status.SUCCESS)
 
     return {
-        "jobs_mtd": month_to_date.count(),
-        "completed_mtd": completed_mtd.count(),
-        "failed_mtd": month_to_date.filter(status=CompletedJob.Status.FAILED).count(),
-        "van_earnings_mtd": completed_mtd.aggregate(total=Sum("net_cost"))["total"] or 0,
+        "jobs_today": todays["jobs"],
+        "completed_today": todays["completed"],
+        "failed_today": todays["failed"],
+        "van_earnings_today": todays["van_earnings"],
+        "jobs_mtd": synced_mtd.count() + todays["jobs"],
+        "completed_mtd": completed_synced.count() + todays["completed"],
+        "failed_mtd": synced_mtd.filter(status=CompletedJob.Status.FAILED).count() + todays["failed"],
+        "van_earnings_mtd": (
+            (completed_synced.aggregate(total=Sum("net_cost"))["total"] or 0) + todays["van_earnings"]
+        ),
         "own_avg_minutes": _avg_duration_minutes(successful_window.filter(locksmith=locksmith)),
         "company_avg_minutes": _avg_duration_minutes(successful_window),
     }

@@ -595,19 +595,28 @@ class DashboardTests(TestCase):
         )
         self.assertEqual(response.context["selected_date"], today)
 
-    def test_dashboard_shows_own_stats(self):
+    @patch("apps.locksmith_portal.views.get_handl_client")
+    @patch("apps.locksmith_portal.views.get_optimo_client")
+    def test_dashboard_shows_own_stats(self, mock_get_optimo, mock_get_handl):
+        # No jobs scheduled today — isolates this test to the stats card,
+        # unrelated to whatever MockOptimoClient would otherwise invent
+        # for the day's job list.
+        mock_get_optimo.return_value = MagicMock(list_orders_for_date=MagicMock(return_value=[]))
         today = timezone.localdate()
         month_start = today.replace(day=1)
         last_month = month_start - timedelta(days=1)
+        yesterday = today - timedelta(days=1)
         other_locksmith, _ = _make_locksmith_user(email="other@wgtk.co.uk", soter_ids=("999",))
 
+        # Already synced by last night's pull_completed_jobs run — counts
+        # towards month-to-date via CompletedJob.
         CompletedJob.objects.create(
-            order_no="1_a", report_id="1", job_date=today, locksmith=self.locksmith,
+            order_no="1_a", report_id="1", job_date=yesterday, locksmith=self.locksmith,
             status=CompletedJob.Status.SUCCESS, net_cost=100.0,
             start_time=timezone.now(), end_time=timezone.now() + timedelta(minutes=30),
         )
         CompletedJob.objects.create(
-            order_no="2_a", report_id="2", job_date=today, locksmith=self.locksmith,
+            order_no="2_a", report_id="2", job_date=yesterday, locksmith=self.locksmith,
             status=CompletedJob.Status.FAILED, net_cost=75.0,
         )  # a failed job's net_cost shouldn't count towards van earnings
         CompletedJob.objects.create(
@@ -615,26 +624,54 @@ class DashboardTests(TestCase):
             status=CompletedJob.Status.SUCCESS, net_cost=200.0,
         )  # outside the month-to-date window — shouldn't count
         CompletedJob.objects.create(
-            order_no="4_a", report_id="4", job_date=today, locksmith=other_locksmith,
+            order_no="4_a", report_id="4", job_date=yesterday, locksmith=other_locksmith,
             status=CompletedJob.Status.SUCCESS,
             start_time=timezone.now(), end_time=timezone.now() + timedelta(minutes=90),
         )
 
+        # Completed just now through the portal itself — nothing's synced
+        # this job to CompletedJob yet (tonight's pull hasn't run), so
+        # this only shows up via the live JobVisit/Handl path.
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no="5_a", report_id="5",
+            stage=JobVisit.Stage.DONE, outcome=JobVisit.Outcome.COMPLETED,
+            completed_at=timezone.now(),
+        )
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no="6_a", report_id="6",
+            stage=JobVisit.Stage.DONE, outcome=JobVisit.Outcome.FAILED,
+            completed_at=timezone.now(),
+        )
+        mock_get_handl.return_value = MagicMock(get_job_details=MagicMock(return_value={
+            "5": JobDetails(
+                report_id="5", make="", model="", year="", reg="", vin="",
+                service_type="", loss_type="", supplied_service="", net_cost=50.0,
+            ),
+        }))
+
         response = self.client.get(reverse("locksmith_portal:dashboard"))
         stats = response.context["stats"]
-        self.assertEqual(stats["jobs_mtd"], 2)
-        self.assertEqual(stats["completed_mtd"], 1)
-        self.assertEqual(stats["failed_mtd"], 1)
-        self.assertEqual(stats["van_earnings_mtd"], 100.0)
+        self.assertEqual(stats["jobs_today"], 2)
+        self.assertEqual(stats["completed_today"], 1)
+        self.assertEqual(stats["failed_today"], 1)
+        self.assertEqual(stats["van_earnings_today"], 50.0)
+        self.assertEqual(stats["jobs_mtd"], 4)
+        self.assertEqual(stats["completed_mtd"], 2)
+        self.assertEqual(stats["failed_mtd"], 2)
+        self.assertEqual(stats["van_earnings_mtd"], 150.0)
         self.assertEqual(stats["own_avg_minutes"], 30.0)
         self.assertEqual(stats["company_avg_minutes"], 60.0)
         self.assertContains(response, "Your stats")
-        self.assertContains(response, "£100.00")
+        self.assertContains(response, "£50.00")
+        self.assertContains(response, "£150.00")
 
-    def test_dashboard_shows_zero_van_earnings_with_no_completed_jobs(self):
+    @patch("apps.locksmith_portal.views.get_optimo_client")
+    def test_dashboard_shows_zero_van_earnings_with_no_completed_jobs(self, mock_get_optimo):
+        mock_get_optimo.return_value = MagicMock(list_orders_for_date=MagicMock(return_value=[]))
         response = self.client.get(reverse("locksmith_portal:dashboard"))
         stats = response.context["stats"]
         self.assertEqual(stats["van_earnings_mtd"], 0)
+        self.assertEqual(stats["van_earnings_today"], 0)
         self.assertContains(response, "£0.00")
 
 

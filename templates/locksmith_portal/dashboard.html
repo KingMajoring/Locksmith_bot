@@ -19,8 +19,32 @@
 </div>
 
 <div class="card">
-  <h2>Your stats — month to date</h2>
-  <div class="stat-row">
+  <div class="stats-header">
+    <h2>Your stats</h2>
+    <div class="stats-toggle">
+      <button type="button" class="stats-toggle-btn active" data-stats-period="today">Today</button>
+      <button type="button" class="stats-toggle-btn" data-stats-period="mtd">Month to date</button>
+    </div>
+  </div>
+  <div class="stat-row" data-stats-panel="today">
+    <div class="stat-tile">
+      <div class="stat-label">Jobs</div>
+      <div class="stat-value">{{ stats.jobs_today }}</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-label">Completed</div>
+      <div class="stat-value">{{ stats.completed_today }}</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-label">Failed</div>
+      <div class="stat-value">{{ stats.failed_today }}</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-label">Van earnings</div>
+      <div class="stat-value">£{{ stats.van_earnings_today|floatformat:2 }}</div>
+    </div>
+  </div>
+  <div class="stat-row" data-stats-panel="mtd" hidden>
     <div class="stat-tile">
       <div class="stat-label">Jobs</div>
       <div class="stat-value">{{ stats.jobs_mtd }}</div>
@@ -45,6 +69,22 @@
     </p>
   {% endif %}
 </div>
+
+<script>
+  (function () {
+    var buttons = document.querySelectorAll('.stats-toggle-btn');
+    var panels = document.querySelectorAll('[data-stats-panel]');
+    buttons.forEach(function (button) {
+      button.addEventListener('click', function () {
+        var period = button.dataset.statsPeriod;
+        buttons.forEach(function (b) { b.classList.toggle('active', b === button); });
+        panels.forEach(function (panel) {
+          panel.hidden = panel.dataset.statsPanel !== period;
+        });
+      });
+    });
+  })();
+</script>
 
 <div class="card">
   <div class="day-nav">
