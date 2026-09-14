@@ -240,6 +240,34 @@ class LogsEngineNearestLocksmithsTests(TestCase):
 
     @patch("apps.logs_engine.views.get_google_maps_client")
     @patch("apps.logs_engine.views.get_handl_client")
+    def test_google_failure_surfaces_the_actual_error_to_the_page(self, mock_get_handl, mock_get_maps):
+        # A silent empty result here is indistinguishable from "nobody
+        # has a location set" — surfacing the real error (e.g. an API
+        # key restriction) is what actually lets office staff (or
+        # whoever's debugging) tell the two apart without server logs.
+        mock_get_handl.return_value = MagicMock(get_job_details=MagicMock(
+            return_value={"501179": _job_with_location()}
+        ))
+        Locksmith.objects.create(name="WGTK - Nearby", home_postcode="NR14 8PL")
+        mock_get_maps.return_value = MagicMock(
+            get_distances=MagicMock(side_effect=ValueError(
+                "Distance Matrix request failed: REQUEST_DENIED — API key restricted"
+            ))
+        )
+
+        response = self.client.get(reverse("logs_engine:lookup"), {"report_id": "501179"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["nearest_locksmiths"], [])
+        self.assertEqual(
+            response.context["nearest_locksmiths_error"],
+            "Distance Matrix request failed: REQUEST_DENIED — API key restricted",
+        )
+        self.assertContains(response, "Distance lookup failed")
+        self.assertContains(response, "REQUEST_DENIED")
+
+    @patch("apps.logs_engine.views.get_google_maps_client")
+    @patch("apps.logs_engine.views.get_handl_client")
     def test_unresolved_origin_excluded_from_ranked_list(self, mock_get_handl, mock_get_maps):
         mock_get_handl.return_value = MagicMock(get_job_details=MagicMock(
             return_value={"501179": _job_with_location()}

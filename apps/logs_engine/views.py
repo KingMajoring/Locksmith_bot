@@ -62,22 +62,28 @@ def _soonest_future_attendance_by_locksmith(locksmiths):
 
 
 def _nearest_locksmiths(job):
-    """(locksmith, LocksmithDistance, FutureLocksmithAttendance | None)
-    triples, nearest first, for every active locksmith who has *either*
-    a home base (lat/lng, or a postcode as a fallback) *or* a soonest
-    already-booked future job with a usable postcode — a locksmith with
-    no home location on file shouldn't be silently excluded just
-    because they happen to already have an upcoming job near this one.
-    The attendance is set when that locksmith's ranked distance came
-    from a future job location rather than their home base. Best-effort,
-    same rationale as every other external lookup on this page — a
-    missing vehicle location or a Google API failure just means no
-    suggestions rather than a broken page."""
+    """((locksmith, LocksmithDistance, FutureLocksmithAttendance | None)
+    triples, error_message) — ranked nearest first, for every active
+    locksmith who has *either* a home base (lat/lng, or a postcode as a
+    fallback) *or* a soonest already-booked future job with a usable
+    postcode — a locksmith with no home location on file shouldn't be
+    silently excluded just because they happen to already have an
+    upcoming job near this one. The attendance is set when that
+    locksmith's ranked distance came from a future job location rather
+    than their home base.
+
+    error_message is set (and the list empty) only when there WERE
+    candidate locksmiths to check but the Google call itself failed —
+    e.g. an API key restriction or a disabled API returns a clear
+    top-level status Distance Matrix hands back, worth surfacing
+    directly rather than just logging server-side, since this office
+    tool has no other easy way to see that. Empty list with no error
+    just means no locksmith had a usable location, or none resolved."""
     if job.vehicle_latitude is None or job.vehicle_longitude is None:
-        return []
+        return [], ""
     locksmiths = list(Locksmith.objects.filter(active=True).order_by("name"))
     if not locksmiths:
-        return []
+        return [], ""
 
     soonest_future = _soonest_future_attendance_by_locksmith(locksmiths)
 
@@ -99,15 +105,15 @@ def _nearest_locksmiths(job):
             origin_attendances.append(attendance)
 
     if not origins:
-        return []
+        return [], ""
 
     try:
         distances = get_google_maps_client().get_distances(
             origins, job.vehicle_latitude, job.vehicle_longitude,
         )
-    except Exception:
+    except Exception as exc:
         logger.exception("Failed to fetch Google distances for Logs Engine lookup %s", job.report_id)
-        return []
+        return [], str(exc)
 
     best_by_locksmith = {}
     for locksmith, attendance, distance in zip(origin_locksmiths, origin_attendances, distances):
@@ -119,7 +125,7 @@ def _nearest_locksmiths(job):
 
     ranked = list(best_by_locksmith.values())
     ranked.sort(key=lambda item: item[1].distance_metres)
-    return ranked
+    return ranked, ""
 
 
 @login_required
@@ -134,6 +140,8 @@ def lookup(request):
             details = {}
         job = details.get(report_id)
 
+    nearest_locksmiths, nearest_locksmiths_error = _nearest_locksmiths(job) if job else ([], "")
+
     return render(
         request,
         "logs_engine/lookup.html",
@@ -142,7 +150,8 @@ def lookup(request):
             "searched": bool(report_id),
             "job": job,
             "service_label": display_loss_type(job.loss_type) if job else "",
-            "nearest_locksmiths": _nearest_locksmiths(job) if job else [],
+            "nearest_locksmiths": nearest_locksmiths,
+            "nearest_locksmiths_error": nearest_locksmiths_error,
             "locksmiths_missing_postcode": (
                 Locksmith.objects.filter(
                     active=True, home_postcode="", home_latitude__isnull=True,

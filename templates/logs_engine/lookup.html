@@ -54,6 +54,8 @@
               <td>
                 {% if attendance %}
                   Already booked nearby ({{ attendance.vehicle_reg|default:"job" }}, {{ attendance.available_from|date:"D j M, H:i" }})
+                {% elif locksmith.home_latitude is not None %}
+                  GPS location
                 {% else %}
                   Home postcode
                 {% endif %}
@@ -63,6 +65,13 @@
         </table>
       {% elif job.vehicle_latitude is None %}
         <p class="empty">This job has no vehicle location recorded in Handl, so distance can't be calculated.</p>
+      {% elif nearest_locksmiths_error %}
+        <p class="empty">
+          Distance lookup failed, so no suggestions — this is a Google Maps API
+          problem (check the key's restrictions and that the Distance Matrix
+          API is enabled/billed in Google Cloud console), not a data problem:
+        </p>
+        <p class="sub" style="font-family:monospace;">{{ nearest_locksmiths_error }}</p>
       {% else %}
         <p class="empty">No active locksmith has a home postcode set, and none has an already-booked future job nearby either.</p>
       {% endif %}
