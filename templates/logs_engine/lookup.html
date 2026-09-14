@@ -36,9 +36,12 @@
         "Expected home" is when this locksmith would actually walk in
         their own front door if sent on this job — the drive there,
         ~{{ job_duration_minutes }} min for the job itself, then the
-        drive back home — next to when Teams says they're normally due
-        home today anyway, this job aside. Outbound drive capped at 2
-        hours. "Jobs that day" is how busy this locksmith already is on
+        drive back home, starting from when they'd realistically set
+        off (right now for the home option, or Teams' shift start time
+        for an already-booked option's own day) — next to when Teams
+        says they're normally due home today anyway, this job aside.
+        Outbound drive capped at 2 hours. "Jobs that day" is how busy
+        this locksmith already is on
         THAT option's own day (today for home, that job's date for an
         already-booked option) — hover it for a map. Shift status
         (Teams) is shown but doesn't filter the list — check before
@@ -73,8 +76,12 @@
                   <td>
                     {% if option.expected_home_after %}
                       <span class="drive-time-pill {{ option.total_minutes|drive_time_class }}">{{ option.expected_home_after|date:"D, H:i" }}</span>
-                    {% else %}
+                    {% elif option.total_minutes is None %}
                       <span class="sub">unknown — no home location on file</span>
+                    {% elif option.attendance %}
+                      <span class="sub">unknown — no Teams shift on file for that day</span>
+                    {% else %}
+                      <span class="sub">unknown</span>
                     {% endif %}
                     {% if card.expected_home %}
                       <div class="sub">normally home today {{ card.expected_home|date:"H:i" }}</div>

@@ -51,6 +51,17 @@ class TeamsShiftsClient(ABC):
         rota Team, keyed by each rostered person's email so callers can
         match it straight to Locksmith.email."""
 
+    @abstractmethod
+    def list_shifts_for_date_range(self, start_date: date, end_date: date) -> list[ShiftAssignment]:
+        """Same as list_shifts_for_date, but for every date in
+        [start_date, end_date] (inclusive) in ONE call — for a caller
+        that needs several different dates' shifts (e.g. Logs Engine
+        needing each future-job option's own day, not just today),
+        this is one Graph round trip instead of one per date, which
+        matters: an unbounded/chatty shifts query is what made a
+        lookup hang once already (see list_shifts_for_date's real
+        implementation)."""
+
 
 class MockTeamsShiftsClient(TeamsShiftsClient):
     """Deterministic fake shifts for local dev/tests, standing in until
@@ -75,6 +86,14 @@ class MockTeamsShiftsClient(TeamsShiftsClient):
                     shift_end=datetime.combine(for_date, datetime.min.time()).replace(hour=start_hour + 9),
                 )
             )
+        return shifts
+
+    def list_shifts_for_date_range(self, start_date: date, end_date: date) -> list[ShiftAssignment]:
+        shifts = []
+        current = start_date
+        while current <= end_date:
+            shifts.extend(self.list_shifts_for_date(current))
+            current += timedelta(days=1)
         return shifts
 
 
@@ -137,6 +156,9 @@ class RealTeamsShiftsClient(TeamsShiftsClient):
         return items
 
     def list_shifts_for_date(self, for_date: date) -> list[ShiftAssignment]:
+        return self.list_shifts_for_date_range(for_date, for_date)
+
+    def list_shifts_for_date_range(self, start_date: date, end_date: date) -> list[ShiftAssignment]:
         token = self._get_access_token()
 
         # A Graph Shift object only carries userId (an Azure AD object
@@ -155,10 +177,15 @@ class RealTeamsShiftsClient(TeamsShiftsClient):
         # ENTIRE shift history — confirmed live to make a lookup hang
         # once WGTK ROTA had months of published shifts across ~28
         # people, paging through far more data than needed. A generous
-        # +/- 1 day UTC window (covers any BST offset, so nothing right
-        # at the edge of the day gets missed) keeps this fast; the
-        # precise per-shift date check below is still the real source
-        # of truth for what actually counts as "covers for_date".
+        # +/- 1 day UTC window around the whole requested range (covers
+        # any BST offset, so nothing right at the edges gets missed)
+        # keeps this fast; the precise per-shift date check below is
+        # still the real source of truth for what actually counts as
+        # "covers this range". Fetching the whole range in one request
+        # (rather than one request per date) is deliberate — the same
+        # chattiness that made the original single-date version hang
+        # would just as easily hang again if a caller looped this over
+        # several dates instead.
         #
         # Graph's shifts $filter treats these as DateTimeOffset
         # literals, NOT string literals — quoting them (e.g. ge
@@ -167,8 +194,8 @@ class RealTeamsShiftsClient(TeamsShiftsClient):
         # exact query 400'd until the quotes were removed, matching
         # Microsoft's own documented example for this endpoint, which
         # is unquoted.
-        window_start = datetime.combine(for_date - timedelta(days=1), datetime.min.time())
-        window_end = datetime.combine(for_date + timedelta(days=1), datetime.min.time())
+        window_start = datetime.combine(start_date - timedelta(days=1), datetime.min.time())
+        window_end = datetime.combine(end_date + timedelta(days=1), datetime.min.time())
         filter_query = (
             f"sharedShift/startDateTime ge {window_start.isoformat()}Z "
             f"and sharedShift/endDateTime le {window_end.isoformat()}Z"
@@ -186,7 +213,7 @@ class RealTeamsShiftsClient(TeamsShiftsClient):
             end = _parse_graph_datetime(shared.get("endDateTime"))
             if start is None or end is None:
                 continue
-            if start.date() > for_date or end.date() < for_date:
+            if start.date() > end_date or end.date() < start_date:
                 continue
             email = email_by_user_id.get(shift.get("userId"), "")
             if not email:

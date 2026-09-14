@@ -1768,6 +1768,16 @@ class MockTeamsShiftsClientTests(TestCase):
             self.assertLess(shift.shift_start, shift.shift_end)
             self.assertIn("@", shift.email)
 
+    def test_date_range_matches_concatenated_single_date_calls(self):
+        client = MockTeamsShiftsClient()
+        ranged = client.list_shifts_for_date_range(date(2026, 9, 15), date(2026, 9, 17))
+        single_days = (
+            client.list_shifts_for_date(date(2026, 9, 15))
+            + client.list_shifts_for_date(date(2026, 9, 16))
+            + client.list_shifts_for_date(date(2026, 9, 17))
+        )
+        self.assertEqual(ranged, single_days)
+
 
 def _fake_json_response(payload):
     resp = MagicMock()
@@ -1834,6 +1844,38 @@ class RealTeamsShiftsClientTests(TestCase):
         self.assertIn("sharedShift/startDateTime", shifts_call_url)
         self.assertIn("2026-09-14", shifts_call_url)  # window starts the day before
         self.assertIn("2026-09-16", shifts_call_url)  # window ends the day after
+
+    @patch("requests.get")
+    @patch("requests.post")
+    def test_date_range_fetches_once_not_once_per_day(self, mock_post, mock_get):
+        # A caller needing several different dates' shifts (e.g. Logs
+        # Engine, one per future-job option) must be able to get them
+        # all in ONE Graph round trip — looping list_shifts_for_date
+        # per date would be exactly the kind of chatty usage that made
+        # a lookup hang once already.
+        mock_post.return_value = _fake_token_response()
+        mock_get.side_effect = [
+            _fake_json_response({"value": [{"id": "user-1", "mail": "andrew.s@wgtk.co.uk"}]}),
+            _fake_json_response({"value": [
+                {
+                    "userId": "user-1",
+                    "sharedShift": {"startDateTime": "2026-09-15T07:00:00Z", "endDateTime": "2026-09-15T16:00:00Z"},
+                },
+                {
+                    "userId": "user-1",
+                    "sharedShift": {"startDateTime": "2026-09-17T08:00:00Z", "endDateTime": "2026-09-17T17:00:00Z"},
+                },
+            ]}),
+        ]
+        client = self._client()
+
+        shifts = client.list_shifts_for_date_range(date(2026, 9, 15), date(2026, 9, 21))
+
+        self.assertEqual(mock_get.call_count, 2)  # one for members, one for shifts — not one per day
+        self.assertEqual({s.shift_start.date() for s in shifts}, {date(2026, 9, 15), date(2026, 9, 17)})
+        shifts_call_url = mock_get.call_args_list[1].args[0]
+        self.assertIn("2026-09-14", shifts_call_url)  # window starts the day before the range
+        self.assertIn("2026-09-22", shifts_call_url)  # window ends the day after the range
 
     @patch("requests.get")
     @patch("requests.post")

@@ -12,7 +12,7 @@ from apps.integrations.teams_shifts import ShiftAssignment
 from apps.locksmiths.models import Locksmith, SoterLocksmithId
 
 from .templatetags.logs_engine_extras import drive_time_class
-from .views import _straight_line_miles
+from .views import _FUTURE_JOB_WINDOW_DAYS, _straight_line_miles
 
 
 def _job_with_location(**overrides):
@@ -651,7 +651,7 @@ class LogsEngineNearestLocksmithsTests(TestCase):
             LocksmithDistance(origin="NR14 8PL", distance_metres=8369.0, duration_seconds=720, status="OK"),
         ]))
         now = django_timezone.localtime(django_timezone.now()).replace(tzinfo=None)
-        mock_get_shifts.return_value = MagicMock(list_shifts_for_date=MagicMock(return_value=[
+        mock_get_shifts.return_value = MagicMock(list_shifts_for_date_range=MagicMock(return_value=[
             ShiftAssignment(
                 email="andrew.s@wgtk.co.uk",
                 shift_start=now - timedelta(hours=1), shift_end=now + timedelta(hours=1),
@@ -664,7 +664,9 @@ class LogsEngineNearestLocksmithsTests(TestCase):
         self.assertTrue(card.on_shift)
         self.assertContains(response, "On shift")
         self.assertEqual(card.expected_home, now + timedelta(hours=1))
-        mock_get_shifts.return_value.list_shifts_for_date.assert_called_once_with(now.date())
+        mock_get_shifts.return_value.list_shifts_for_date_range.assert_called_once_with(
+            now.date(), now.date() + timedelta(days=_FUTURE_JOB_WINDOW_DAYS),
+        )
 
     @patch("apps.logs_engine.views.get_teams_shifts_client")
     @patch("apps.logs_engine.views.get_google_maps_client")
@@ -696,7 +698,7 @@ class LogsEngineNearestLocksmithsTests(TestCase):
             LocksmithDistance(origin="NR14 8PL", distance_metres=8369.0, duration_seconds=720, status="OK"),
         ]))
         now = django_timezone.localtime(django_timezone.now()).replace(tzinfo=None)
-        mock_get_shifts.return_value = MagicMock(list_shifts_for_date=MagicMock(return_value=[
+        mock_get_shifts.return_value = MagicMock(list_shifts_for_date_range=MagicMock(return_value=[
             ShiftAssignment(
                 email="michael.mccrossan@wgtk.co.uk",
                 shift_start=now - timedelta(hours=1), shift_end=now + timedelta(hours=1),
@@ -726,7 +728,7 @@ class LogsEngineNearestLocksmithsTests(TestCase):
             LocksmithDistance(origin="NR14 8PL", distance_metres=8369.0, duration_seconds=720, status="OK"),
         ]))
         now = django_timezone.localtime(django_timezone.now()).replace(tzinfo=None)
-        mock_get_shifts.return_value = MagicMock(list_shifts_for_date=MagicMock(return_value=[
+        mock_get_shifts.return_value = MagicMock(list_shifts_for_date_range=MagicMock(return_value=[
             # Rostered on today, but that shift already finished hours ago.
             ShiftAssignment(
                 email="andrew.s@wgtk.co.uk",
@@ -776,7 +778,7 @@ class LogsEngineNearestLocksmithsTests(TestCase):
             LocksmithDistance(origin="NR14 8PL", distance_metres=8369.0, duration_seconds=720, status="OK"),
         ]))
         mock_get_shifts.return_value = MagicMock(
-            list_shifts_for_date=MagicMock(side_effect=Exception(
+            list_shifts_for_date_range=MagicMock(side_effect=Exception(
                 "Graph request failed: 403 Forbidden — Insufficient privileges"
             ))
         )
@@ -794,13 +796,26 @@ class LogsEngineNearestLocksmithsTests(TestCase):
         self.assertContains(response, "Shift status (Teams) couldn't be checked")
         self.assertContains(response, "Insufficient privileges")
 
+    @patch("apps.logs_engine.views.get_teams_shifts_client")
     @patch("apps.logs_engine.views.get_google_maps_client")
     @patch("apps.logs_engine.views.get_handl_client")
-    def test_home_postcode_wins_when_closer_than_future_job(self, mock_get_handl, mock_get_maps):
-        locksmith = Locksmith.objects.create(name="WGTK - Andrew S", home_postcode="NR14 8PL")
+    def test_home_postcode_wins_when_closer_than_future_job(self, mock_get_handl, mock_get_maps, mock_get_shifts):
+        locksmith = Locksmith.objects.create(
+            name="WGTK - Andrew S", home_postcode="NR14 8PL", email="andrew.s@wgtk.co.uk",
+        )
         SoterLocksmithId.objects.create(locksmith=locksmith, soter_locksmith_id="1204")
 
-        attendance_start = datetime.now() + timedelta(days=1)
+        attendance_start = django_timezone.localtime(django_timezone.now()).replace(tzinfo=None) + timedelta(days=1)
+        # Teams' own shift start for that future day — the future-job
+        # option's departure should come from this, not from the job's
+        # own (date-only, no real time-of-day) booking record.
+        shift_start_that_day = attendance_start.replace(hour=8, minute=0, second=0, microsecond=0)
+        mock_get_shifts.return_value = MagicMock(list_shifts_for_date_range=MagicMock(return_value=[
+            ShiftAssignment(
+                email="andrew.s@wgtk.co.uk",
+                shift_start=shift_start_that_day, shift_end=shift_start_that_day + timedelta(hours=9),
+            ),
+        ]))
         mock_get_handl.return_value = MagicMock(
             get_job_details=MagicMock(return_value={"501179": _job_with_location()}),
             get_future_locksmith_attendances=MagicMock(return_value=[
@@ -850,13 +865,58 @@ class LogsEngineNearestLocksmithsTests(TestCase):
         worst = card.options[1]
         self.assertIsNotNone(worst.attendance)
         self.assertEqual(worst.total_minutes, 50 + 40 + 12)
-        # Future-job option: departs once they finish that booked job
-        # (its own start + the job duration), not "now" — so this
-        # lands tomorrow, not today.
+        # Future-job option: departs from Teams' own shift start on
+        # that job's own day, not "now" and not the job's own (always
+        # midnight) booking time — so this lands tomorrow, not today.
         self.assertEqual(
             worst.expected_home_after,
-            attendance_start + timedelta(minutes=40) + timedelta(minutes=50 + 40 + 12),
+            shift_start_that_day + timedelta(minutes=50 + 40 + 12),
         )
+
+    @patch("apps.logs_engine.views.get_teams_shifts_client")
+    @patch("apps.logs_engine.views.get_google_maps_client")
+    @patch("apps.logs_engine.views.get_handl_client")
+    def test_future_job_option_expected_home_unknown_without_a_shift_that_day(
+        self, mock_get_handl, mock_get_maps, mock_get_shifts
+    ):
+        # No Teams shift on file for the future job's own day (maybe
+        # it's not published yet, maybe they're not rostered) — rather
+        # than guess a departure time from nothing, expected_home_after
+        # should just be unknown, same as when there's no home location
+        # to resolve a return leg from at all.
+        locksmith = Locksmith.objects.create(
+            name="WGTK - Andrew S", home_postcode="NR14 8PL", email="andrew.s@wgtk.co.uk",
+        )
+        SoterLocksmithId.objects.create(locksmith=locksmith, soter_locksmith_id="1204")
+        mock_get_handl.return_value = MagicMock(
+            get_job_details=MagicMock(return_value={"501179": _job_with_location()}),
+            get_future_locksmith_attendances=MagicMock(return_value=[
+                FutureLocksmithAttendance(
+                    report_id="502000", soter_locksmith_id="1204", locksmith_name="WGTK - Andrew S",
+                    available_from=datetime.now() + timedelta(days=1),
+                    vehicle_postcode="IP1 2AB", vehicle_reg="AB20 CDE",
+                ),
+            ]),
+        )
+        mock_get_maps.return_value = MagicMock(get_distances=MagicMock(side_effect=[
+            [
+                LocksmithDistance(origin="NR14 8PL", distance_metres=8369.0, duration_seconds=720, status="OK"),
+                LocksmithDistance(origin="IP1 2AB", distance_metres=40000.0, duration_seconds=3000, status="OK"),
+            ],
+            [
+                LocksmithDistance(origin="NR14 8PL", distance_metres=8369.0, duration_seconds=720, status="OK"),
+            ],
+        ]))
+        mock_get_shifts.return_value = MagicMock(list_shifts_for_date_range=MagicMock(return_value=[]))  # no shifts at all
+
+        response = self.client.get(reverse("logs_engine:lookup"), {"report_id": "501179"})
+
+        card = response.context["nearest_locksmiths"][0]
+        worst = card.options[1]
+        self.assertIsNotNone(worst.attendance)
+        self.assertIsNotNone(worst.total_minutes)  # the round trip itself is still resolvable
+        self.assertIsNone(worst.expected_home_after)  # but there's no shift to anchor it to
+        self.assertContains(response, "no Teams shift on file for that day")
 
     @patch("apps.logs_engine.views.get_google_maps_client")
     @patch("apps.logs_engine.views.get_handl_client")
