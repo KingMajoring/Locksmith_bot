@@ -856,14 +856,22 @@ class LogsEngineNearestLocksmithsTests(TestCase):
         self.assertEqual(best.distance.distance_metres, 8369.0)
         self.assertIsNone(best.attendance)
         self.assertContains(response, "Home location")
+        self.assertEqual(best.return_minutes, 12)
         self.assertEqual(best.total_minutes, 12 + 40 + 12)
         # Home option: departs "now" — expected_home_after lands
         # somewhere in [now, now+64min] bracketed by the request itself.
         self.assertGreaterEqual(best.expected_home_after, before_request + timedelta(minutes=12 + 40 + 12))
         self.assertLessEqual(best.expected_home_after, after_request + timedelta(minutes=12 + 40 + 12))
+        # The breakdown is shown on the page itself, not just baked
+        # silently into the clock time — confirmed live this was easy
+        # to doubt otherwise, since only the one-way drive time pill
+        # was visible next to a clock time that had clearly jumped by
+        # more than that on its own.
+        self.assertContains(response, "12 min there + 40 min job + 12 min back")
 
         worst = card.options[1]
         self.assertIsNotNone(worst.attendance)
+        self.assertEqual(worst.return_minutes, 12)
         self.assertEqual(worst.total_minutes, 50 + 40 + 12)
         # Future-job option: departs from Teams' own shift start on
         # that job's own day, not "now" and not the job's own (always
@@ -872,6 +880,7 @@ class LogsEngineNearestLocksmithsTests(TestCase):
             worst.expected_home_after,
             shift_start_that_day + timedelta(minutes=50 + 40 + 12),
         )
+        self.assertContains(response, "50 min there + 40 min job + 12 min back")
 
     @patch("apps.logs_engine.views.get_teams_shifts_client")
     @patch("apps.logs_engine.views.get_google_maps_client")

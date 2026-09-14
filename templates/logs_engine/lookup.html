@@ -76,6 +76,7 @@
                   <td>
                     {% if option.expected_home_after %}
                       <span class="drive-time-pill {{ option.total_minutes|drive_time_class }}">{{ option.expected_home_after|date:"D, H:i" }}</span>
+                      <div class="sub">{{ option.distance.duration_minutes }} min there + {{ job_duration_minutes }} min job + {{ option.return_minutes }} min back</div>
                     {% elif option.total_minutes is None %}
                       <span class="sub">unknown — no home location on file</span>
                     {% elif option.attendance %}

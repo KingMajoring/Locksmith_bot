@@ -118,6 +118,12 @@ class LocksmithOption:
     # Outbound leg only: home, or this specific future job -> this job.
     distance: LocksmithDistance
     attendance: FutureLocksmithAttendance | None
+    # The drive back home afterwards — None exactly when total_minutes
+    # is (nothing resolved it). Split out from total_minutes so the
+    # page can show its own figure alongside the outbound drive time,
+    # proving expected_home_after genuinely bakes in the trip home
+    # rather than asking anyone to just trust an invisible number.
+    return_minutes: int | None
     # Outbound drive + _JOB_DURATION_MINUTES + the drive back home
     # afterwards, as a duration — None when the return leg couldn't be
     # resolved (no home location on file at all, or that lookup itself
@@ -479,7 +485,7 @@ def _nearest_locksmiths(job):
                 ("color:red", [a.vehicle_postcode for a in day_attendances]),
             ])
             options.append(LocksmithOption(
-                distance, attendance, total_minutes, expected_home_after,
+                distance, attendance, return_minutes, total_minutes, expected_home_after,
                 day_job_count=len(day_attendances), map_url=map_url,
             ))
         options.sort(key=lambda o: (o.total_minutes is None, o.total_minutes, o.distance.distance_metres))
