@@ -1,35 +1,44 @@
 """Logs Engine (Area: office job lookup) — office staff look up one Handl
 ReportID at a time to see the job's own details, and which active WGTK
-locksmith is best placed to take it: ranked by distance from whichever
-is closer, their home postcode or where their soonest already-booked
-future job already has them going (they're in that area anyway, so
-that beats driving over from home) — either signal alone is enough to
-put a locksmith in the running, so one with no home postcode on file
-can still surface via an upcoming job. A locksmith with a known home
-location clearly too far from the job (straight-line, see
-_MAX_HOME_STRAIGHT_LINE_MILES) is filtered out before ever calling
-Google — no point spending a real distance lookup, and a slot in the
-25-origins-per-request batch, confirming what a rough distance already
-rules out — and anyone whose real drive time comes back over
-_MAX_DRIVE_TIME_MINUTES doesn't make the list at all, home or future
-job alike. Ranking also isn't just the drive there: a locksmith has to
-actually do the job (see _JOB_DURATION_MINUTES) and then get home
-afterwards, so RankedLocksmith.total_minutes covers the whole round
-trip, not just the outbound leg — see _nearest_locksmiths. That figure
-still only accounts for the ONE soonest future job though, not a
-locksmith's whole day — RankedLocksmith.future_job_count and map_url
-(a small Static Maps preview: this job in blue, all their other booked
-jobs in red) exist so a human can see when someone's actually busier
-than the numbers alone suggest, since fully chaining multiple booked
-jobs into one total would need real route ordering, not attempted
-here. RankedLocksmith.on_shift shows whether Microsoft Teams Shifts
-has this locksmith rostered on right now — best-effort and never used
-to filter the list (shift data can be wrong or stale, e.g. an informal
-shift swap Teams doesn't know about), just another signal alongside
-the rest: a human still picks from the list.
+locksmiths could take it. Results are one LocksmithCard per locksmith,
+not one row per locksmith — each card lists every sensible option for
+getting THAT locksmith to the job: their home base, plus one option per
+job they already have booked in the next _FUTURE_JOB_WINDOW_DAYS (not
+just the chronologically soonest — a job booked for Thursday can still
+be a better option than one booked for tomorrow, if Thursday's is
+actually closer to this job), so office staff can see and choose
+between all of a locksmith's plausible options rather than only ever
+being shown whichever one the system picked as "best". Cards are
+sorted by their own best option first; options within a card are
+sorted the same way (see LocksmithCard/LocksmithOption). Either signal
+(home or an upcoming job) alone is enough to put a locksmith in the
+running, so one with no home postcode on file can still surface via an
+upcoming job. A locksmith with a known home location clearly too far
+from the job (straight-line, see _MAX_HOME_STRAIGHT_LINE_MILES) is
+filtered out before ever calling Google — no point spending a real
+distance lookup, and a slot in the 25-origins-per-request batch,
+confirming what a rough distance already rules out — and any option
+whose real drive time comes back over _MAX_DRIVE_TIME_MINUTES is
+dropped, home or future job alike. Ranking also isn't just the drive
+there: a locksmith has to actually do the job (see
+_JOB_DURATION_MINUTES) and then get home afterwards, so
+LocksmithOption.total_minutes covers the whole round trip, not just
+the outbound leg — see _nearest_locksmiths.
+LocksmithCard.future_job_count and map_url (a small Static Maps
+preview: this job in blue, all their other booked jobs in red) cover
+EVERY future job regardless of date, even ones outside the window used
+for options above, so a human can see when someone's actually busier
+than the visible options alone suggest, since fully chaining multiple
+booked jobs into one total would need real route ordering, not
+attempted here. LocksmithCard.on_shift shows whether Microsoft Teams
+Shifts has this locksmith rostered on right now — best-effort and
+never used to filter the list (shift data can be wrong or stale, e.g.
+an informal shift swap Teams doesn't know about), just another signal
+alongside the rest: a human still picks from the list.
 """
 import logging
 from dataclasses import dataclass
+from datetime import timedelta
 from math import asin, cos, radians, sin, sqrt
 
 from django.contrib.auth.decorators import login_required
@@ -70,21 +79,41 @@ _MAX_DRIVE_TIME_MINUTES = 120
 # rough stand-in used for every job until a real one exists.
 _JOB_DURATION_MINUTES = 40
 
+# How far ahead to look for a locksmith's future booked jobs when
+# ranking, not just their single soonest one — a job booked in 4 days
+# might be genuinely closer to this new job than one booked for
+# tomorrow, so every job within this window is checked as its own
+# candidate origin, and whichever turns out closest wins (see
+# _nearest_locksmiths). A week feels like the right horizon for "should
+# still meaningfully inform who's a sensible pick today" — a job a
+# month out says little about where someone will actually be.
+_FUTURE_JOB_WINDOW_DAYS = 7
+
 
 @dataclass(frozen=True)
-class RankedLocksmith:
-    locksmith: Locksmith
-    # Outbound leg only: home (or their soonest future job) -> this job.
+class LocksmithOption:
+    """One way a locksmith could plausibly take this job — either from
+    their home base, or via a job they already have booked in nearby
+    within _FUTURE_JOB_WINDOW_DAYS."""
+    # Outbound leg only: home, or this specific future job -> this job.
     distance: LocksmithDistance
     attendance: FutureLocksmithAttendance | None
     # Outbound drive + _JOB_DURATION_MINUTES + the drive back home
     # afterwards — None when the return leg couldn't be resolved (no
     # home location on file at all, or that lookup itself failed).
     total_minutes: int | None
+
+
+@dataclass(frozen=True)
+class LocksmithCard:
+    locksmith: Locksmith
+    # Every sensible option for this locksmith, best (lowest
+    # total_minutes) first — see _nearest_locksmiths.
+    options: list[LocksmithOption]
     # How many future jobs this locksmith already has booked in total —
-    # NOT just the one `attendance` (the soonest) points at. total_minutes
-    # above only ever accounts for that one, so a high count here is a
-    # sign this locksmith may be busier than the figures suggest.
+    # NOT just how many appear in `options` above (those are limited to
+    # _FUTURE_JOB_WINDOW_DAYS). A high count here is a sign this
+    # locksmith may be busier than their visible options suggest.
     future_job_count: int
     # Google Static Maps preview (this job in blue, every one of this
     # locksmith's other booked jobs in red) for an at-a-glance hover —
@@ -126,18 +155,22 @@ def _home_origin(locksmith, job):
     return locksmith.home_postcode
 
 
-def _future_attendance_summary_by_locksmith(locksmiths):
-    """{locksmith.pk: {"soonest": FutureLocksmithAttendance, "count": int,
-    "postcodes": [str, ...]}} for every one of these locksmiths with at
-    least one upcoming job (with a usable postcode) already booked in.
+def _future_attendance_summary_by_locksmith(locksmiths, *, now):
+    """{locksmith.pk: {"within_window": [FutureLocksmithAttendance, ...],
+    "count": int, "postcodes": [str, ...]}} for every one of these
+    locksmiths with at least one upcoming job (with a usable postcode)
+    already booked in.
 
-    "soonest" (used to pick the outbound origin) is just the earliest —
-    a locksmith already going to be nearby tomorrow is a more useful
-    suggestion than one three weeks out — but "count"/"postcodes" cover
-    ALL of them, not just that one: total_minutes elsewhere only ever
-    accounts for the soonest job, so the count is what actually tells
-    office staff a locksmith might have a full day already booked, and
-    the postcodes feed the map preview (see RankedLocksmith.map_url).
+    "within_window" is every one of their jobs booked in the next
+    _FUTURE_JOB_WINDOW_DAYS (not just the soonest) — each becomes its
+    own candidate origin in _nearest_locksmiths, so whichever turns out
+    to actually be closest to the new job wins, rather than always
+    defaulting to whichever is chronologically soonest even when a
+    later one in the same week would be a far more sensible pick.
+    "count"/"postcodes" cover ALL of their future jobs regardless of
+    date, unrestricted by the window — office staff still want to see
+    (and the map preview still wants to plot) a locksmith's full
+    booked-in workload, not just the near-term slice used for ranking.
     Best-effort: a Handl failure here just means the ranking falls back
     to home-postcode distance alone, same as every other lookup on this
     page."""
@@ -149,20 +182,21 @@ def _future_attendance_summary_by_locksmith(locksmiths):
     except Exception:
         logger.exception("Failed to fetch future locksmith attendances for Logs Engine")
         return {}
+    window_end = now + timedelta(days=_FUTURE_JOB_WINDOW_DAYS)
     summary = {}
     for attendance in attendances:
         locksmith = soter_id_to_locksmith.get(attendance.soter_locksmith_id)
         if locksmith is None or not attendance.vehicle_postcode:
             continue
-        entry = summary.setdefault(locksmith.pk, {"soonest": attendance, "count": 0, "postcodes": []})
+        entry = summary.setdefault(locksmith.pk, {"within_window": [], "count": 0, "postcodes": []})
         entry["count"] += 1
         entry["postcodes"].append(attendance.vehicle_postcode)
-        if attendance.available_from < entry["soonest"].available_from:
-            entry["soonest"] = attendance
+        if now <= attendance.available_from <= window_end:
+            entry["within_window"].append(attendance)
     return summary
 
 
-def _on_shift_locksmith_pks(locksmiths):
+def _on_shift_locksmith_pks(locksmiths, *, now):
     """({locksmith.pk, ...} | None, error_message) for every one of
     these locksmiths currently inside a published Teams Shift right
     now — not just scheduled sometime today. The set is None (not just
@@ -189,7 +223,6 @@ def _on_shift_locksmith_pks(locksmiths):
             emails_by_pk[locksmith.pk] = email.strip().lower()
     if not emails_by_pk:
         return None, ""
-    now = django_timezone.localtime(django_timezone.now()).replace(tzinfo=None)
     try:
         shifts = get_teams_shifts_client().list_shifts_for_date(now.date())
     except Exception as exc:
@@ -199,26 +232,28 @@ def _on_shift_locksmith_pks(locksmiths):
     return {pk for pk, email in emails_by_pk.items() if email in on_shift_emails}, ""
 
 
-def _return_minutes_by_locksmith(ranked, job):
+def _return_minutes_by_locksmith(locksmiths_needing_return, job):
     """{locksmith.pk: minutes} for the drive back home after this job,
-    for every entry in `ranked` (a list of (locksmith, distance,
-    attendance) triples) that reached the list via a future job.
+    for every locksmith in `locksmiths_needing_return` (those with at
+    least one future-job-based option).
 
-    A home-based entry doesn't need a lookup here at all — its return
+    A home-based option doesn't need a lookup here at all — its return
     leg is the exact same two points as its outbound one, just
     reversed, so that duration is reused as-is rather than spending a
     second API call to confirm a UK road is roughly the same length in
-    both directions. A future-job-based entry's return leg goes back to
-    their REAL home, a genuinely different route from its outbound leg
-    (attendance location -> job), so that does need its own lookup —
-    batched in one call the same way the main lookup is. Best-effort,
-    same rationale as every other external lookup on this page: a
-    locksmith with no resolvable home for this just doesn't get a
-    total_minutes figure, rather than breaking the whole list."""
+    both directions. A future-job-based option's return leg goes back
+    to their REAL home — a genuinely different route from its outbound
+    leg (attendance location -> job) — so that does need its own
+    lookup, batched in one call the same way the main lookup is. This
+    is computed once per locksmith (not once per option) since it only
+    depends on their home and this job's location, not on which future
+    job got them here — every future-job-based option for the same
+    locksmith shares the same return trip. Best-effort, same rationale
+    as every other external lookup on this page: a locksmith with no
+    resolvable home for this just doesn't get a total_minutes figure,
+    rather than breaking the whole list."""
     lookup_locksmiths, lookup_origins = [], []
-    for locksmith, _distance, attendance in ranked:
-        if attendance is None:
-            continue
+    for locksmith in locksmiths_needing_return:
         home_origin = _home_origin(locksmith, job)
         if home_origin:
             lookup_locksmiths.append(locksmith)
@@ -242,15 +277,16 @@ def _return_minutes_by_locksmith(ranked, job):
 
 
 def _nearest_locksmiths(job):
-    """(list[RankedLocksmith], distance_error, on_shift_error) — ranked
-    nearest first (by total_minutes, the whole round trip, when known —
-    see RankedLocksmith), for every active locksmith who has *either* a
-    home base (lat/lng, or a postcode as a fallback) *or* a soonest
-    already-booked future job with a usable postcode — a locksmith with
-    no home location on file shouldn't be silently excluded just
-    because they happen to already have an upcoming job near this one.
-    attendance is set when a locksmith's outbound distance came from a
-    future job location rather than their home base.
+    """(list[LocksmithCard], distance_error, on_shift_error) — one card
+    per active locksmith who has *either* a home base (lat/lng, or a
+    postcode as a fallback) *or* a job with a usable postcode already
+    booked in within _FUTURE_JOB_WINDOW_DAYS — a locksmith with no home
+    location on file shouldn't be silently excluded just because they
+    happen to already have an upcoming job near this one. Cards are
+    sorted best-option-first; each card's own options are sorted the
+    same way (nearest/lowest total_minutes first) — see LocksmithCard.
+    An option's attendance is set when it came from a future job
+    location rather than the locksmith's home base.
 
     distance_error is set (and the list empty) only when there WERE
     candidate locksmiths to check but the Google call itself failed —
@@ -268,12 +304,15 @@ def _nearest_locksmiths(job):
     if not locksmiths:
         return [], "", ""
 
-    future_summary = _future_attendance_summary_by_locksmith(locksmiths)
+    now = django_timezone.localtime(django_timezone.now()).replace(tzinfo=None)
+    future_summary = _future_attendance_summary_by_locksmith(locksmiths, now=now)
 
-    # Two candidate origins per locksmith where they have both: home
-    # base, and their soonest future job's postcode — ranked together
-    # below so whichever is actually closer wins. A locksmith with
-    # neither gets no origin at all, and so never enters the ranking.
+    # Candidate origins per locksmith: their home base, plus one per
+    # job they already have booked in the next _FUTURE_JOB_WINDOW_DAYS
+    # (not just the soonest) — ranked together below so whichever is
+    # actually closest wins, home or any one of those future jobs
+    # alike. A locksmith with none of these gets no origin at all, and
+    # so never enters the ranking.
     origins, origin_locksmiths, origin_attendances = [], [], []
     for locksmith in locksmiths:
         home_origin = _home_origin(locksmith, job)
@@ -281,8 +320,7 @@ def _nearest_locksmiths(job):
             origins.append(home_origin)
             origin_locksmiths.append(locksmith)
             origin_attendances.append(None)
-        attendance = future_summary.get(locksmith.pk, {}).get("soonest")
-        if attendance:
+        for attendance in future_summary.get(locksmith.pk, {}).get("within_window", []):
             origins.append(attendance.vehicle_postcode)
             origin_locksmiths.append(locksmith)
             origin_attendances.append(attendance)
@@ -298,50 +336,59 @@ def _nearest_locksmiths(job):
         logger.exception("Failed to fetch Google distances for Logs Engine lookup %s", job.report_id)
         return [], str(exc), ""
 
-    best_by_locksmith = {}
+    options_by_locksmith_pk = {}
+    locksmiths_by_pk = {}
     for locksmith, attendance, distance in zip(origin_locksmiths, origin_attendances, distances):
         if distance.status != "OK" or distance.distance_metres is None:
             continue
         if distance.duration_minutes is None or distance.duration_minutes > _MAX_DRIVE_TIME_MINUTES:
             continue
-        current = best_by_locksmith.get(locksmith.pk)
-        if current is None or distance.distance_metres < current[1].distance_metres:
-            best_by_locksmith[locksmith.pk] = (locksmith, distance, attendance)
+        locksmiths_by_pk[locksmith.pk] = locksmith
+        options_by_locksmith_pk.setdefault(locksmith.pk, []).append((distance, attendance))
 
-    ranked = list(best_by_locksmith.values())
-    if not ranked:
+    if not options_by_locksmith_pk:
         return [], "", ""
 
-    return_minutes_by_locksmith = _return_minutes_by_locksmith(ranked, job)
-    on_shift_pks, on_shift_error = _on_shift_locksmith_pks(
-        [locksmith for locksmith, _distance, _attendance in ranked]
-    )
+    locksmiths_needing_return = [
+        locksmiths_by_pk[pk] for pk, options in options_by_locksmith_pk.items()
+        if any(attendance is not None for _distance, attendance in options)
+    ]
+    return_minutes_by_locksmith = _return_minutes_by_locksmith(locksmiths_needing_return, job)
+    on_shift_pks, on_shift_error = _on_shift_locksmith_pks(list(locksmiths_by_pk.values()), now=now)
     job_location = f"{job.vehicle_latitude},{job.vehicle_longitude}"
 
-    results = []
-    for locksmith, distance, attendance in ranked:
-        return_minutes = (
-            return_minutes_by_locksmith.get(locksmith.pk) if attendance is not None
-            else distance.duration_minutes  # home-based: return leg assumed symmetric to the outbound one
-        )
-        total_minutes = (
-            distance.duration_minutes + _JOB_DURATION_MINUTES + return_minutes
-            if return_minutes is not None else None
-        )
-        locksmith_summary = future_summary.get(locksmith.pk, {})
+    cards = []
+    for pk, raw_options in options_by_locksmith_pk.items():
+        locksmith = locksmiths_by_pk[pk]
+        options = []
+        for distance, attendance in raw_options:
+            return_minutes = (
+                return_minutes_by_locksmith.get(pk) if attendance is not None
+                else distance.duration_minutes  # home-based: return leg assumed symmetric to the outbound one
+            )
+            total_minutes = (
+                distance.duration_minutes + _JOB_DURATION_MINUTES + return_minutes
+                if return_minutes is not None else None
+            )
+            options.append(LocksmithOption(distance, attendance, total_minutes))
+        options.sort(key=lambda o: (o.total_minutes is None, o.total_minutes, o.distance.distance_metres))
+
+        locksmith_summary = future_summary.get(pk, {})
         map_url = static_map_url([
             ("color:blue|label:J", [job_location]),
             ("color:red", locksmith_summary.get("postcodes", [])),
         ])
-        results.append(RankedLocksmith(
-            locksmith, distance, attendance, total_minutes,
+        cards.append(LocksmithCard(
+            locksmith, options,
             future_job_count=locksmith_summary.get("count", 0),
             map_url=map_url,
             on_shift=(locksmith.pk in on_shift_pks) if on_shift_pks is not None else None,
         ))
 
-    results.sort(key=lambda r: (r.total_minutes is None, r.total_minutes, r.distance.distance_metres))
-    return results, "", on_shift_error
+    cards.sort(key=lambda c: (
+        c.options[0].total_minutes is None, c.options[0].total_minutes, c.options[0].distance.distance_metres,
+    ))
+    return cards, "", on_shift_error
 
 
 @login_required

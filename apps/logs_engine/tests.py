@@ -125,7 +125,7 @@ class LogsEngineNearestLocksmithsTests(TestCase):
         response = self.client.get(reverse("logs_engine:lookup"), {"report_id": "501179"})
 
         nearest = response.context["nearest_locksmiths"]
-        self.assertEqual([r.locksmith.pk for r in nearest], [near.pk, far.pk])
+        self.assertEqual([c.locksmith.pk for c in nearest], [near.pk, far.pk])
         self.assertContains(response, "WGTK - Nearby")
         self.assertContains(response, "WGTK - Far Away")
         # order in the passed-in list matters — this is how results get
@@ -247,15 +247,17 @@ class LogsEngineNearestLocksmithsTests(TestCase):
 
         nearest = response.context["nearest_locksmiths"]
         self.assertEqual(len(nearest), 1)
-        ranked = nearest[0]
-        self.assertEqual(ranked.locksmith.pk, no_home_postcode.pk)
-        self.assertIsNotNone(ranked.attendance)
+        card = nearest[0]
+        self.assertEqual(card.locksmith.pk, no_home_postcode.pk)
+        self.assertEqual(len(card.options), 1)
+        option = card.options[0]
+        self.assertIsNotNone(option.attendance)
         # No home location on file at all means no return-trip leg can
         # be resolved either — total_minutes degrades to None rather
         # than guessing, and get_distances is only ever called once
         # (for the outbound leg) since there's nowhere to look up a
         # return trip to.
-        self.assertIsNone(ranked.total_minutes)
+        self.assertIsNone(option.total_minutes)
         mock_get_maps.return_value.get_distances.assert_called_once()
         call_origins = mock_get_maps.return_value.get_distances.call_args[0][0]
         self.assertEqual(call_origins, ["NR14 8PL"])  # only the future-job origin, no home postcode
@@ -438,15 +440,19 @@ class LogsEngineNearestLocksmithsTests(TestCase):
 
         nearest = response.context["nearest_locksmiths"]
         self.assertEqual(len(nearest), 1)
-        ranked = nearest[0]
-        self.assertEqual(ranked.locksmith.pk, far_from_home.pk)
-        self.assertEqual(ranked.distance.distance_metres, 8369.0)
-        self.assertIsNotNone(ranked.attendance)
-        self.assertEqual(ranked.attendance.vehicle_reg, "AB20 CDE")
+        card = nearest[0]
+        self.assertEqual(card.locksmith.pk, far_from_home.pk)
+        # Both options survive (home postcode + the closer future job),
+        # best (lowest total_minutes) first.
+        self.assertEqual(len(card.options), 2)
+        best = card.options[0]
+        self.assertEqual(best.distance.distance_metres, 8369.0)
+        self.assertIsNotNone(best.attendance)
+        self.assertEqual(best.attendance.vehicle_reg, "AB20 CDE")
         self.assertContains(response, "Already booked nearby")
         # 12 min there (NR14 8PL) + 40 min job + 50 min back home (IP1 2AB)
-        self.assertEqual(ranked.total_minutes, 12 + 40 + 50)
-        self.assertEqual(ranked.future_job_count, 1)
+        self.assertEqual(best.total_minutes, 12 + 40 + 50)
+        self.assertEqual(card.future_job_count, 1)
 
         first_call_origins = mock_get_maps.return_value.get_distances.call_args_list[0][0][0]
         self.assertEqual(first_call_origins, ["IP1 2AB", "NR14 8PL"])
@@ -455,11 +461,11 @@ class LogsEngineNearestLocksmithsTests(TestCase):
 
     @patch("apps.logs_engine.views.get_google_maps_client")
     @patch("apps.logs_engine.views.get_handl_client")
-    def test_future_job_count_reflects_every_booked_job_not_just_soonest(self, mock_get_handl, mock_get_maps):
-        # total_minutes only ever factors in the SOONEST future job, but
-        # future_job_count should reflect all of them — the whole point
-        # is to flag a locksmith who looks free on paper but actually
-        # has several jobs already booked in.
+    def test_card_lists_every_booked_job_within_window_as_its_own_option(self, mock_get_handl, mock_get_maps):
+        # Every job booked within the window becomes its own option on
+        # the card (not just one "best" row) — future_job_count reflects
+        # ALL of a locksmith's booked jobs regardless of date, which is
+        # a superset of the options actually shown.
         locksmith = Locksmith.objects.create(name="WGTK - Busy Andrew", home_postcode="NR14 8PL")
         SoterLocksmithId.objects.create(locksmith=locksmith, soter_locksmith_id="1204")
 
@@ -483,10 +489,16 @@ class LogsEngineNearestLocksmithsTests(TestCase):
                 ),
             ]),
         )
+        # All three are within the 7-day window, so all become
+        # candidate origins alongside home — LATER1 (booked for day 3,
+        # not the soonest) is deliberately the closest one, to prove the
+        # card sorts it first even though it isn't chronologically next.
         mock_get_maps.return_value = MagicMock(get_distances=MagicMock(side_effect=[
             [
                 LocksmithDistance(origin="NR14 8PL", distance_metres=30000.0, duration_seconds=3600, status="OK"),
+                LocksmithDistance(origin="CB1 2AB", distance_metres=5000.0, duration_seconds=600, status="OK"),
                 LocksmithDistance(origin="IP1 2AB", distance_metres=8369.0, duration_seconds=720, status="OK"),
+                LocksmithDistance(origin="PE1 3AA", distance_metres=20000.0, duration_seconds=1800, status="OK"),
             ],
             [
                 LocksmithDistance(origin="NR14 8PL", distance_metres=8369.0, duration_seconds=720, status="OK"),
@@ -497,9 +509,16 @@ class LogsEngineNearestLocksmithsTests(TestCase):
 
         nearest = response.context["nearest_locksmiths"]
         self.assertEqual(len(nearest), 1)
-        ranked = nearest[0]
-        self.assertEqual(ranked.future_job_count, 3)
-        self.assertEqual(ranked.attendance.vehicle_reg, "SOONEST1")  # only the soonest wins the outbound leg
+        card = nearest[0]
+        self.assertEqual(card.future_job_count, 3)
+        # All 4 candidates (home + 3 future jobs) survive as options.
+        self.assertEqual(len(card.options), 4)
+        self.assertEqual(card.options[0].attendance.vehicle_reg, "LATER1")  # closest wins, not the soonest
+        vehicle_regs = {o.attendance.vehicle_reg for o in card.options if o.attendance}
+        self.assertEqual(vehicle_regs, {"LATER1", "SOONEST1", "LATER2"})
+
+        first_call_origins = mock_get_maps.return_value.get_distances.call_args_list[0][0][0]
+        self.assertEqual(first_call_origins, ["NR14 8PL", "CB1 2AB", "IP1 2AB", "PE1 3AA"])
 
     @override_settings(GOOGLE_MAPS_API_KEY="test-key")
     @patch("apps.logs_engine.views.get_google_maps_client")
@@ -524,10 +543,10 @@ class LogsEngineNearestLocksmithsTests(TestCase):
 
         response = self.client.get(reverse("logs_engine:lookup"), {"report_id": "501179"})
 
-        ranked = response.context["nearest_locksmiths"][0]
-        self.assertTrue(ranked.map_url)
-        self.assertIn("staticmap", ranked.map_url)
-        self.assertIn("IP1+2AB", ranked.map_url)  # their booked job, in red
+        card = response.context["nearest_locksmiths"][0]
+        self.assertTrue(card.map_url)
+        self.assertIn("staticmap", card.map_url)
+        self.assertIn("IP1+2AB", card.map_url)  # their booked job, in red
         self.assertContains(response, "map-preview-trigger")
 
     @patch("apps.logs_engine.views.get_google_maps_client")
@@ -544,9 +563,9 @@ class LogsEngineNearestLocksmithsTests(TestCase):
 
         response = self.client.get(reverse("logs_engine:lookup"), {"report_id": "501179"})
 
-        ranked = response.context["nearest_locksmiths"][0]
-        self.assertEqual(ranked.map_url, "")
-        self.assertEqual(ranked.future_job_count, 0)
+        card = response.context["nearest_locksmiths"][0]
+        self.assertEqual(card.map_url, "")
+        self.assertEqual(card.future_job_count, 0)
 
     @patch("apps.logs_engine.views.get_teams_shifts_client")
     @patch("apps.logs_engine.views.get_google_maps_client")
@@ -574,8 +593,8 @@ class LogsEngineNearestLocksmithsTests(TestCase):
 
         response = self.client.get(reverse("logs_engine:lookup"), {"report_id": "501179"})
 
-        ranked = response.context["nearest_locksmiths"][0]
-        self.assertTrue(ranked.on_shift)
+        card = response.context["nearest_locksmiths"][0]
+        self.assertTrue(card.on_shift)
         self.assertContains(response, "On shift")
         mock_get_shifts.return_value.list_shifts_for_date.assert_called_once_with(now.date())
 
@@ -618,9 +637,9 @@ class LogsEngineNearestLocksmithsTests(TestCase):
 
         response = self.client.get(reverse("logs_engine:lookup"), {"report_id": "501179"})
 
-        ranked = response.context["nearest_locksmiths"][0]
-        self.assertEqual(ranked.locksmith.pk, locksmith.pk)
-        self.assertTrue(ranked.on_shift)
+        card = response.context["nearest_locksmiths"][0]
+        self.assertEqual(card.locksmith.pk, locksmith.pk)
+        self.assertTrue(card.on_shift)
 
     @patch("apps.logs_engine.views.get_teams_shifts_client")
     @patch("apps.logs_engine.views.get_google_maps_client")
@@ -649,8 +668,8 @@ class LogsEngineNearestLocksmithsTests(TestCase):
 
         response = self.client.get(reverse("logs_engine:lookup"), {"report_id": "501179"})
 
-        ranked = response.context["nearest_locksmiths"][0]
-        self.assertIs(ranked.on_shift, False)
+        card = response.context["nearest_locksmiths"][0]
+        self.assertIs(card.on_shift, False)
         self.assertContains(response, "Off shift")
 
     @patch("apps.logs_engine.views.get_teams_shifts_client")
@@ -668,8 +687,8 @@ class LogsEngineNearestLocksmithsTests(TestCase):
 
         response = self.client.get(reverse("logs_engine:lookup"), {"report_id": "501179"})
 
-        ranked = response.context["nearest_locksmiths"][0]
-        self.assertIsNone(ranked.on_shift)
+        card = response.context["nearest_locksmiths"][0]
+        self.assertIsNone(card.on_shift)
         mock_get_shifts.assert_not_called()
 
     @patch("apps.logs_engine.views.get_teams_shifts_client")
@@ -693,8 +712,8 @@ class LogsEngineNearestLocksmithsTests(TestCase):
         response = self.client.get(reverse("logs_engine:lookup"), {"report_id": "501179"})
 
         self.assertEqual(response.status_code, 200)
-        ranked = response.context["nearest_locksmiths"][0]
-        self.assertIsNone(ranked.on_shift)
+        card = response.context["nearest_locksmiths"][0]
+        self.assertIsNone(card.on_shift)
         self.assertEqual(
             response.context["on_shift_error"],
             "Graph request failed: 403 Forbidden — Insufficient privileges",
@@ -721,23 +740,35 @@ class LogsEngineNearestLocksmithsTests(TestCase):
                 ),
             ]),
         )
-        mock_get_maps.return_value = MagicMock(get_distances=MagicMock(return_value=[
-            LocksmithDistance(origin="NR14 8PL", distance_metres=8369.0, duration_seconds=720, status="OK"),
-            LocksmithDistance(origin="IP1 2AB", distance_metres=40000.0, duration_seconds=3000, status="OK"),
+        # Two calls: the outbound leg (home + future-job origins), then
+        # a second for the return-trip leg back home, needed because the
+        # future-job option (IP1 2AB) also survives as an option in its
+        # own right, not just the home one.
+        mock_get_maps.return_value = MagicMock(get_distances=MagicMock(side_effect=[
+            [
+                LocksmithDistance(origin="NR14 8PL", distance_metres=8369.0, duration_seconds=720, status="OK"),
+                LocksmithDistance(origin="IP1 2AB", distance_metres=40000.0, duration_seconds=3000, status="OK"),
+            ],
+            [
+                LocksmithDistance(origin="NR14 8PL", distance_metres=8369.0, duration_seconds=720, status="OK"),
+            ],
         ]))
 
         response = self.client.get(reverse("logs_engine:lookup"), {"report_id": "501179"})
 
         nearest = response.context["nearest_locksmiths"]
         self.assertEqual(len(nearest), 1)
-        ranked = nearest[0]
-        self.assertEqual(ranked.distance.distance_metres, 8369.0)
-        self.assertIsNone(ranked.attendance)
+        card = nearest[0]
+        # Both options survive; home is the better one and sorts first.
+        self.assertEqual(len(card.options), 2)
+        best = card.options[0]
+        self.assertEqual(best.distance.distance_metres, 8369.0)
+        self.assertIsNone(best.attendance)
         self.assertContains(response, "Home location")
-        # Home-based: no second API call needed for the return leg — it's
-        # assumed symmetric to the outbound one and reused as-is.
-        mock_get_maps.return_value.get_distances.assert_called_once()
-        self.assertEqual(ranked.total_minutes, 12 + 40 + 12)
+        self.assertEqual(best.total_minutes, 12 + 40 + 12)
+        worst = card.options[1]
+        self.assertIsNotNone(worst.attendance)
+        self.assertEqual(worst.total_minutes, 50 + 40 + 12)
 
     @patch("apps.logs_engine.views.get_google_maps_client")
     @patch("apps.logs_engine.views.get_handl_client")
@@ -784,18 +815,21 @@ class LogsEngineNearestLocksmithsTests(TestCase):
         self.assertEqual(response.status_code, 200)
         nearest = response.context["nearest_locksmiths"]
         self.assertEqual(len(nearest), 1)
-        self.assertIsNone(nearest[0].attendance)
+        self.assertIsNone(nearest[0].options[0].attendance)
 
     @patch("apps.logs_engine.views.get_google_maps_client")
     @patch("apps.logs_engine.views.get_handl_client")
     def test_sorted_by_total_minutes_not_just_outbound_distance(self, mock_get_handl, mock_get_maps):
-        # Locksmith A has a much shorter drive there (via an
-        # already-booked future job right next to this one) but a very
-        # long trip back to their real home afterwards; Locksmith B has
-        # a longer drive there but gets home again quickly. Once the
-        # return trip and job time are both counted, B is the better
-        # overall pick, even though A looks unbeatable on outbound
-        # distance alone.
+        # Locksmith A has an option with a much shorter drive there (via
+        # an already-booked future job right next to this one) but a
+        # very long trip back to their real home afterwards, alongside
+        # their home option (longer drive there, shorter drive back);
+        # Locksmith B just has their home option, with a longer drive
+        # there but a quick trip home. Once the return trip and job time
+        # are both counted: within A's own card, the home option is
+        # actually the better one (its options are sorted by total
+        # time, not raw outbound distance) — and B still beats A
+        # overall, since even A's best option comes in slower.
         locksmith_a = Locksmith.objects.create(name="WGTK - Short There Long Back", home_postcode="FAR AWAY")
         SoterLocksmithId.objects.create(locksmith=locksmith_a, soter_locksmith_id="1204")
         locksmith_b = Locksmith.objects.create(name="WGTK - Steady Both Ways", home_postcode="NR14 8PL")
@@ -832,10 +866,23 @@ class LogsEngineNearestLocksmithsTests(TestCase):
         response = self.client.get(reverse("logs_engine:lookup"), {"report_id": "501179"})
 
         nearest = response.context["nearest_locksmiths"]
-        self.assertEqual([r.locksmith.pk for r in nearest], [locksmith_b.pk, locksmith_a.pk])
-        by_pk = {r.locksmith.pk: r for r in nearest}
-        self.assertEqual(by_pk[locksmith_a.pk].total_minutes, 10 + 40 + 200)
-        self.assertEqual(by_pk[locksmith_b.pk].total_minutes, 60 + 40 + 60)
+        self.assertEqual([c.locksmith.pk for c in nearest], [locksmith_b.pk, locksmith_a.pk])
+        by_pk = {c.locksmith.pk: c for c in nearest}
+
+        card_a = by_pk[locksmith_a.pk]
+        self.assertEqual(len(card_a.options), 2)
+        # Home (100 there + 40 job + 100 back = 240) actually beats the
+        # future job (10 there + 40 job + 200 back = 250) once the whole
+        # round trip is counted, even though the future job looked
+        # unbeatable on outbound distance alone.
+        self.assertIsNone(card_a.options[0].attendance)
+        self.assertEqual(card_a.options[0].total_minutes, 100 + 40 + 100)
+        self.assertIsNotNone(card_a.options[1].attendance)
+        self.assertEqual(card_a.options[1].total_minutes, 10 + 40 + 200)
+
+        card_b = by_pk[locksmith_b.pk]
+        self.assertEqual(len(card_b.options), 1)
+        self.assertEqual(card_b.options[0].total_minutes, 60 + 40 + 60)
 
 
 class DriveTimeClassFilterTests(TestCase):
