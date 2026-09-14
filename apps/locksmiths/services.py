@@ -221,3 +221,158 @@ def commit_optimo_driver_matches(matches: list[dict]) -> int:
         )
         created += int(was_created)
     return created
+
+
+def _parse_optional_coordinate(value) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _employee_location_header_index(header_row: list, *names: str) -> int | None:
+    normalized = [str(h).strip().lower() for h in header_row]
+    for name in names:
+        if name.lower() in normalized:
+            return normalized.index(name.lower())
+    return None
+
+
+def _parse_xls_employee_rows(file_obj) -> list[dict]:
+    import xlrd
+
+    book = xlrd.open_workbook(file_contents=file_obj.read())
+    sheet = book.sheet_by_index(0)
+    header = sheet.row_values(0)
+    name_idx = _employee_location_header_index(header, "Driver", "Name")
+    email_idx = _employee_location_header_index(header, "Email")
+    lat_idx = _employee_location_header_index(header, "Start Latitude", "Latitude")
+    lng_idx = _employee_location_header_index(header, "Start Longitude", "Longitude")
+    if name_idx is None or lat_idx is None or lng_idx is None:
+        raise ValueError("Missing expected column(s) — need Driver, Start Latitude, Start Longitude.")
+
+    rows = []
+    for r in range(1, sheet.nrows):
+        row = sheet.row_values(r)
+        name = str(row[name_idx]).strip()
+        if not name:
+            continue
+        email = str(row[email_idx]).strip() if email_idx is not None else ""
+        rows.append({
+            "name": name,
+            "email": email,
+            "lat": _parse_optional_coordinate(row[lat_idx]),
+            "lng": _parse_optional_coordinate(row[lng_idx]),
+        })
+    return rows
+
+
+def _parse_csv_employee_rows(file_obj) -> list[dict]:
+    import csv
+    import io
+
+    text = file_obj.read()
+    if isinstance(text, bytes):
+        text = text.decode("utf-8-sig")
+    reader = csv.DictReader(io.StringIO(text))
+    if reader.fieldnames is None:
+        return []
+    field_map = {f.strip().lower(): f for f in reader.fieldnames}
+    name_field = field_map.get("driver") or field_map.get("name")
+    email_field = field_map.get("email")
+    lat_field = field_map.get("start latitude") or field_map.get("latitude")
+    lng_field = field_map.get("start longitude") or field_map.get("longitude")
+    if not name_field or not lat_field or not lng_field:
+        raise ValueError("Missing expected column(s) — need Driver, Start Latitude, Start Longitude.")
+
+    rows = []
+    for csv_row in reader:
+        name = (csv_row.get(name_field) or "").strip()
+        if not name:
+            continue
+        email = (csv_row.get(email_field) or "").strip() if email_field else ""
+        rows.append({
+            "name": name,
+            "email": email,
+            "lat": _parse_optional_coordinate(csv_row.get(lat_field)),
+            "lng": _parse_optional_coordinate(csv_row.get(lng_field)),
+        })
+    return rows
+
+
+def parse_employee_location_rows(file_obj, filename: str) -> list[dict]:
+    """{"name", "email", "lat", "lng"} rows from an uploaded Optimo
+    "Drivers" export — .xls (legacy binary Excel, via xlrd) or .csv,
+    format picked from the filename, since Optimo has no live API for a
+    driver's starting location (unlike list_recent_drivers, which does
+    have one — see OptimoClient). Column order isn't assumed, matched
+    by header name instead (case-insensitive): "Driver"/"Name",
+    "Email", "Start Latitude"/"Latitude", "Start Longitude"/"Longitude"
+    — any other column (e.g. Optimo's own "Vehicle") is ignored. lat/lng
+    are None for a row with no coordinates recorded."""
+    lower_name = filename.lower()
+    if lower_name.endswith(".csv"):
+        return _parse_csv_employee_rows(file_obj)
+    if lower_name.endswith(".xls"):
+        return _parse_xls_employee_rows(file_obj)
+    raise ValueError(f"Unsupported file type: {filename} — export as .xls or .csv.")
+
+
+def match_employee_locations(rows: list[dict]) -> tuple[list[dict], list[dict], int]:
+    """Matches parse_employee_location_rows()' output to existing
+    Locksmith records — by email first (exact, the more reliable
+    signal), falling back to a normalized name comparison, same
+    approach as match_optimo_drivers. A row with no coordinates
+    recorded can't set anything, so it's counted separately
+    (skipped_no_coords) rather than reported as unmatched.
+
+    Returns (matches, unmatched, skipped_no_coords):
+    - matches: [{"row": row, "locksmith": Locksmith, "reason": "email"|"name"}]
+    - unmatched: [{"row": row}] — has coordinates, but no Locksmith found
+    """
+    email_map = {
+        locksmith.email.strip().lower(): locksmith
+        for locksmith in Locksmith.objects.exclude(email="")
+    }
+    name_map = {_normalize_person_name(locksmith.name): locksmith for locksmith in Locksmith.objects.all()}
+
+    matches = []
+    unmatched = []
+    skipped_no_coords = 0
+    for row in rows:
+        if row["lat"] is None or row["lng"] is None:
+            skipped_no_coords += 1
+            continue
+
+        locksmith = None
+        reason = None
+        if row["email"]:
+            locksmith = email_map.get(row["email"].strip().lower())
+            if locksmith:
+                reason = "email"
+        if not locksmith:
+            locksmith = name_map.get(_normalize_person_name(row["name"]))
+            if locksmith:
+                reason = "name"
+
+        if locksmith:
+            matches.append({"row": row, "locksmith": locksmith, "reason": reason})
+        else:
+            unmatched.append({"row": row})
+
+    return matches, unmatched, skipped_no_coords
+
+
+def commit_employee_location_matches(matches: list[dict]) -> int:
+    """Writes home_latitude/home_longitude from
+    match_employee_locations()'s output. Returns the number of
+    Locksmith records updated."""
+    updated = 0
+    for match in matches:
+        Locksmith.objects.filter(pk=match["locksmith"].pk).update(
+            home_latitude=match["row"]["lat"], home_longitude=match["row"]["lng"],
+        )
+        updated += 1
+    return updated

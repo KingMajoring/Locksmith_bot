@@ -153,6 +153,22 @@ tr:last-child td { border-bottom: none; }
 .trend-bar-track { background: var(--border); border-radius: var(--radius-pill); height: 0.5rem; width: 100%; min-width: 80px; overflow: hidden; }
 .trend-bar { background: var(--wgtk-orange); border-radius: var(--radius-pill); height: 100%; }
 
+/* Logs Engine "Nearest locksmiths" drive-time pill — 0-45 min green,
+   46-60 amber, 61-90 pale red, over 90 red. See
+   apps.logs_engine.templatetags.logs_engine_extras.drive_time_class. */
+.drive-time-pill {
+  display: inline-block;
+  padding: 0.15rem 0.55rem;
+  border-radius: var(--radius-pill);
+  font-size: 0.82rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.drive-time-green { background: var(--wgtk-green-pale); color: var(--wgtk-green-dark); }
+.drive-time-amber { background: var(--warning-bg); color: #8a6d00; border: 1px solid var(--warning-border); }
+.drive-time-pale-red { background: var(--danger-bg); color: var(--danger); }
+.drive-time-red { background: var(--danger); color: #fff; }
+
 .btn {
   display: inline-block;
   background: var(--wgtk-orange);

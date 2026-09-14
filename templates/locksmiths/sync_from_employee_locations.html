@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}Import locksmith home locations{% endblock %}
+{% block content %}
+<h1>Import locksmith home locations</h1>
+
+{% if not uploaded %}
+<div class="card">
+  <p>
+    Upload Optimo's "Drivers" export (Driver, Email, Vehicle, Start
+    Latitude, Start Longitude) — .xls or .csv. There's no live Optimo
+    API for a driver's starting location, so this is a manual export/
+    import rather than a live sync.
+  </p>
+  <form method="post" enctype="multipart/form-data" class="field-group">
+    {% csrf_token %}
+    <input type="file" name="file" accept=".xls,.csv" required>
+    <p style="margin-top:1rem;"><button class="btn" type="submit">Upload &amp; preview</button></p>
+  </form>
+</div>
+{% else %}
+<div class="card">
+  <p>{{ matches|length }} row(s) matched to a locksmith, ready to update.
+     {{ unmatched|length }} row(s) couldn't be matched automatically.
+     {{ skipped_no_coords }} row(s) had no coordinates recorded and were skipped.</p>
+</div>
+
+<div class="card">
+  <h2>Matched</h2>
+  {% if matches %}
+  <table>
+    <tr><th>Row</th><th>Matched by</th><th>Locksmith</th><th>Lat, Lng</th></tr>
+    {% for m in matches %}
+    <tr>
+      <td>{{ m.row.name }}{% if m.row.email %} ({{ m.row.email }}){% endif %}</td>
+      <td>{{ m.reason }}</td>
+      <td>{{ m.locksmith.name }}</td>
+      <td>{{ m.row.lat }}, {{ m.row.lng }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  <form method="post">
+    {% csrf_token %}
+    <input type="hidden" name="confirm" value="1">
+    <button class="btn" type="submit">Commit {{ matches|length }} update(s)</button>
+  </form>
+  {% else %}
+  <p>Nothing matched — no rows in this file line up with an existing locksmith by email or name.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Unmatched — needs manual mapping</h2>
+  {% if unmatched %}
+  <p>No Locksmith record matches these by email or name — check the "Email" field on each Locksmith in Admin.</p>
+  <table>
+    <tr><th>Name</th><th>Email</th><th>Lat, Lng</th></tr>
+    {% for u in unmatched %}
+    <tr>
+      <td>{{ u.row.name }}</td>
+      <td>{{ u.row.email|default:"—" }}</td>
+      <td>{{ u.row.lat }}, {{ u.row.lng }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p>None.</p>
+  {% endif %}
+</div>
+
+<p><a href="{% url 'locksmiths:sync_from_employee_locations' %}">Upload a different file</a></p>
+{% endif %}
+{% endblock %}

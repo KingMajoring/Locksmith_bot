@@ -1,8 +1,10 @@
 import tempfile
 from io import StringIO
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 from django.contrib.auth import get_user_model
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
 from django.test import TestCase
 from django.urls import reverse
@@ -13,10 +15,13 @@ from .management.commands.import_soter_locksmiths import parse_rows
 from .models import Locksmith, OptimoDriverId, SoterLocksmithId
 from .services import (
     apply_soter_user_ids,
+    commit_employee_location_matches,
     commit_optimo_driver_matches,
     group_locksmiths,
+    match_employee_locations,
     match_optimo_drivers,
     normalize_base_name,
+    parse_employee_location_rows,
 )
 
 
@@ -450,3 +455,198 @@ class SyncFromOptimoViewTests(TestCase):
         self.assertEqual(
             OptimoDriverId.objects.get(locksmith=locksmith).optimo_driver_serial, "011"
         )
+
+
+class ParseEmployeeLocationRowsTests(TestCase):
+    def test_parses_csv_with_header(self):
+        content = (
+            "Driver,Email,Vehicle,Start Latitude,Start Longitude\n"
+            "Mark Neale,markneale@soterps.com,FH22 NHO,52.667732,1.299813\n"
+            "Dean Stewart,deanstewart@soterps.com,,,\n"
+        ).encode("utf-8")
+        upload = SimpleUploadedFile("employees.csv", content, content_type="text/csv")
+
+        rows = parse_employee_location_rows(upload, "employees.csv")
+
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(
+            rows[0],
+            {"name": "Mark Neale", "email": "markneale@soterps.com", "lat": 52.667732, "lng": 1.299813},
+        )
+        self.assertIsNone(rows[1]["lat"])
+        self.assertIsNone(rows[1]["lng"])
+
+    def test_csv_missing_expected_columns_raises(self):
+        upload = SimpleUploadedFile("bad.csv", b"Name,Foo\nA,B\n", content_type="text/csv")
+        with self.assertRaises(ValueError):
+            parse_employee_location_rows(upload, "bad.csv")
+
+    def test_unsupported_extension_raises(self):
+        upload = SimpleUploadedFile("employees.txt", b"x", content_type="text/plain")
+        with self.assertRaises(ValueError):
+            parse_employee_location_rows(upload, "employees.txt")
+
+    def test_parses_xls_via_xlrd(self):
+        # xlrd itself is trusted to read the real binary format correctly
+        # — this exercises our own header-lookup/row-iteration logic by
+        # faking the xlrd.Book/Sheet objects it would hand back.
+        sheet = MagicMock()
+        sheet.nrows = 2
+        sheet.row_values.side_effect = [
+            ["Driver", "Email", "Vehicle", "Start Latitude", "Start Longitude"],
+            ["Mark Neale", "markneale@soterps.com", "FH22 NHO", 52.667732, 1.299813],
+        ]
+        book = MagicMock()
+        book.sheet_by_index.return_value = sheet
+        upload = MagicMock()
+        upload.read.return_value = b"fake xls bytes"
+
+        with patch("xlrd.open_workbook", return_value=book) as mock_open:
+            rows = parse_employee_location_rows(upload, "employees.xls")
+
+        mock_open.assert_called_once_with(file_contents=b"fake xls bytes")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["name"], "Mark Neale")
+        self.assertEqual(rows[0]["lat"], 52.667732)
+        self.assertEqual(rows[0]["lng"], 1.299813)
+
+    def test_xls_missing_expected_columns_raises(self):
+        sheet = MagicMock()
+        sheet.nrows = 1
+        sheet.row_values.side_effect = [["Name", "Foo"]]
+        book = MagicMock()
+        book.sheet_by_index.return_value = sheet
+        upload = MagicMock()
+        upload.read.return_value = b"fake xls bytes"
+
+        with patch("xlrd.open_workbook", return_value=book):
+            with self.assertRaises(ValueError):
+                parse_employee_location_rows(upload, "employees.xls")
+
+
+class MatchEmployeeLocationsTests(TestCase):
+    def test_matches_by_email_first(self):
+        locksmith = Locksmith.objects.create(name="WGTK - Chris Webster", email="chris.webster@wgtk.co.uk")
+        row = {"name": "Some Other Name", "email": "chris.webster@wgtk.co.uk", "lat": 53.9, "lng": -2.1}
+
+        matches, unmatched, skipped = match_employee_locations([row])
+
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0]["locksmith"], locksmith)
+        self.assertEqual(matches[0]["reason"], "email")
+        self.assertEqual(unmatched, [])
+        self.assertEqual(skipped, 0)
+
+    def test_falls_back_to_name_match(self):
+        locksmith = Locksmith.objects.create(name="WGTK - John Mason")
+        row = {"name": "John Mason", "email": "", "lat": 53.9, "lng": -2.1}
+
+        matches, unmatched, skipped = match_employee_locations([row])
+
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0]["locksmith"], locksmith)
+        self.assertEqual(matches[0]["reason"], "name")
+
+    def test_no_match_goes_to_unmatched(self):
+        row = {"name": "Nobody Real", "email": "nobody@example.com", "lat": 53.9, "lng": -2.1}
+
+        matches, unmatched, skipped = match_employee_locations([row])
+
+        self.assertEqual(matches, [])
+        self.assertEqual(len(unmatched), 1)
+        self.assertEqual(unmatched[0]["row"], row)
+
+    def test_row_with_no_coordinates_is_skipped_not_unmatched(self):
+        Locksmith.objects.create(name="WGTK - John Mason")
+        row = {"name": "John Mason", "email": "", "lat": None, "lng": None}
+
+        matches, unmatched, skipped = match_employee_locations([row])
+
+        self.assertEqual(matches, [])
+        self.assertEqual(unmatched, [])
+        self.assertEqual(skipped, 1)
+
+
+class CommitEmployeeLocationMatchesTests(TestCase):
+    def test_writes_home_latitude_and_longitude(self):
+        locksmith = Locksmith.objects.create(name="WGTK - John Mason")
+        row = {"name": "John Mason", "email": "", "lat": 53.9, "lng": -2.1}
+
+        updated = commit_employee_location_matches(
+            [{"row": row, "locksmith": locksmith, "reason": "name"}]
+        )
+
+        self.assertEqual(updated, 1)
+        locksmith.refresh_from_db()
+        self.assertEqual(locksmith.home_latitude, 53.9)
+        self.assertEqual(locksmith.home_longitude, -2.1)
+
+
+class SyncFromEmployeeLocationsViewTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username="office_admin",
+            email="admin@wgtk.co.uk",
+            password="x",
+            is_staff=True,
+            is_superuser=True,
+        )
+        self.client.force_login(self.user)
+
+    def test_login_required(self):
+        self.client.logout()
+        response = self.client.get(reverse("locksmiths:sync_from_employee_locations"))
+        self.assertEqual(response.status_code, 302)
+
+    def test_get_shows_upload_form(self):
+        response = self.client.get(reverse("locksmiths:sync_from_employee_locations"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Upload")
+
+    def test_upload_without_file_shows_error(self):
+        response = self.client.post(reverse("locksmiths:sync_from_employee_locations"), {})
+        self.assertRedirects(response, reverse("locksmiths:sync_from_employee_locations"))
+
+    def test_upload_previews_without_writing(self):
+        locksmith = Locksmith.objects.create(name="WGTK - Mark Neale", email="markneale@soterps.com")
+        content = (
+            "Driver,Email,Vehicle,Start Latitude,Start Longitude\n"
+            "Mark Neale,markneale@soterps.com,FH22 NHO,52.667732,1.299813\n"
+        ).encode("utf-8")
+        upload = SimpleUploadedFile("employees.csv", content, content_type="text/csv")
+
+        response = self.client.post(reverse("locksmiths:sync_from_employee_locations"), {"file": upload})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.context["matches"]), 1)
+        locksmith.refresh_from_db()
+        self.assertIsNone(locksmith.home_latitude)
+
+    def test_confirm_commits_pending_import(self):
+        locksmith = Locksmith.objects.create(name="WGTK - Mark Neale", email="markneale@soterps.com")
+        content = (
+            "Driver,Email,Vehicle,Start Latitude,Start Longitude\n"
+            "Mark Neale,markneale@soterps.com,FH22 NHO,52.667732,1.299813\n"
+        ).encode("utf-8")
+        upload = SimpleUploadedFile("employees.csv", content, content_type="text/csv")
+        self.client.post(reverse("locksmiths:sync_from_employee_locations"), {"file": upload})
+
+        response = self.client.post(
+            reverse("locksmiths:sync_from_employee_locations"), {"confirm": "1"}
+        )
+
+        self.assertRedirects(response, reverse("admin:locksmiths_locksmith_changelist"))
+        locksmith.refresh_from_db()
+        self.assertEqual(locksmith.home_latitude, 52.667732)
+        self.assertEqual(locksmith.home_longitude, 1.299813)
+
+    def test_confirm_without_pending_import_shows_error(self):
+        response = self.client.post(
+            reverse("locksmiths:sync_from_employee_locations"), {"confirm": "1"}
+        )
+        self.assertRedirects(response, reverse("locksmiths:sync_from_employee_locations"))
+
+    def test_bad_file_shows_error_without_crashing(self):
+        upload = SimpleUploadedFile("employees.txt", b"garbage", content_type="text/plain")
+        response = self.client.post(reverse("locksmiths:sync_from_employee_locations"), {"file": upload})
+        self.assertRedirects(response, reverse("locksmiths:sync_from_employee_locations"))

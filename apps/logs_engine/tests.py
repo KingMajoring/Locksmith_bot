@@ -9,6 +9,8 @@ from apps.integrations.google_maps import LocksmithDistance
 from apps.integrations.handl import FutureLocksmithAttendance, JobDetails
 from apps.locksmiths.models import Locksmith, SoterLocksmithId
 
+from .templatetags.logs_engine_extras import drive_time_class
+
 
 def _job_with_location(**overrides):
     fields = dict(
@@ -128,6 +130,31 @@ class LogsEngineNearestLocksmithsTests(TestCase):
         # zipped back onto the right locksmith
         call_origins = mock_get_maps.return_value.get_distances.call_args[0][0]
         self.assertEqual(call_origins, ["IP1 2AB", "NR14 8PL"])  # ordered by name, no future attendances
+
+    @patch("apps.logs_engine.views.get_google_maps_client")
+    @patch("apps.logs_engine.views.get_handl_client")
+    def test_home_lat_lng_preferred_over_postcode_as_origin(self, mock_get_handl, mock_get_maps):
+        # Optimo's "driver starting location" import (see
+        # apps.locksmiths.services) gives a precise coordinate — more
+        # accurate than a postcode's centroid, so it should be used
+        # instead whenever it's set.
+        Locksmith.objects.create(
+            name="WGTK - Nearby", home_postcode="NR14 8PL",
+            home_latitude=52.6075364, home_longitude=1.2922435,
+        )
+        mock_get_handl.return_value = MagicMock(
+            get_job_details=MagicMock(return_value={"501179": _job_with_location()}),
+            get_future_locksmith_attendances=MagicMock(return_value=[]),
+        )
+        mock_get_maps.return_value = MagicMock(get_distances=MagicMock(return_value=[
+            LocksmithDistance(origin="52.6075364,1.2922435", distance_metres=8369.0, duration_seconds=720, status="OK"),
+        ]))
+
+        response = self.client.get(reverse("logs_engine:lookup"), {"report_id": "501179"})
+
+        call_origins = mock_get_maps.return_value.get_distances.call_args[0][0]
+        self.assertEqual(call_origins, ["52.6075364,1.2922435"])
+        self.assertEqual(len(response.context["nearest_locksmiths"]), 1)
 
     @patch("apps.logs_engine.views.get_google_maps_client")
     @patch("apps.logs_engine.views.get_handl_client")
@@ -345,3 +372,18 @@ class LogsEngineNearestLocksmithsTests(TestCase):
         nearest = response.context["nearest_locksmiths"]
         self.assertEqual(len(nearest), 1)
         self.assertIsNone(nearest[0][2])
+
+
+class DriveTimeClassFilterTests(TestCase):
+    def test_boundaries(self):
+        self.assertEqual(drive_time_class(0), "drive-time-green")
+        self.assertEqual(drive_time_class(45), "drive-time-green")
+        self.assertEqual(drive_time_class(46), "drive-time-amber")
+        self.assertEqual(drive_time_class(60), "drive-time-amber")
+        self.assertEqual(drive_time_class(61), "drive-time-pale-red")
+        self.assertEqual(drive_time_class(90), "drive-time-pale-red")
+        self.assertEqual(drive_time_class(91), "drive-time-red")
+        self.assertEqual(drive_time_class(200), "drive-time-red")
+
+    def test_none_is_blank(self):
+        self.assertEqual(drive_time_class(None), "")

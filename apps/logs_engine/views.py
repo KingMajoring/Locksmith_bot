@@ -23,6 +23,17 @@ from apps.locksmiths.models import Locksmith
 logger = logging.getLogger(__name__)
 
 
+def _home_origin(locksmith):
+    """Google Distance Matrix origin string for this locksmith's home
+    base — precise lat,lng when we have it (from Optimo's own "driver
+    starting location" export, see apps.locksmiths.services — a proper
+    coordinate is more accurate than a postcode's centroid), else
+    falling back to their home postcode. "" when neither is set."""
+    if locksmith.home_latitude is not None and locksmith.home_longitude is not None:
+        return f"{locksmith.home_latitude},{locksmith.home_longitude}"
+    return locksmith.home_postcode
+
+
 def _soonest_future_attendance_by_locksmith(locksmiths):
     """{locksmith.pk: FutureLocksmithAttendance}, the soonest upcoming
     job (with a usable postcode) each of these locksmiths is already
@@ -53,15 +64,15 @@ def _soonest_future_attendance_by_locksmith(locksmiths):
 def _nearest_locksmiths(job):
     """(locksmith, LocksmithDistance, FutureLocksmithAttendance | None)
     triples, nearest first, for every active locksmith who has *either*
-    a home postcode set *or* a soonest already-booked future job with a
-    usable postcode — a locksmith with no home postcode on file
-    shouldn't be silently excluded just because they happen to already
-    have an upcoming job near this one. The attendance is set when that
-    locksmith's ranked distance came from a future job location rather
-    than their home postcode. Best-effort, same rationale as every
-    other external lookup on this page — a missing vehicle location or
-    a Google API failure just means no suggestions rather than a broken
-    page."""
+    a home base (lat/lng, or a postcode as a fallback) *or* a soonest
+    already-booked future job with a usable postcode — a locksmith with
+    no home location on file shouldn't be silently excluded just
+    because they happen to already have an upcoming job near this one.
+    The attendance is set when that locksmith's ranked distance came
+    from a future job location rather than their home base. Best-effort,
+    same rationale as every other external lookup on this page — a
+    missing vehicle location or a Google API failure just means no
+    suggestions rather than a broken page."""
     if job.vehicle_latitude is None or job.vehicle_longitude is None:
         return []
     locksmiths = list(Locksmith.objects.filter(active=True).order_by("name"))
@@ -71,14 +82,14 @@ def _nearest_locksmiths(job):
     soonest_future = _soonest_future_attendance_by_locksmith(locksmiths)
 
     # Two candidate origins per locksmith where they have both: home
-    # postcode, and their soonest future job's postcode — ranked
-    # together below so whichever is actually closer wins. A locksmith
-    # with neither gets no origin at all, and so never enters the
-    # ranking.
+    # base, and their soonest future job's postcode — ranked together
+    # below so whichever is actually closer wins. A locksmith with
+    # neither gets no origin at all, and so never enters the ranking.
     origins, origin_locksmiths, origin_attendances = [], [], []
     for locksmith in locksmiths:
-        if locksmith.home_postcode:
-            origins.append(locksmith.home_postcode)
+        home_origin = _home_origin(locksmith)
+        if home_origin:
+            origins.append(home_origin)
             origin_locksmiths.append(locksmith)
             origin_attendances.append(None)
         attendance = soonest_future.get(locksmith.pk)
@@ -133,7 +144,10 @@ def lookup(request):
             "service_label": display_loss_type(job.loss_type) if job else "",
             "nearest_locksmiths": _nearest_locksmiths(job) if job else [],
             "locksmiths_missing_postcode": (
-                Locksmith.objects.filter(active=True, home_postcode="").count() if job else 0
+                Locksmith.objects.filter(
+                    active=True, home_postcode="", home_latitude__isnull=True,
+                ).count()
+                if job else 0
             ),
         },
     )

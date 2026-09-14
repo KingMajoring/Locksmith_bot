@@ -8,3 +8,6 @@ whitenoise==6.*
 pymssql==2.4.*
 azure-storage-blob==12.*
 twilio==9.*
+# Reads the legacy-binary .xls "Drivers" export from Optimo (driver
+# starting location) — see apps.locksmiths.services.parse_employee_location_rows.
+xlrd==2.*

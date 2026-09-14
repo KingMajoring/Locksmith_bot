@@ -71,9 +71,20 @@ class Locksmith(models.Model):
         help_text="This locksmith's home/base postcode — there's no live GPS "
         "tracking of where a locksmith actually is, so this is used as a "
         "stand-in \"where they're based\" for Logs Engine's nearest-locksmith "
-        "distance lookup (Area: office job lookup). Office-entered, not synced "
-        "from anywhere.",
+        "distance lookup (Area: office job lookup), when home_latitude/"
+        "home_longitude below aren't set. Office-entered, not synced from "
+        "anywhere.",
     )
+    home_latitude = models.FloatField(
+        null=True, blank=True,
+        help_text="This locksmith's home/base location, more precise than "
+        "home_postcode above — sourced from Optimo's own \"driver starting "
+        "location\" (see \"Sync from employee locations\" in Locksmiths admin, "
+        "a file upload since Optimo has no live API for this), and preferred "
+        "over home_postcode by Logs Engine's nearest-locksmith distance "
+        "lookup whenever both are set.",
+    )
+    home_longitude = models.FloatField(null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

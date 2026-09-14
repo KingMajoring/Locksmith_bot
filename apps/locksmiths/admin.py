@@ -47,7 +47,8 @@ def assign_stock_check_schedule(modeladmin, request, queryset):
 @admin.register(Locksmith)
 class LocksmithAdmin(admin.ModelAdmin):
     list_display = (
-        "name", "soter_ids_display", "soter_user_id", "email", "home_postcode", "has_schedule",
+        "name", "soter_ids_display", "soter_user_id", "email", "home_postcode",
+        "home_latitude", "home_longitude", "has_schedule",
         "portal_linked", "preferred_navigation_app", "sees_all_jobs_for_testing",
         "office_access", "active", "preview_link",
     )

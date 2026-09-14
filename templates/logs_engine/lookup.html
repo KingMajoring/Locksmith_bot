@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load logs_engine_extras %}
 {% block title %}Logs Engine{% endblock %}
 {% block content %}
 <h1>Logs Engine</h1>
@@ -39,9 +40,17 @@
           {% for locksmith, distance, attendance in nearest_locksmiths %}
             <tr>
               <td>{{ locksmith.name }}</td>
-              <td>{% if attendance %}{{ attendance.vehicle_postcode }}{% else %}{{ locksmith.home_postcode }}{% endif %}</td>
+              <td>
+                {% if attendance %}
+                  {{ attendance.vehicle_postcode }}
+                {% elif locksmith.home_postcode %}
+                  {{ locksmith.home_postcode }}
+                {% else %}
+                  GPS location
+                {% endif %}
+              </td>
               <td>{{ distance.distance_miles }} mi</td>
-              <td>{{ distance.duration_minutes }} min</td>
+              <td><span class="drive-time-pill {{ distance.duration_minutes|drive_time_class }}">{{ distance.duration_minutes }} min</span></td>
               <td>
                 {% if attendance %}
                   Already booked nearby ({{ attendance.vehicle_reg|default:"job" }}, {{ attendance.available_from|date:"D j M, H:i" }})
