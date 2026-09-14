@@ -262,14 +262,20 @@ def _maps_link(latitude, longitude):
     return f'<a href="{url}" target="_blank">View location</a>'
 
 
-def _navigation_urls(postcode):
-    """(maps_url, waze_url) for one-tap navigation to a job, from the
-    postcode Handl holds against the claim (Policy_HolderDetails.PostCode
-    — confirmed live). Both Maps and Waze accept a plain free-text
-    query, so no lat/lng lookup is needed."""
-    if not postcode:
+def _navigation_urls(vehicle_address, latitude=None, longitude=None):
+    """(maps_url, waze_url) for one-tap navigation straight to the
+    vehicle. Prefers Handl's own coordinates for the claim
+    (Policy_ClaimDetails_Key.VehicleAddressLatitude/Longitude) when
+    present — exact rather than whatever a text search happens to
+    geocode to — falling back to the vehicle address text when Handl
+    has no coordinates recorded for this claim. Both Maps and Waze
+    accept either form as a plain query."""
+    if latitude is not None and longitude is not None:
+        query = f"{latitude},{longitude}"
+    elif vehicle_address:
+        query = quote(vehicle_address)
+    else:
         return "", ""
-    query = quote(postcode)
     return (
         f"https://www.google.com/maps/search/?api=1&query={query}",
         f"https://waze.com/ul?q={query}&navigate=yes",
@@ -696,7 +702,7 @@ def dashboard(request):
         job["reg"] = details.reg if details else ""
         job["service"] = display_loss_type(details.loss_type) if details else ""
         job["supplied_service"] = details.supplied_service if details else ""
-        job["postcode"] = details.postcode if details else ""
+        job["vehicle_address"] = details.vehicle_address if details else ""
         job["client_name"] = details.client_name if details else ""
         job["client_phone"] = details.client_phone if details else ""
         job["broker"] = details.broker if details else ""
@@ -802,7 +808,11 @@ def job_overview(request, order_no):
     except Exception:
         logger.exception("Failed to fetch Handl job details for job overview %s", order_no)
         details = None
-    maps_url, waze_url = _navigation_urls(details.postcode if details else "")
+    maps_url, waze_url = _navigation_urls(
+        details.vehicle_address if details else "",
+        details.vehicle_latitude if details else None,
+        details.vehicle_longitude if details else None,
+    )
     preferred_nav_url = {
         Locksmith.NavigationApp.MAPS: maps_url,
         Locksmith.NavigationApp.WAZE: waze_url,

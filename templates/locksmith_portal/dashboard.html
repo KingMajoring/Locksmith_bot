@@ -78,8 +78,8 @@
             {% if job.client_name or job.broker %}
               <span class="job-meta">{% if job.client_name %}{{ job.client_name }}{% endif %}{% if job.client_name and job.broker %} · {% endif %}{% if job.broker %}{{ job.broker }}{% endif %}</span>
             {% endif %}
-            {% if job.postcode %}
-              <span class="job-location">{{ job.postcode }}</span>
+            {% if job.vehicle_address %}
+              <span class="job-location">{{ job.vehicle_address }}</span>
             {% endif %}
           </span>
           {% if job.visit_stage == 'done' %}

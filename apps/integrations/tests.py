@@ -54,7 +54,9 @@ class MockHandlClientTests(TestCase):
             self.assertTrue(job.year)
             self.assertTrue(job.vin)
             self.assertTrue(job.service_type)
-            self.assertTrue(job.postcode)
+            self.assertTrue(job.vehicle_address)
+            self.assertIsNotNone(job.vehicle_latitude)
+            self.assertIsNotNone(job.vehicle_longitude)
 
     def test_get_job_details_is_deterministic_per_report_id(self):
         first = self.client.get_job_details(["1001"])["1001"]
@@ -400,12 +402,17 @@ class SQLHandlClientTests(TestCase):
                 "LossEvent": "Lost Keys",
                 "SuppliedService": "Key Programming",
                 "NetCost": 145.5,
-                "PostCode": "NR14 8PL",
                 "ClientName": "Sarah Jones",
                 "OrganisationName": None,
                 "ClientPhone": "07700900123",
                 "BrokerName": "Admiral",
                 "DetailOfLoss": "Lost the only key on a dog walk.",
+                "VehicleAddress1": "42 Corsehill Crescent",
+                "VehicleAddress2": "",
+                "VehicleAddress3": "Hamilton",
+                "VehicleAddress4": "Lanarkshire",
+                "VehicleAddressLatitude": 55.7536673,
+                "VehicleAddressLongitude": -4.062251,
             }
         ]
         fake_conn = _fake_connection(rows)
@@ -435,7 +442,9 @@ class SQLHandlClientTests(TestCase):
         self.assertEqual(job.supplied_service, "Key Programming")
         self.assertEqual(job.net_cost, 145.5)
         self.assertIs(job.spare_key, False)
-        self.assertEqual(job.postcode, "NR14 8PL")
+        self.assertEqual(job.vehicle_address, "42 Corsehill Crescent, Hamilton, Lanarkshire")
+        self.assertEqual(job.vehicle_latitude, 55.7536673)
+        self.assertEqual(job.vehicle_longitude, -4.062251)
         self.assertEqual(job.client_name, "Sarah Jones")
         self.assertEqual(job.client_phone, "07700900123")
         self.assertEqual(job.broker, "Admiral")
@@ -455,12 +464,17 @@ class SQLHandlClientTests(TestCase):
                 "LossEvent": "Lost Keys",
                 "SuppliedService": "Key Programming",
                 "NetCost": 145.5,
-                "PostCode": "NR14 8PL",
                 "ClientName": "Sarah Jones",
                 "OrganisationName": None,
                 "ClientPhone": "07700900123",
                 "BrokerName": "Admiral",
                 "DetailOfLoss": None,
+                "VehicleAddress1": "42 Corsehill Crescent",
+                "VehicleAddress2": "",
+                "VehicleAddress3": "Hamilton",
+                "VehicleAddress4": "Lanarkshire",
+                "VehicleAddressLatitude": 55.7536673,
+                "VehicleAddressLongitude": -4.062251,
             }
         ]
         fake_conn = _fake_connection(rows)
@@ -483,12 +497,17 @@ class SQLHandlClientTests(TestCase):
                 "LossEvent": "Lost Keys",
                 "SuppliedService": "Key Programming",
                 "NetCost": 145.5,
-                "PostCode": "NR14 8PL",
                 "ClientName": "",
                 "OrganisationName": "Acme Fleet Ltd",
                 "ClientPhone": "",
                 "BrokerName": None,
                 "DetailOfLoss": "Lost the only key on a dog walk.",
+                "VehicleAddress1": "42 Corsehill Crescent",
+                "VehicleAddress2": "",
+                "VehicleAddress3": "Hamilton",
+                "VehicleAddress4": "Lanarkshire",
+                "VehicleAddressLatitude": 55.7536673,
+                "VehicleAddressLongitude": -4.062251,
             }
         ]
         fake_conn = _fake_connection(rows)
@@ -501,7 +520,7 @@ class SQLHandlClientTests(TestCase):
         self.assertEqual(job.client_phone, "")
         self.assertEqual(job.broker, "")
 
-    def test_get_job_details_null_postcode_maps_to_empty_string(self):
+    def test_get_job_details_null_vehicle_address_maps_to_empty_string(self):
         rows = [
             {
                 "ReportID": "496390",
@@ -515,19 +534,27 @@ class SQLHandlClientTests(TestCase):
                 "LossEvent": "Lost Keys",
                 "SuppliedService": "Key Programming",
                 "NetCost": 100.0,
-                "PostCode": None,
                 "ClientName": "Sarah Jones",
                 "OrganisationName": None,
                 "ClientPhone": "07700900123",
                 "BrokerName": "Admiral",
                 "DetailOfLoss": "Lost the only key on a dog walk.",
+                "VehicleAddress1": None,
+                "VehicleAddress2": None,
+                "VehicleAddress3": None,
+                "VehicleAddress4": None,
+                "VehicleAddressLatitude": None,
+                "VehicleAddressLongitude": None,
             }
         ]
         fake_conn = _fake_connection(rows)
         client = SQLHandlClient()
         with patch.object(client, "_connection", return_value=fake_conn):
             details = client.get_job_details(["496390"])
-        self.assertEqual(details["496390"].postcode, "")
+        job = details["496390"]
+        self.assertEqual(job.vehicle_address, "")
+        self.assertIsNone(job.vehicle_latitude)
+        self.assertIsNone(job.vehicle_longitude)
 
     def test_get_job_details_keys_result_by_the_requested_report_id_string(self):
         # Regression test: confirmed live against a real dashboard job
@@ -551,12 +578,17 @@ class SQLHandlClientTests(TestCase):
                 "LossEvent": "Lost",
                 "SuppliedService": "",
                 "NetCost": None,
-                "PostCode": "NR14 8PL",
                 "ClientName": "Sarah Jones",
                 "OrganisationName": None,
                 "ClientPhone": "07700900123",
                 "BrokerName": "Admiral",
                 "DetailOfLoss": "Lost the only key on a dog walk.",
+                "VehicleAddress1": "42 Corsehill Crescent",
+                "VehicleAddress2": "",
+                "VehicleAddress3": "Hamilton",
+                "VehicleAddress4": "Lanarkshire",
+                "VehicleAddressLatitude": 55.7536673,
+                "VehicleAddressLongitude": -4.062251,
             }
         ]
         fake_conn = _fake_connection(rows)
@@ -568,7 +600,7 @@ class SQLHandlClientTests(TestCase):
         job = details["039364"]
         self.assertEqual(job.report_id, "039364")
         self.assertEqual(job.make, "FORD")
-        self.assertEqual(job.postcode, "NR14 8PL")
+        self.assertEqual(job.vehicle_address, "42 Corsehill Crescent, Hamilton, Lanarkshire")
 
     def test_get_job_details_null_net_cost_maps_to_none(self):
         rows = [
@@ -584,12 +616,17 @@ class SQLHandlClientTests(TestCase):
                 "LossEvent": "Lost Keys",
                 "SuppliedService": "Key Programming",
                 "NetCost": None,
-                "PostCode": "NR14 8PL",
                 "ClientName": "Sarah Jones",
                 "OrganisationName": None,
                 "ClientPhone": "07700900123",
                 "BrokerName": "Admiral",
                 "DetailOfLoss": "Lost the only key on a dog walk.",
+                "VehicleAddress1": "42 Corsehill Crescent",
+                "VehicleAddress2": "",
+                "VehicleAddress3": "Hamilton",
+                "VehicleAddress4": "Lanarkshire",
+                "VehicleAddressLatitude": 55.7536673,
+                "VehicleAddressLongitude": -4.062251,
             }
         ]
         fake_conn = _fake_connection(rows)
@@ -613,12 +650,17 @@ class SQLHandlClientTests(TestCase):
                 "LossEvent": "Lost Keys",
                 "SuppliedService": "Key Programming",
                 "NetCost": 100.0,
-                "PostCode": "NR14 8PL",
                 "ClientName": "Sarah Jones",
                 "OrganisationName": None,
                 "ClientPhone": "07700900123",
                 "BrokerName": "Admiral",
                 "DetailOfLoss": "Lost the only key on a dog walk.",
+                "VehicleAddress1": "42 Corsehill Crescent",
+                "VehicleAddress2": "",
+                "VehicleAddress3": "Hamilton",
+                "VehicleAddress4": "Lanarkshire",
+                "VehicleAddressLatitude": 55.7536673,
+                "VehicleAddressLongitude": -4.062251,
             }
         ]
         fake_conn = _fake_connection(rows)

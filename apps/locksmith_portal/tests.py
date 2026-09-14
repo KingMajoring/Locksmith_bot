@@ -170,7 +170,7 @@ class DashboardTests(TestCase):
 
     @patch("apps.locksmith_portal.views.get_handl_client")
     @patch("apps.locksmith_portal.views.get_optimo_client")
-    def test_dashboard_shows_postcode(self, mock_get_optimo, mock_get_handl):
+    def test_dashboard_shows_vehicle_address(self, mock_get_optimo, mock_get_handl):
         today = timezone.localdate()
         order_no = f"1001_{today.isoformat()}"
         mock_optimo = MagicMock()
@@ -185,15 +185,16 @@ class DashboardTests(TestCase):
             "1001": JobDetails(
                 report_id="1001", make="Ford", model="Focus", year="2020", reg="AB20 CDE", vin="VIN1",
                 service_type="Car", loss_type="LOST", supplied_service="", net_cost=100.0,
-                postcode="NR14 8PL",
+                vehicle_address="42 Corsehill Crescent, Hamilton, Lanarkshire",
+                vehicle_latitude=55.7536673, vehicle_longitude=-4.062251,
             )
         }
         mock_get_handl.return_value = mock_handl
 
         response = self.client.get(reverse("locksmith_portal:dashboard"))
         job = response.context["jobs"][0]
-        self.assertEqual(job["postcode"], "NR14 8PL")
-        self.assertContains(response, "NR14 8PL")
+        self.assertEqual(job["vehicle_address"], "42 Corsehill Crescent, Hamilton, Lanarkshire")
+        self.assertContains(response, "42 Corsehill Crescent, Hamilton, Lanarkshire")
         # Maps/Waze are only offered once a locksmith opens the job, not on
         # the dashboard card itself.
         self.assertNotContains(response, "job-nav-link")
@@ -409,7 +410,7 @@ class DashboardTests(TestCase):
 
     @patch("apps.locksmith_portal.views.get_handl_client")
     @patch("apps.locksmith_portal.views.get_optimo_client")
-    def test_dashboard_hides_location_without_postcode(self, mock_get_optimo, mock_get_handl):
+    def test_dashboard_hides_location_without_vehicle_address(self, mock_get_optimo, mock_get_handl):
         today = timezone.localdate()
         order_no = f"1001_{today.isoformat()}"
         mock_optimo = MagicMock()
@@ -423,7 +424,7 @@ class DashboardTests(TestCase):
 
         response = self.client.get(reverse("locksmith_portal:dashboard"))
         job = response.context["jobs"][0]
-        self.assertEqual(job["postcode"], "")
+        self.assertEqual(job["vehicle_address"], "")
         self.assertNotContains(response, "job-nav-link")
 
     @patch("apps.locksmith_portal.views.get_optimo_client")
@@ -1984,8 +1985,8 @@ class JobVisitWorkflowTests(TestCase):
         self.assertContains(response, "Mark on route")
         self.assertNotContains(response, "Arrived</a>")
 
-    def test_overview_offers_nav_choice_when_postcode_known_and_unset(self):
-        self._set_loss_type("LOST", postcode="NR14 8PL")
+    def test_overview_offers_nav_choice_when_vehicle_address_known_and_unset(self):
+        self._set_loss_type("LOST", vehicle_address="42 Corsehill Crescent, Hamilton, Lanarkshire")
         url = reverse("locksmith_portal:job_overview", args=[self.order_no])
         response = self.client.get(url)
         self.assertTrue(response.context["offer_nav_choice"])
@@ -1994,8 +1995,24 @@ class JobVisitWorkflowTests(TestCase):
         self.assertContains(response, 'name="nav_app" value="maps"')
         self.assertContains(response, 'name="nav_app" value="waze"')
 
-    def test_overview_hides_nav_choice_without_postcode(self):
-        self._set_loss_type("LOST")  # no postcode
+    def test_overview_nav_urls_prefer_coordinates_over_address_text(self):
+        self._set_loss_type(
+            "LOST", vehicle_address="42 Corsehill Crescent, Hamilton, Lanarkshire",
+            vehicle_latitude=55.7536673, vehicle_longitude=-4.062251,
+        )
+        url = reverse("locksmith_portal:job_overview", args=[self.order_no])
+        response = self.client.get(url)
+        self.assertIn("query=55.7536673,-4.062251", response.context["maps_url"])
+        self.assertNotIn("Corsehill", response.context["maps_url"])
+
+    def test_overview_nav_urls_fall_back_to_address_text_without_coordinates(self):
+        self._set_loss_type("LOST", vehicle_address="42 Corsehill Crescent, Hamilton, Lanarkshire")
+        url = reverse("locksmith_portal:job_overview", args=[self.order_no])
+        response = self.client.get(url)
+        self.assertIn("Corsehill", response.context["maps_url"])
+
+    def test_overview_hides_nav_choice_without_vehicle_address(self):
+        self._set_loss_type("LOST")  # no vehicle_address
         url = reverse("locksmith_portal:job_overview", args=[self.order_no])
         response = self.client.get(url)
         self.assertFalse(response.context["offer_nav_choice"])
@@ -2004,7 +2021,7 @@ class JobVisitWorkflowTests(TestCase):
         self.assertContains(response, "Mark on route")
 
     def test_overview_hides_nav_choice_once_preference_saved(self):
-        self._set_loss_type("LOST", postcode="NR14 8PL")
+        self._set_loss_type("LOST", vehicle_address="42 Corsehill Crescent, Hamilton, Lanarkshire")
         self.locksmith.preferred_navigation_app = Locksmith.NavigationApp.WAZE
         self.locksmith.save(update_fields=["preferred_navigation_app"])
 
@@ -2012,10 +2029,14 @@ class JobVisitWorkflowTests(TestCase):
         response = self.client.get(url)
         self.assertFalse(response.context["offer_nav_choice"])
         self.assertEqual(
-            response.context["preferred_nav_url"], "https://waze.com/ul?q=NR14%208PL&navigate=yes"
+            response.context["preferred_nav_url"],
+            "https://waze.com/ul?q=42%20Corsehill%20Crescent%2C%20Hamilton%2C%20Lanarkshire&navigate=yes",
         )
         self.assertContains(response, "Mark on route")
-        self.assertContains(response, "https://waze.com/ul?q=NR14%208PL&amp;navigate=yes")
+        self.assertContains(
+            response,
+            "https://waze.com/ul?q=42%20Corsehill%20Crescent%2C%20Hamilton%2C%20Lanarkshire&amp;navigate=yes",
+        )
 
     def test_overview_not_on_schedule_redirects(self):
         url = reverse("locksmith_portal:job_overview", args=[f"999999_{self.today.isoformat()}"])
@@ -2785,12 +2806,16 @@ class JobVisitWorkflowTests(TestCase):
 
     # --- per-service completion flow: Gain access ------------------------
 
-    def _set_loss_type(self, raw_loss_type, spare_key=None, postcode=""):
+    def _set_loss_type(
+        self, raw_loss_type, spare_key=None, vehicle_address="",
+        vehicle_latitude=None, vehicle_longitude=None,
+    ):
         self.mock_handl.get_job_details.return_value = {
             "496390": JobDetails(
                 report_id="496390", make="Ford", model="Focus", year="2020", reg="AB20 CDE", vin="VIN1",
                 service_type="Car", loss_type=raw_loss_type, supplied_service="", net_cost=100.0,
-                spare_key=spare_key, postcode=postcode,
+                spare_key=spare_key, vehicle_address=vehicle_address,
+                vehicle_latitude=vehicle_latitude, vehicle_longitude=vehicle_longitude,
             )
         }
 

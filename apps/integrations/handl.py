@@ -66,10 +66,18 @@ class JobDetails:
     # property lockout. None when there's no key claim row to read this
     # from at all (e.g. a non-vehicle job).
     spare_key: bool | None = None
-    # Policy_HolderDetails.PostCode (confirmed live against the same
-    # AKL job — NR14 8PL) — the job's actual location, for the
-    # locksmith portal's dashboard and one-tap Maps/Waze navigation.
-    postcode: str = ""
+    # Policy_ClaimDetails_Key.VehicleAddress1-4 (joined, skipping blank
+    # lines) plus its VehicleAddressLatitude/Longitude — where the
+    # vehicle actually is, for the locksmith portal's dashboard and
+    # one-tap Maps/Waze navigation. Not the same as the policyholder's
+    # own registered address (Policy_HolderDetails.PostCode, used below
+    # only for contact details) — confirmed live the two can be a long
+    # way apart, which was sending locksmiths to the wrong location
+    # entirely. Lat/lng are None when Handl has no coordinates recorded
+    # for this claim.
+    vehicle_address: str = ""
+    vehicle_latitude: float | None = None
+    vehicle_longitude: float | None = None
     # Policy_HolderDetails.Name + Surname (falling back to
     # OrganisationName for a trade/business client with no individual
     # name on file) and PhoneMobile (falling back to PhoneDay, then
@@ -380,7 +388,15 @@ class MockHandlClient(HandlClient):
     _MODELS = ["Focus", "Corsa", "3 Series", "Golf", "A4", "C-Class", "Yaris"]
     _SERVICE_TYPES = ["Lockout", "Key cutting", "Key programming", "Barrel change", "Boot lockout"]
     _LOSS_TYPES = ["Lost Keys", "Broken Key", "Lockout", "Keys Locked In", "Stolen Keys"]
-    _POSTCODES = ["NR14 8PL", "NR1 3QE", "IP1 2AB", "CO1 1AA", "CB1 2CD", "PE1 3EF"]
+    # (address lines, latitude, longitude) — mirrors the real shape:
+    # street on line 1, town/county on lines 3/4, line 2 usually blank.
+    _VEHICLE_ADDRESSES = [
+        (("42 Corsehill Crescent", "", "Hamilton", "Lanarkshire"), 55.7536673, -4.062251),
+        (("6 Dechmont View", "", "Bellshill", "Lanarkshire"), 55.8116927, -4.0353966),
+        (("12 Mill Lane", "", "Norwich", "Norfolk"), 52.6309, 1.2974),
+        (("5 Orchard Street", "", "Ipswich", "Suffolk"), 52.0567, 1.1482),
+        (("18 Kings Road", "", "Colchester", "Essex"), 51.8959, 0.8919),
+    ]
     _SUPPLIED_SERVICES = [
         "Non-Destructive Entry", "Key Cutting", "Key Programming",
         "Lock Change", "Boot Entry",
@@ -402,6 +418,7 @@ class MockHandlClient(HandlClient):
         result = {}
         for report_id in report_ids:
             rng = random.Random(int(hashlib.sha256(report_id.encode()).hexdigest(), 16) % (2**32))
+            address_lines, lat, lon = rng.choice(self._VEHICLE_ADDRESSES)
             result[report_id] = JobDetails(
                 report_id=report_id,
                 make=rng.choice(self._MAKES),
@@ -418,7 +435,9 @@ class MockHandlClient(HandlClient):
                 supplied_service=rng.choice(self._SUPPLIED_SERVICES),
                 net_cost=round(rng.uniform(60, 350), 2),
                 spare_key=rng.choice([True, False]),
-                postcode=rng.choice(self._POSTCODES),
+                vehicle_address=", ".join(line for line in address_lines if line),
+                vehicle_latitude=lat,
+                vehicle_longitude=lon,
                 client_name=rng.choice(self._CLIENT_NAMES),
                 client_phone=f"07{rng.randint(10**8, 10**9 - 1)}",
                 broker=rng.choice(self._BROKERS),
@@ -860,11 +879,13 @@ class SQLHandlClient(HandlClient):
                 GROUP BY pf.ReportID
             ),
             HolderDetails AS (
-                -- The job's actual location (confirmed live against a
-                -- real AKL job — NR14 8PL) plus who to contact and how —
-                -- for the portal's dashboard/Maps/Waze navigation and
-                -- job detail screen. Deliberately MAX()'d rather than
-                -- ranked by an ID column (unlike the CTEs above) —
+                -- Who to contact and how, for the job detail screen
+                -- (confirmed live against a real AKL job). Policy_HolderDetails
+                -- also has its own PostCode, but that's the policyholder's
+                -- registered address, not where the vehicle actually is —
+                -- the real vehicle location comes from Policy_ClaimDetails_Key
+                -- in LossDetail below instead. Deliberately MAX()'d rather
+                -- than ranked by an ID column (unlike the CTEs above) —
                 -- Policy_HolderDetails' own row-uniqueness per ReportID
                 -- isn't confirmed, and grouping avoids any risk of
                 -- fanning VehicleRanked's rows out via the join below if
@@ -874,7 +895,6 @@ class SQLHandlClient(HandlClient):
                 -- falling back to day then home.
                 SELECT
                     ReportID,
-                    MAX(PostCode) AS PostCode,
                     MAX(LTRIM(RTRIM(ISNULL(Name, '') + ' ' + ISNULL(Surname, '')))) AS ClientName,
                     MAX(OrganisationName) AS OrganisationName,
                     MAX(ISNULL(NULLIF(PhoneMobile, ''), ISNULL(NULLIF(PhoneDay, ''), PhoneHome))) AS ClientPhone
@@ -898,21 +918,40 @@ class SQLHandlClient(HandlClient):
                 -- The customer's own free-text account of what happened
                 -- (confirmed live against a real claim, ReportID
                 -- 500918) — often long, so shown as a popup on the
-                -- portal rather than inline. Policy_ClaimDetails_Key is
-                -- the key-claim-specific variant of this table (there's
-                -- a matching _Home/_SVI for other claim types this app
+                -- portal rather than inline. Also the vehicle's actual
+                -- location: VehicleAddress1-4 plus its lat/lng — this
+                -- table, not Policy_HolderDetails, is where Handl
+                -- records where the vehicle is (columns confirmed via
+                -- INFORMATION_SCHEMA.COLUMNS against the real DB, real
+                -- data checked against two live jobs — e.g. ReportID
+                -- 501559: "6 Dechmont View" / "" / "Bellshill" /
+                -- "Lanarkshire", 55.8116927, -4.0353966). No separate
+                -- postcode column here — VehicleAddress1-4 is all Handl
+                -- records for it. Policy_ClaimDetails_Key is the
+                -- key-claim-specific variant of this table (there's a
+                -- matching _Home/_SVI for other claim types this app
                 -- never deals with). MAX()'d rather than ranked, same
                 -- caution as HolderDetails — this table's own
                 -- row-uniqueness per ReportID isn't confirmed either.
-                SELECT ReportID, MAX(DetailOfLoss) AS DetailOfLoss
+                SELECT
+                    ReportID,
+                    MAX(DetailOfLoss) AS DetailOfLoss,
+                    MAX(VehicleAddress1) AS VehicleAddress1,
+                    MAX(VehicleAddress2) AS VehicleAddress2,
+                    MAX(VehicleAddress3) AS VehicleAddress3,
+                    MAX(VehicleAddress4) AS VehicleAddress4,
+                    MAX(VehicleAddressLatitude) AS VehicleAddressLatitude,
+                    MAX(VehicleAddressLongitude) AS VehicleAddressLongitude
                 FROM Policy_ClaimDetails_Key
                 WHERE ReportID IN ({id_placeholders})
                 GROUP BY ReportID
             )
             SELECT
                 v.ReportID, v.Make, v.Model, v.yearOfManufacture, v.VehicleReg, v.VehicleVIN, v.KeyType,
-                v.SpareKey, lt.LossEvent, ss.SuppliedService, f.NetCost, hp.PostCode,
-                hp.ClientName, hp.OrganisationName, hp.ClientPhone, br.BrokerName, ld.DetailOfLoss
+                v.SpareKey, lt.LossEvent, ss.SuppliedService, f.NetCost,
+                hp.ClientName, hp.OrganisationName, hp.ClientPhone, br.BrokerName, ld.DetailOfLoss,
+                ld.VehicleAddress1, ld.VehicleAddress2, ld.VehicleAddress3, ld.VehicleAddress4,
+                ld.VehicleAddressLatitude, ld.VehicleAddressLongitude
             FROM VehicleRanked v
             LEFT JOIN LossType lt ON v.ReportID = lt.ReportID
             LEFT JOIN SuppliedServiceRanked ss ON v.ReportID = ss.ReportID AND ss.rn = 1
@@ -947,6 +986,16 @@ class SQLHandlClient(HandlClient):
             row = by_numeric_id.get(numeric_id)
             if row is None:
                 continue
+            vehicle_address = ", ".join(
+                line
+                for line in (
+                    (row["VehicleAddress1"] or "").strip(),
+                    (row["VehicleAddress2"] or "").strip(),
+                    (row["VehicleAddress3"] or "").strip(),
+                    (row["VehicleAddress4"] or "").strip(),
+                )
+                if line
+            )
             result[report_id] = JobDetails(
                 report_id=report_id,
                 make=row["Make"] or "",
@@ -959,7 +1008,15 @@ class SQLHandlClient(HandlClient):
                 supplied_service=row["SuppliedService"] or "",
                 net_cost=float(row["NetCost"]) if row["NetCost"] is not None else None,
                 spare_key=bool(row["SpareKey"]) if row["SpareKey"] is not None else None,
-                postcode=row["PostCode"] or "",
+                vehicle_address=vehicle_address,
+                vehicle_latitude=(
+                    float(row["VehicleAddressLatitude"])
+                    if row["VehicleAddressLatitude"] is not None else None
+                ),
+                vehicle_longitude=(
+                    float(row["VehicleAddressLongitude"])
+                    if row["VehicleAddressLongitude"] is not None else None
+                ),
                 # OrganisationName is the fallback for a trade/business
                 # client with no individual name on file — ClientName
                 # itself is always a non-null string (LTRIM/RTRIM of two
