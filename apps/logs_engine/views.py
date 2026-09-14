@@ -168,8 +168,20 @@ def _on_shift_locksmith_pks(locksmiths):
     sometime today. Returns None (not an empty set) when this couldn't
     be checked at all, so callers can tell "confirmed nobody's on
     shift" apart from "the lookup failed" rather than defaulting every
-    locksmith to off-shift on a Graph outage or missing Team ID."""
-    emails_by_pk = {l.pk: l.email.strip().lower() for l in locksmiths if l.email}
+    locksmith to off-shift on a Graph outage or missing Team ID.
+
+    Matches by Locksmith.user.email (the real Microsoft sign-in email,
+    verified the first time this locksmith actually logged in — see
+    apps.accounts.adapter) in preference to Locksmith.email (just
+    Handl/Soter's own record of it, confirmed live to sometimes drift
+    slightly from what someone actually signs into Microsoft with) —
+    falling back to the Handl-synced one only for a locksmith who's
+    never logged into the portal yet, so user is still null."""
+    emails_by_pk = {}
+    for locksmith in locksmiths:
+        email = (locksmith.user.email if locksmith.user_id else "") or locksmith.email
+        if email:
+            emails_by_pk[locksmith.pk] = email.strip().lower()
     if not emails_by_pk:
         return None
     now = django_timezone.localtime(django_timezone.now()).replace(tzinfo=None)
@@ -244,7 +256,7 @@ def _nearest_locksmiths(job):
     just means no locksmith had a usable location, or none resolved."""
     if job.vehicle_latitude is None or job.vehicle_longitude is None:
         return [], ""
-    locksmiths = list(Locksmith.objects.filter(active=True).order_by("name"))
+    locksmiths = list(Locksmith.objects.filter(active=True).select_related("user").order_by("name"))
     if not locksmiths:
         return [], ""
 

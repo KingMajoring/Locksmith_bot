@@ -582,6 +582,49 @@ class LogsEngineNearestLocksmithsTests(TestCase):
     @patch("apps.logs_engine.views.get_teams_shifts_client")
     @patch("apps.logs_engine.views.get_google_maps_client")
     @patch("apps.logs_engine.views.get_handl_client")
+    def test_on_shift_matches_by_real_login_email_not_handl_synced_one(
+        self, mock_get_handl, mock_get_maps, mock_get_shifts
+    ):
+        # Confirmed live: Handl/Soter's own email for a locksmith can be
+        # on a completely different domain (e.g. "...@soterps.com")
+        # from the address they actually sign into Microsoft/Teams
+        # with ("...@wgtk.co.uk") — once they've logged into the
+        # portal at least once, Locksmith.user.email holds that real,
+        # Microsoft-verified address, so that's what should be used
+        # here, not the Handl-synced Locksmith.email.
+        from django.utils import timezone as django_timezone
+
+        user = get_user_model().objects.create_user(
+            username="michael.mccrossan", email="michael.mccrossan@wgtk.co.uk", password="x",
+        )
+        locksmith = Locksmith.objects.create(
+            name="WGTK - Michael M", home_postcode="NR14 8PL",
+            email="michaelmccrossan@soterps.com", user=user,
+        )
+        mock_get_handl.return_value = MagicMock(
+            get_job_details=MagicMock(return_value={"501179": _job_with_location()}),
+            get_future_locksmith_attendances=MagicMock(return_value=[]),
+        )
+        mock_get_maps.return_value = MagicMock(get_distances=MagicMock(return_value=[
+            LocksmithDistance(origin="NR14 8PL", distance_metres=8369.0, duration_seconds=720, status="OK"),
+        ]))
+        now = django_timezone.localtime(django_timezone.now()).replace(tzinfo=None)
+        mock_get_shifts.return_value = MagicMock(list_shifts_for_date=MagicMock(return_value=[
+            ShiftAssignment(
+                email="michael.mccrossan@wgtk.co.uk",
+                shift_start=now - timedelta(hours=1), shift_end=now + timedelta(hours=1),
+            ),
+        ]))
+
+        response = self.client.get(reverse("logs_engine:lookup"), {"report_id": "501179"})
+
+        ranked = response.context["nearest_locksmiths"][0]
+        self.assertEqual(ranked.locksmith.pk, locksmith.pk)
+        self.assertTrue(ranked.on_shift)
+
+    @patch("apps.logs_engine.views.get_teams_shifts_client")
+    @patch("apps.logs_engine.views.get_google_maps_client")
+    @patch("apps.logs_engine.views.get_handl_client")
     def test_on_shift_false_when_scheduled_but_outside_current_shift_window(
         self, mock_get_handl, mock_get_maps, mock_get_shifts
     ):
