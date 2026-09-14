@@ -106,6 +106,15 @@
       {% if locksmiths_missing_postcode %}
         <p class="sub">{{ locksmiths_missing_postcode }} active locksmith{{ locksmiths_missing_postcode|pluralize }} {{ locksmiths_missing_postcode|pluralize:"has,have" }} no home postcode set, so {{ locksmiths_missing_postcode|pluralize:"isn't,aren't" }} included above unless they already have a future job booked nearby — <a href="{% url 'admin:locksmiths_locksmith_changelist' %}">add it in Admin</a>.</p>
       {% endif %}
+      {% if on_shift_error %}
+        <p class="sub">
+          Shift status (Teams) couldn't be checked — every "On shift"/"Off shift"
+          badge above is blank because of a Graph API problem (check
+          Schedule.Read.All is granted with admin consent, and the Team ID under
+          Admin → Teams Shifts settings is correct), not a data problem:
+        </p>
+        <p class="sub" style="font-family:monospace;">{{ on_shift_error }}</p>
+      {% endif %}
     </div>
   {% endif %}
 {% endif %}

@@ -685,7 +685,9 @@ class LogsEngineNearestLocksmithsTests(TestCase):
             LocksmithDistance(origin="NR14 8PL", distance_metres=8369.0, duration_seconds=720, status="OK"),
         ]))
         mock_get_shifts.return_value = MagicMock(
-            list_shifts_for_date=MagicMock(side_effect=Exception("boom"))
+            list_shifts_for_date=MagicMock(side_effect=Exception(
+                "Graph request failed: 403 Forbidden — Insufficient privileges"
+            ))
         )
 
         response = self.client.get(reverse("logs_engine:lookup"), {"report_id": "501179"})
@@ -693,6 +695,12 @@ class LogsEngineNearestLocksmithsTests(TestCase):
         self.assertEqual(response.status_code, 200)
         ranked = response.context["nearest_locksmiths"][0]
         self.assertIsNone(ranked.on_shift)
+        self.assertEqual(
+            response.context["on_shift_error"],
+            "Graph request failed: 403 Forbidden — Insufficient privileges",
+        )
+        self.assertContains(response, "Shift status (Teams) couldn't be checked")
+        self.assertContains(response, "Insufficient privileges")
 
     @patch("apps.logs_engine.views.get_google_maps_client")
     @patch("apps.logs_engine.views.get_handl_client")

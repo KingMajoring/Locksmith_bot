@@ -163,12 +163,17 @@ def _future_attendance_summary_by_locksmith(locksmiths):
 
 
 def _on_shift_locksmith_pks(locksmiths):
-    """{locksmith.pk, ...} for every one of these locksmiths currently
-    inside a published Teams Shift right now — not just scheduled
-    sometime today. Returns None (not an empty set) when this couldn't
-    be checked at all, so callers can tell "confirmed nobody's on
-    shift" apart from "the lookup failed" rather than defaulting every
-    locksmith to off-shift on a Graph outage or missing Team ID.
+    """({locksmith.pk, ...} | None, error_message) for every one of
+    these locksmiths currently inside a published Teams Shift right
+    now — not just scheduled sometime today. The set is None (not just
+    empty) when this couldn't be checked at all, so callers can tell
+    "confirmed nobody's on shift" apart from "the lookup failed" rather
+    than defaulting every locksmith to off-shift on a Graph outage or
+    missing Team ID. error_message is set (and the set None) only when
+    there WERE emails to check but the Teams/Graph call itself failed —
+    same rationale as _nearest_locksmiths' own error_message: worth
+    surfacing directly, since this office tool has no other easy way to
+    see it.
 
     Matches by Locksmith.user.email (the real Microsoft sign-in email,
     verified the first time this locksmith actually logged in — see
@@ -183,15 +188,15 @@ def _on_shift_locksmith_pks(locksmiths):
         if email:
             emails_by_pk[locksmith.pk] = email.strip().lower()
     if not emails_by_pk:
-        return None
+        return None, ""
     now = django_timezone.localtime(django_timezone.now()).replace(tzinfo=None)
     try:
         shifts = get_teams_shifts_client().list_shifts_for_date(now.date())
-    except Exception:
+    except Exception as exc:
         logger.exception("Failed to fetch Teams shifts for Logs Engine")
-        return None
+        return None, str(exc)
     on_shift_emails = {s.email.lower() for s in shifts if s.shift_start <= now <= s.shift_end}
-    return {pk for pk, email in emails_by_pk.items() if email in on_shift_emails}
+    return {pk for pk, email in emails_by_pk.items() if email in on_shift_emails}, ""
 
 
 def _return_minutes_by_locksmith(ranked, job):
@@ -237,9 +242,9 @@ def _return_minutes_by_locksmith(ranked, job):
 
 
 def _nearest_locksmiths(job):
-    """(list[RankedLocksmith], error_message) — ranked nearest first
-    (by total_minutes, the whole round trip, when known — see
-    RankedLocksmith), for every active locksmith who has *either* a
+    """(list[RankedLocksmith], distance_error, on_shift_error) — ranked
+    nearest first (by total_minutes, the whole round trip, when known —
+    see RankedLocksmith), for every active locksmith who has *either* a
     home base (lat/lng, or a postcode as a fallback) *or* a soonest
     already-booked future job with a usable postcode — a locksmith with
     no home location on file shouldn't be silently excluded just
@@ -247,18 +252,21 @@ def _nearest_locksmiths(job):
     attendance is set when a locksmith's outbound distance came from a
     future job location rather than their home base.
 
-    error_message is set (and the list empty) only when there WERE
+    distance_error is set (and the list empty) only when there WERE
     candidate locksmiths to check but the Google call itself failed —
     e.g. an API key restriction or a disabled API returns a clear
     top-level status Distance Matrix hands back, worth surfacing
     directly rather than just logging server-side, since this office
     tool has no other easy way to see that. Empty list with no error
-    just means no locksmith had a usable location, or none resolved."""
+    just means no locksmith had a usable location, or none resolved.
+    on_shift_error is the same idea for the Teams Shifts lookup (see
+    _on_shift_locksmith_pks) — set only when that call itself failed,
+    never for a locksmith simply not being on shift."""
     if job.vehicle_latitude is None or job.vehicle_longitude is None:
-        return [], ""
+        return [], "", ""
     locksmiths = list(Locksmith.objects.filter(active=True).select_related("user").order_by("name"))
     if not locksmiths:
-        return [], ""
+        return [], "", ""
 
     future_summary = _future_attendance_summary_by_locksmith(locksmiths)
 
@@ -280,7 +288,7 @@ def _nearest_locksmiths(job):
             origin_attendances.append(attendance)
 
     if not origins:
-        return [], ""
+        return [], "", ""
 
     try:
         distances = get_google_maps_client().get_distances(
@@ -288,7 +296,7 @@ def _nearest_locksmiths(job):
         )
     except Exception as exc:
         logger.exception("Failed to fetch Google distances for Logs Engine lookup %s", job.report_id)
-        return [], str(exc)
+        return [], str(exc), ""
 
     best_by_locksmith = {}
     for locksmith, attendance, distance in zip(origin_locksmiths, origin_attendances, distances):
@@ -302,10 +310,12 @@ def _nearest_locksmiths(job):
 
     ranked = list(best_by_locksmith.values())
     if not ranked:
-        return [], ""
+        return [], "", ""
 
     return_minutes_by_locksmith = _return_minutes_by_locksmith(ranked, job)
-    on_shift_pks = _on_shift_locksmith_pks([locksmith for locksmith, _distance, _attendance in ranked])
+    on_shift_pks, on_shift_error = _on_shift_locksmith_pks(
+        [locksmith for locksmith, _distance, _attendance in ranked]
+    )
     job_location = f"{job.vehicle_latitude},{job.vehicle_longitude}"
 
     results = []
@@ -331,7 +341,7 @@ def _nearest_locksmiths(job):
         ))
 
     results.sort(key=lambda r: (r.total_minutes is None, r.total_minutes, r.distance.distance_metres))
-    return results, ""
+    return results, "", on_shift_error
 
 
 @login_required
@@ -346,7 +356,9 @@ def lookup(request):
             details = {}
         job = details.get(report_id)
 
-    nearest_locksmiths, nearest_locksmiths_error = _nearest_locksmiths(job) if job else ([], "")
+    nearest_locksmiths, nearest_locksmiths_error, on_shift_error = (
+        _nearest_locksmiths(job) if job else ([], "", "")
+    )
 
     return render(
         request,
@@ -358,6 +370,7 @@ def lookup(request):
             "service_label": display_loss_type(job.loss_type) if job else "",
             "nearest_locksmiths": nearest_locksmiths,
             "nearest_locksmiths_error": nearest_locksmiths_error,
+            "on_shift_error": on_shift_error,
             "job_duration_minutes": _JOB_DURATION_MINUTES,
             "locksmiths_missing_postcode": (
                 Locksmith.objects.filter(
