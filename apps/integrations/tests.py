@@ -563,6 +563,52 @@ class SQLHandlClientTests(TestCase):
         self.assertIsNone(job.vehicle_latitude)
         self.assertIsNone(job.vehicle_longitude)
 
+    def test_get_job_details_blank_string_coordinates_do_not_raise(self):
+        # Regression test: VehicleAddressLatitude/Longitude are varchar
+        # columns in the real DB, and a job with no vehicle location
+        # captured has '' there, not NULL — confirmed live this took
+        # down job details for an ENTIRE dashboard batch (float('')
+        # raises ValueError, uncaught here, so the dashboard's own outer
+        # except blanked every job in the request, not just this one).
+        rows = [
+            {
+                "ReportID": "496390",
+                "Make": "NISSAN",
+                "Model": "X-TRAIL",
+                "yearOfManufacture": 2017,
+                "VehicleReg": "AB17 CDE",
+                "VehicleVIN": "SJNFAAJ11U1234567",
+                "KeyType": "Car",
+                "SpareKey": False,
+                "LossEvent": "Lost Keys",
+                "SuppliedService": "Key Programming",
+                "NetCost": "",
+                "QuotedPrice": "",
+                "ClientName": "Sarah Jones",
+                "OrganisationName": None,
+                "ClientPhone": "07700900123",
+                "BrokerName": "Admiral",
+                "DetailOfLoss": "Lost the only key on a dog walk.",
+                "VehicleAddress1": "",
+                "VehicleAddress2": "",
+                "VehicleAddress3": "",
+                "VehicleAddress4": "",
+                "VehicleAddressLatitude": "",
+                "VehicleAddressLongitude": "",
+            }
+        ]
+        fake_conn = _fake_connection(rows)
+        client = SQLHandlClient()
+        with patch.object(client, "_connection", return_value=fake_conn):
+            details = client.get_job_details(["496390"])
+        job = details["496390"]
+        self.assertEqual(job.make, "NISSAN")
+        self.assertEqual(job.vehicle_address, "")
+        self.assertIsNone(job.vehicle_latitude)
+        self.assertIsNone(job.vehicle_longitude)
+        self.assertIsNone(job.net_cost)
+        self.assertIsNone(job.quoted_price)
+
     def test_get_job_details_keys_result_by_the_requested_report_id_string(self):
         # Regression test: confirmed live against a real dashboard job
         # left completely blank (no exception, nothing logged) because

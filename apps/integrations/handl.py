@@ -564,6 +564,25 @@ def _handl_now():
     return django_timezone.localtime(django_timezone.now()).replace(tzinfo=None)
 
 
+def _parse_optional_float(value):
+    """VehicleAddressLatitude/Longitude are varchar columns in Handl, not
+    proper numeric ones — a job with no vehicle location captured has an
+    empty string there, not NULL (confirmed live: this exact gap took
+    down job details for an entire dashboard batch — a bare
+    `float(row[...])` on one bad row raised ValueError, which
+    get_job_details doesn't catch itself, so it propagated up and
+    tripped the dashboard's own outer except, blanking every job in the
+    request, not just the one with no location). Treat anything that
+    isn't a clean number as simply "no coordinate" rather than letting
+    it blow up the whole batch."""
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _insert_policy_history_note(cursor, *, report_id: str, notes: str, actioned_by_user_id: int, when) -> None:
     """Shared by record_disposal and add_report_note — StatusID=23/
     PersonID=NULL is the exact combination confirmed live against
@@ -1023,18 +1042,12 @@ class SQLHandlClient(HandlClient):
                 service_type=row["KeyType"] or "",
                 loss_type=row["LossEvent"] or "",
                 supplied_service=row["SuppliedService"] or "",
-                net_cost=float(row["NetCost"]) if row["NetCost"] is not None else None,
-                quoted_price=float(row["QuotedPrice"]) if row["QuotedPrice"] is not None else None,
+                net_cost=_parse_optional_float(row["NetCost"]),
+                quoted_price=_parse_optional_float(row["QuotedPrice"]),
                 spare_key=bool(row["SpareKey"]) if row["SpareKey"] is not None else None,
                 vehicle_address=vehicle_address,
-                vehicle_latitude=(
-                    float(row["VehicleAddressLatitude"])
-                    if row["VehicleAddressLatitude"] is not None else None
-                ),
-                vehicle_longitude=(
-                    float(row["VehicleAddressLongitude"])
-                    if row["VehicleAddressLongitude"] is not None else None
-                ),
+                vehicle_latitude=_parse_optional_float(row["VehicleAddressLatitude"]),
+                vehicle_longitude=_parse_optional_float(row["VehicleAddressLongitude"]),
                 # OrganisationName is the fallback for a trade/business
                 # client with no individual name on file — ClientName
                 # itself is always a non-null string (LTRIM/RTRIM of two
