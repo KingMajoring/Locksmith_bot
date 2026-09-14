@@ -74,6 +74,27 @@ class MockHandlClientTests(TestCase):
             for sku in skus:
                 self.assertIn(sku, valid_codes)
 
+    def test_get_future_locksmith_attendances_is_deterministic(self):
+        # available_from is anchored to the real current time, so it
+        # ticks a little between the two calls below — compare
+        # everything else, which is seeded purely off soter_locksmith_id.
+        first = self.client.get_future_locksmith_attendances()
+        second = self.client.get_future_locksmith_attendances()
+        self.assertEqual(
+            [(a.soter_locksmith_id, a.vehicle_postcode, a.vehicle_reg) for a in first],
+            [(a.soter_locksmith_id, a.vehicle_postcode, a.vehicle_reg) for a in second],
+        )
+
+    def test_get_future_locksmith_attendances_only_future_dates(self):
+        from django.utils import timezone
+
+        attendances = self.client.get_future_locksmith_attendances()
+        self.assertTrue(attendances)
+        now = timezone.localtime(timezone.now()).replace(tzinfo=None)
+        for attendance in attendances:
+            self.assertGreater(attendance.available_from, now)
+            self.assertTrue(attendance.vehicle_postcode)
+
     def test_get_panel_daily_figures_is_deterministic_for_same_range(self):
         start, end = date(2026, 9, 1), date(2026, 9, 8)
         first = self.client.get_panel_daily_figures(start, end)
@@ -753,6 +774,53 @@ class SQLHandlClientTests(TestCase):
     def test_get_disposed_skus_empty_input_returns_empty_without_querying(self):
         client = SQLHandlClient()
         self.assertEqual(client.get_disposed_skus([]), {})
+
+    def test_get_future_locksmith_attendances_maps_rows(self):
+        rows = [
+            {
+                "ReportID": 501179,
+                "LocksmithID": 1204,
+                "LocksmithName": "WGTK - Andrew S",
+                "AvailableFromDate": datetime(2026, 9, 20, 9, 0),
+                "VehiclePostCode": "NR14 8PL",
+                "VehicleReg": "AB20 CDE",
+            }
+        ]
+        fake_conn = _fake_connection(rows)
+        client = SQLHandlClient()
+        with patch.object(client, "_connection", return_value=fake_conn):
+            attendances = client.get_future_locksmith_attendances()
+
+        cursor = fake_conn.cursor.return_value
+        query = cursor.execute.call_args_list[0][0][0]
+        self.assertIn("Policy_LocksmithDetails", query)
+        self.assertIn("StatusID <> 15", query)
+        self.assertIn("Selected = 1", query)
+
+        self.assertEqual(len(attendances), 1)
+        attendance = attendances[0]
+        self.assertEqual(attendance.report_id, "501179")
+        self.assertEqual(attendance.soter_locksmith_id, "1204")
+        self.assertEqual(attendance.locksmith_name, "WGTK - Andrew S")
+        self.assertEqual(attendance.vehicle_postcode, "NR14 8PL")
+        self.assertEqual(attendance.vehicle_reg, "AB20 CDE")
+
+    def test_get_future_locksmith_attendances_skips_rows_with_no_locksmith(self):
+        rows = [
+            {
+                "ReportID": 501179,
+                "LocksmithID": None,
+                "LocksmithName": None,
+                "AvailableFromDate": datetime(2026, 9, 20, 9, 0),
+                "VehiclePostCode": "NR14 8PL",
+                "VehicleReg": "AB20 CDE",
+            }
+        ]
+        fake_conn = _fake_connection(rows)
+        client = SQLHandlClient()
+        with patch.object(client, "_connection", return_value=fake_conn):
+            attendances = client.get_future_locksmith_attendances()
+        self.assertEqual(attendances, [])
 
     def test_get_panel_daily_figures_maps_rows_from_tableau_panel_figures(self):
         rows = [

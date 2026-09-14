@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 from django.contrib.auth import get_user_model
@@ -5,8 +6,8 @@ from django.test import TestCase
 from django.urls import reverse
 
 from apps.integrations.google_maps import LocksmithDistance
-from apps.integrations.handl import JobDetails
-from apps.locksmiths.models import Locksmith
+from apps.integrations.handl import FutureLocksmithAttendance, JobDetails
+from apps.locksmiths.models import Locksmith, SoterLocksmithId
 
 
 def _job_with_location(**overrides):
@@ -106,9 +107,10 @@ class LogsEngineNearestLocksmithsTests(TestCase):
     @patch("apps.logs_engine.views.get_google_maps_client")
     @patch("apps.logs_engine.views.get_handl_client")
     def test_ranks_locksmiths_nearest_first(self, mock_get_handl, mock_get_maps):
-        mock_get_handl.return_value = MagicMock(get_job_details=MagicMock(
-            return_value={"501179": _job_with_location()}
-        ))
+        mock_get_handl.return_value = MagicMock(
+            get_job_details=MagicMock(return_value={"501179": _job_with_location()}),
+            get_future_locksmith_attendances=MagicMock(return_value=[]),
+        )
         far = Locksmith.objects.create(name="WGTK - Far Away", home_postcode="IP1 2AB")
         near = Locksmith.objects.create(name="WGTK - Nearby", home_postcode="NR14 8PL")
         mock_get_maps.return_value = MagicMock(get_distances=MagicMock(return_value=[
@@ -119,13 +121,13 @@ class LogsEngineNearestLocksmithsTests(TestCase):
         response = self.client.get(reverse("logs_engine:lookup"), {"report_id": "501179"})
 
         nearest = response.context["nearest_locksmiths"]
-        self.assertEqual([locksmith.pk for locksmith, _ in nearest], [near.pk, far.pk])
+        self.assertEqual([locksmith.pk for locksmith, _, _ in nearest], [near.pk, far.pk])
         self.assertContains(response, "WGTK - Nearby")
         self.assertContains(response, "WGTK - Far Away")
         # order in the passed-in list matters — this is how results get
         # zipped back onto the right locksmith
         call_origins = mock_get_maps.return_value.get_distances.call_args[0][0]
-        self.assertEqual(call_origins, ["IP1 2AB", "NR14 8PL"])  # ordered by name
+        self.assertEqual(call_origins, ["IP1 2AB", "NR14 8PL"])  # ordered by name, no future attendances
 
     @patch("apps.logs_engine.views.get_google_maps_client")
     @patch("apps.logs_engine.views.get_handl_client")
@@ -188,3 +190,123 @@ class LogsEngineNearestLocksmithsTests(TestCase):
         response = self.client.get(reverse("logs_engine:lookup"), {"report_id": "501179"})
 
         self.assertEqual(response.context["nearest_locksmiths"], [])
+
+    @patch("apps.logs_engine.views.get_google_maps_client")
+    @patch("apps.logs_engine.views.get_handl_client")
+    def test_locksmith_with_closer_future_job_beats_home_postcode(self, mock_get_handl, mock_get_maps):
+        # This locksmith's home is far away, but they're already booked
+        # to be right near this job soon — that should win.
+        far_from_home = Locksmith.objects.create(name="WGTK - Andrew S", home_postcode="IP1 2AB")
+        SoterLocksmithId.objects.create(locksmith=far_from_home, soter_locksmith_id="1204")
+
+        mock_get_handl.return_value = MagicMock(
+            get_job_details=MagicMock(return_value={"501179": _job_with_location()}),
+            get_future_locksmith_attendances=MagicMock(return_value=[
+                FutureLocksmithAttendance(
+                    report_id="502000",
+                    soter_locksmith_id="1204",
+                    locksmith_name="WGTK - Andrew S",
+                    available_from=datetime.now() + timedelta(days=1),
+                    vehicle_postcode="NR14 8PL",
+                    vehicle_reg="AB20 CDE",
+                ),
+            ]),
+        )
+        mock_get_maps.return_value = MagicMock(get_distances=MagicMock(return_value=[
+            LocksmithDistance(origin="IP1 2AB", distance_metres=40000.0, duration_seconds=3000, status="OK"),
+            LocksmithDistance(origin="NR14 8PL", distance_metres=8369.0, duration_seconds=720, status="OK"),
+        ]))
+
+        response = self.client.get(reverse("logs_engine:lookup"), {"report_id": "501179"})
+
+        nearest = response.context["nearest_locksmiths"]
+        self.assertEqual(len(nearest), 1)
+        locksmith, distance, attendance = nearest[0]
+        self.assertEqual(locksmith.pk, far_from_home.pk)
+        self.assertEqual(distance.distance_metres, 8369.0)
+        self.assertIsNotNone(attendance)
+        self.assertEqual(attendance.vehicle_reg, "AB20 CDE")
+        self.assertContains(response, "Already booked nearby")
+
+        call_origins = mock_get_maps.return_value.get_distances.call_args[0][0]
+        self.assertEqual(call_origins, ["IP1 2AB", "NR14 8PL"])
+
+    @patch("apps.logs_engine.views.get_google_maps_client")
+    @patch("apps.logs_engine.views.get_handl_client")
+    def test_home_postcode_wins_when_closer_than_future_job(self, mock_get_handl, mock_get_maps):
+        locksmith = Locksmith.objects.create(name="WGTK - Andrew S", home_postcode="NR14 8PL")
+        SoterLocksmithId.objects.create(locksmith=locksmith, soter_locksmith_id="1204")
+
+        mock_get_handl.return_value = MagicMock(
+            get_job_details=MagicMock(return_value={"501179": _job_with_location()}),
+            get_future_locksmith_attendances=MagicMock(return_value=[
+                FutureLocksmithAttendance(
+                    report_id="502000",
+                    soter_locksmith_id="1204",
+                    locksmith_name="WGTK - Andrew S",
+                    available_from=datetime.now() + timedelta(days=1),
+                    vehicle_postcode="IP1 2AB",
+                    vehicle_reg="AB20 CDE",
+                ),
+            ]),
+        )
+        mock_get_maps.return_value = MagicMock(get_distances=MagicMock(return_value=[
+            LocksmithDistance(origin="NR14 8PL", distance_metres=8369.0, duration_seconds=720, status="OK"),
+            LocksmithDistance(origin="IP1 2AB", distance_metres=40000.0, duration_seconds=3000, status="OK"),
+        ]))
+
+        response = self.client.get(reverse("logs_engine:lookup"), {"report_id": "501179"})
+
+        nearest = response.context["nearest_locksmiths"]
+        self.assertEqual(len(nearest), 1)
+        locksmith_result, distance, attendance = nearest[0]
+        self.assertEqual(distance.distance_metres, 8369.0)
+        self.assertIsNone(attendance)
+        self.assertContains(response, "Home postcode")
+
+    @patch("apps.logs_engine.views.get_google_maps_client")
+    @patch("apps.logs_engine.views.get_handl_client")
+    def test_future_attendance_for_unknown_locksmith_ignored(self, mock_get_handl, mock_get_maps):
+        Locksmith.objects.create(name="WGTK - Nearby", home_postcode="NR14 8PL")
+        mock_get_handl.return_value = MagicMock(
+            get_job_details=MagicMock(return_value={"501179": _job_with_location()}),
+            get_future_locksmith_attendances=MagicMock(return_value=[
+                FutureLocksmithAttendance(
+                    report_id="502000",
+                    soter_locksmith_id="9999",  # no matching Locksmith
+                    locksmith_name="WGTK - Someone Else",
+                    available_from=datetime.now() + timedelta(days=1),
+                    vehicle_postcode="IP1 2AB",
+                    vehicle_reg="AB20 CDE",
+                ),
+            ]),
+        )
+        mock_get_maps.return_value = MagicMock(get_distances=MagicMock(return_value=[
+            LocksmithDistance(origin="NR14 8PL", distance_metres=8369.0, duration_seconds=720, status="OK"),
+        ]))
+
+        response = self.client.get(reverse("logs_engine:lookup"), {"report_id": "501179"})
+
+        # Only the home-postcode origin should have been queried — the
+        # unmatched attendance never turns into a second origin.
+        call_origins = mock_get_maps.return_value.get_distances.call_args[0][0]
+        self.assertEqual(call_origins, ["NR14 8PL"])
+
+    @patch("apps.logs_engine.views.get_google_maps_client")
+    @patch("apps.logs_engine.views.get_handl_client")
+    def test_future_attendance_lookup_failure_falls_back_to_home_postcode(self, mock_get_handl, mock_get_maps):
+        Locksmith.objects.create(name="WGTK - Nearby", home_postcode="NR14 8PL")
+        mock_get_handl.return_value = MagicMock(
+            get_job_details=MagicMock(return_value={"501179": _job_with_location()}),
+            get_future_locksmith_attendances=MagicMock(side_effect=Exception("boom")),
+        )
+        mock_get_maps.return_value = MagicMock(get_distances=MagicMock(return_value=[
+            LocksmithDistance(origin="NR14 8PL", distance_metres=8369.0, duration_seconds=720, status="OK"),
+        ]))
+
+        response = self.client.get(reverse("logs_engine:lookup"), {"report_id": "501179"})
+
+        self.assertEqual(response.status_code, 200)
+        nearest = response.context["nearest_locksmiths"]
+        self.assertEqual(len(nearest), 1)
+        self.assertIsNone(nearest[0][2])

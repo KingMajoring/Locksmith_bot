@@ -22,7 +22,7 @@ import random
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from django.conf import settings
 
@@ -106,6 +106,29 @@ class JobDetails:
 
 
 @dataclass(frozen=True)
+class FutureLocksmithAttendance:
+    """A locksmith already down to attend an open claim on a future date
+    — one row per open claim, its Selected=1 Policy_LocksmithDetails row
+    (the latest AvailableFromDate, when a claim has more than one).
+    Mirrors a live Excel report the business already runs by hand: "open
+    claims with the latest future locksmith attendance date". Used by
+    Logs Engine (apps.logs_engine.views) to also weigh a locksmith who's
+    already going to be near a job's location on an upcoming visit,
+    rather than ranking purely on home-postcode distance."""
+
+    report_id: str
+    soter_locksmith_id: str
+    locksmith_name: str
+    available_from: datetime
+    # Policy_ClaimDetails_Key.LocksmithPostCode — a distinct postcode-only
+    # column from that same table's VehicleAddress1-4/lat-lng used by
+    # get_job_details above, surfaced by the business's own report as
+    # "[Vehicle Postcode]".
+    vehicle_postcode: str
+    vehicle_reg: str = ""
+
+
+@dataclass(frozen=True)
 class PanelDailyFigures:
     panel_name: str
     figure_date: date
@@ -145,6 +168,19 @@ class HandlClient(ABC):
         for the given Handl ReportID values, keyed by report_id — for
         Area 2 (Job Completion), which resolves an Optimo orderNo of the
         form "<ReportID>_<date>" back to Handl for these details."""
+
+    @abstractmethod
+    def get_future_locksmith_attendances(self) -> list[FutureLocksmithAttendance]:
+        """One row per open claim (Policy_Details.StatusID <> 15) that has
+        a future Policy_LocksmithDetails.AvailableFromDate on its
+        Selected=1 row (the latest such date, when a claim has more than
+        one) — which locksmith is already down to attend
+        (Lookup_Locksmiths ID/name), when, and that claim's own vehicle
+        postcode and reg, for Logs Engine's nearest-locksmith suggestion
+        to also weigh a locksmith who already has an upcoming job near
+        the one being looked up, not just their home postcode. Not
+        scoped by report_id — the caller doesn't know in advance which
+        locksmiths might have a nearby future job."""
 
     @abstractmethod
     def get_disposed_skus(self, report_ids: list[str]) -> dict[str, list[str]]:
@@ -460,6 +496,33 @@ class MockHandlClient(HandlClient):
             count = rng.randint(0, 4)
             sample = rng.sample(self._CATALOGUE, k=min(len(self._CATALOGUE), count))
             result[report_id] = [code for code, _name in sample]
+        return result
+
+    _FUTURE_ATTENDANCE_POSTCODES = ["IP1 2AB", "NR14 8PL", "CO1 1AA", "CB1 2AB", "PE1 3AA"]
+
+    def get_future_locksmith_attendances(self) -> list[FutureLocksmithAttendance]:
+        now = _handl_now()
+        result = []
+        for soter_id, name, _email in self.list_locksmiths():
+            if not name.startswith("WGTK"):
+                continue
+            rng = random.Random(int(hashlib.sha256(f"future:{soter_id}".encode()).hexdigest(), 16) % (2**32))
+            if rng.random() < 0.5:
+                continue
+            result.append(
+                FutureLocksmithAttendance(
+                    report_id=str(rng.randint(500000, 509999)),
+                    soter_locksmith_id=soter_id,
+                    locksmith_name=name,
+                    available_from=now + timedelta(days=rng.randint(1, 5), hours=rng.randint(0, 8)),
+                    vehicle_postcode=rng.choice(self._FUTURE_ATTENDANCE_POSTCODES),
+                    vehicle_reg=(
+                        f"{rng.choice(self._REG_LETTERS)}{rng.choice(self._REG_LETTERS)}"
+                        f"{rng.randint(10, 69):02d} "
+                        f"{rng.choice(self._REG_LETTERS)}{rng.choice(self._REG_LETTERS)}{rng.choice(self._REG_LETTERS)}"
+                    ),
+                )
+            )
         return result
 
     def get_part_costs(self, skus: list[str]) -> dict[str, float]:
@@ -1058,6 +1121,68 @@ class SQLHandlClient(HandlClient):
                 detail_of_loss=row["DetailOfLoss"] or "",
             )
         return result
+
+    def get_future_locksmith_attendances(self) -> list[FutureLocksmithAttendance]:
+        # Mirrors a live Excel report the business already runs by hand:
+        # "open claims with the latest future locksmith attendance
+        # date". Policy_Details.StatusID <> 15 is that report's own
+        # definition of "still open" (confirmed by the business).
+        # Ranked down to one row per claim (latest future
+        # AvailableFromDate), same ROW_NUMBER pattern as get_job_details'
+        # CTEs above. VehiclePostcode and VehicleReg are MAX()'d/ranked
+        # the same cautious way as get_job_details' HolderDetails/
+        # LossDetail/VehicleRanked CTEs — this table's own row-uniqueness
+        # per ReportID isn't confirmed either.
+        query = """
+            WITH FutureAttendance AS (
+                SELECT
+                    pld.ReportID,
+                    pld.LocksmithID,
+                    pld.AvailableFromDate,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY pld.ReportID ORDER BY pld.AvailableFromDate DESC
+                    ) AS rn
+                FROM Policy_LocksmithDetails pld
+                JOIN Policy_Details pd ON pld.ReportID = pd.ReportID
+                WHERE pld.Selected = 1
+                  AND pld.AvailableFromDate > %(now)s
+                  AND pd.StatusID <> 15
+            ),
+            VehiclePostcode AS (
+                SELECT ReportID, MAX(LocksmithPostCode) AS VehiclePostCode
+                FROM Policy_ClaimDetails_Key
+                GROUP BY ReportID
+            ),
+            VehicleRegRanked AS (
+                SELECT ReportID, VehicleReg,
+                    ROW_NUMBER() OVER (PARTITION BY ReportID ORDER BY ID) AS rn
+                FROM Policy_KeyClaims
+            )
+            SELECT
+                fa.ReportID, fa.LocksmithID, ll.LocksmithName, fa.AvailableFromDate,
+                vp.VehiclePostCode, vr.VehicleReg
+            FROM FutureAttendance fa
+            LEFT JOIN Lookup_Locksmiths ll ON fa.LocksmithID = ll.ID
+            LEFT JOIN VehiclePostcode vp ON fa.ReportID = vp.ReportID
+            LEFT JOIN VehicleRegRanked vr ON fa.ReportID = vr.ReportID AND vr.rn = 1
+            WHERE fa.rn = 1
+        """
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, {"now": _handl_now()})
+            rows = cursor.fetchall()
+        return [
+            FutureLocksmithAttendance(
+                report_id=str(row["ReportID"]),
+                soter_locksmith_id=str(row["LocksmithID"]),
+                locksmith_name=row["LocksmithName"] or "",
+                available_from=row["AvailableFromDate"],
+                vehicle_postcode=(row["VehiclePostCode"] or "").strip(),
+                vehicle_reg=row["VehicleReg"] or "",
+            )
+            for row in rows
+            if row["LocksmithID"] is not None
+        ]
 
     def get_disposed_skus(self, report_ids: list[str]) -> dict[str, list[str]]:
         if not report_ids:

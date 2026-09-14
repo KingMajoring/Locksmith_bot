@@ -29,18 +29,26 @@
     <div class="card">
       <h2>Nearest locksmiths</h2>
       <p class="sub">
-        By distance from their home postcode — not filtered by who's
-        actually on shift yet, so check before assigning.
+        By distance from their home postcode, or a soonest already-booked
+        future job if that's closer — not filtered by who's actually on
+        shift yet, so check before assigning.
       </p>
       {% if nearest_locksmiths %}
         <table>
-          <tr><th>Locksmith</th><th>Postcode</th><th>Distance</th><th>Drive time</th></tr>
-          {% for locksmith, distance in nearest_locksmiths %}
+          <tr><th>Locksmith</th><th>Postcode</th><th>Distance</th><th>Drive time</th><th>Why</th></tr>
+          {% for locksmith, distance, attendance in nearest_locksmiths %}
             <tr>
               <td>{{ locksmith.name }}</td>
-              <td>{{ locksmith.home_postcode }}</td>
+              <td>{% if attendance %}{{ attendance.vehicle_postcode }}{% else %}{{ locksmith.home_postcode }}{% endif %}</td>
               <td>{{ distance.distance_miles }} mi</td>
               <td>{{ distance.duration_minutes }} min</td>
+              <td>
+                {% if attendance %}
+                  Already booked nearby ({{ attendance.vehicle_reg|default:"job" }}, {{ attendance.available_from|date:"D j M, H:i" }})
+                {% else %}
+                  Home postcode
+                {% endif %}
+              </td>
             </tr>
           {% endfor %}
         </table>

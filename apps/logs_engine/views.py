@@ -1,9 +1,12 @@
 """Logs Engine (Area: office job lookup) — office staff look up one Handl
-ReportID at a time to see the job's own details, and how far each
-active WGTK locksmith's home postcode is from it. Shift information
-(who's actually on today, via Microsoft Teams Shifts) isn't wired up
-yet, so this ranks every active locksmith with a postcode set rather
-than only ones on shift — a human still picks from the list.
+ReportID at a time to see the job's own details, and which active WGTK
+locksmith is best placed to take it: ranked by distance from whichever
+is closer, their home postcode or where their soonest already-booked
+future job already has them going (they're in that area anyway, so
+that beats driving over from home). Shift information (who's actually
+on today, via Microsoft Teams Shifts) isn't wired up yet, so this ranks
+every active locksmith with a postcode set rather than only ones on
+shift — a human still picks from the list.
 """
 import logging
 
@@ -18,12 +21,41 @@ from apps.locksmiths.models import Locksmith
 logger = logging.getLogger(__name__)
 
 
+def _soonest_future_attendance_by_locksmith(locksmiths):
+    """{locksmith.pk: FutureLocksmithAttendance}, the soonest upcoming
+    job (with a usable postcode) each of these locksmiths is already
+    booked to attend — soonest, because a locksmith already going to be
+    nearby tomorrow is a more useful suggestion than one three weeks out.
+    Best-effort: a Handl failure here just means the ranking falls back
+    to home-postcode distance alone, same as every other lookup on this
+    page."""
+    soter_id_to_locksmith = {
+        soter_id: locksmith for locksmith in locksmiths for soter_id in locksmith.soter_id_list
+    }
+    try:
+        attendances = get_handl_client().get_future_locksmith_attendances()
+    except Exception:
+        logger.exception("Failed to fetch future locksmith attendances for Logs Engine")
+        return {}
+    soonest = {}
+    for attendance in attendances:
+        locksmith = soter_id_to_locksmith.get(attendance.soter_locksmith_id)
+        if locksmith is None or not attendance.vehicle_postcode:
+            continue
+        existing = soonest.get(locksmith.pk)
+        if existing is None or attendance.available_from < existing.available_from:
+            soonest[locksmith.pk] = attendance
+    return soonest
+
+
 def _nearest_locksmiths(job):
-    """(locksmith, LocksmithDistance) pairs, nearest first, for every
-    active locksmith with a home postcode set. Best-effort, same
-    rationale as every other external lookup on this page — a missing
-    vehicle location or a Google API failure just means no suggestions
-    rather than a broken page."""
+    """(locksmith, LocksmithDistance, FutureLocksmithAttendance | None)
+    triples, nearest first, for every active locksmith with a home
+    postcode set — the attendance is set when that locksmith's ranked
+    distance came from a future job location rather than their home
+    postcode. Best-effort, same rationale as every other external
+    lookup on this page — a missing vehicle location or a Google API
+    failure just means no suggestions rather than a broken page."""
     if job.vehicle_latitude is None or job.vehicle_longitude is None:
         return []
     locksmiths = list(
@@ -31,20 +63,42 @@ def _nearest_locksmiths(job):
     )
     if not locksmiths:
         return []
+
+    soonest_future = _soonest_future_attendance_by_locksmith(locksmiths)
+
+    # Two candidate origins per locksmith where they have both: home
+    # postcode, and their soonest future job's postcode — ranked
+    # together below so whichever is actually closer wins.
+    origins, origin_locksmiths, origin_attendances = [], [], []
+    for locksmith in locksmiths:
+        origins.append(locksmith.home_postcode)
+        origin_locksmiths.append(locksmith)
+        origin_attendances.append(None)
+        attendance = soonest_future.get(locksmith.pk)
+        if attendance:
+            origins.append(attendance.vehicle_postcode)
+            origin_locksmiths.append(locksmith)
+            origin_attendances.append(attendance)
+
     try:
         distances = get_google_maps_client().get_distances(
-            [l.home_postcode for l in locksmiths], job.vehicle_latitude, job.vehicle_longitude,
+            origins, job.vehicle_latitude, job.vehicle_longitude,
         )
     except Exception:
         logger.exception("Failed to fetch Google distances for Logs Engine lookup %s", job.report_id)
         return []
-    paired = [
-        (locksmith, distance)
-        for locksmith, distance in zip(locksmiths, distances)
-        if distance.status == "OK" and distance.distance_metres is not None
-    ]
-    paired.sort(key=lambda pair: pair[1].distance_metres)
-    return paired
+
+    best_by_locksmith = {}
+    for locksmith, attendance, distance in zip(origin_locksmiths, origin_attendances, distances):
+        if distance.status != "OK" or distance.distance_metres is None:
+            continue
+        current = best_by_locksmith.get(locksmith.pk)
+        if current is None or distance.distance_metres < current[1].distance_metres:
+            best_by_locksmith[locksmith.pk] = (locksmith, distance, attendance)
+
+    ranked = list(best_by_locksmith.values())
+    ranked.sort(key=lambda item: item[1].distance_metres)
+    return ranked
 
 
 @login_required
