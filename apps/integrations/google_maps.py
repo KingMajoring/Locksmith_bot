@@ -140,13 +140,46 @@ class RealGoogleMapsClient(GoogleMapsClient):
         return results
 
 
-def get_google_maps_client() -> GoogleMapsClient:
+def _resolve_api_key() -> str:
     # The API key is normally set via the admin (GoogleMapsSettings) so
     # it can be rotated without a redeploy; GOOGLE_MAPS_API_KEY (an app
     # setting) is only a fallback for initial bootstrapping.
     from .models import GoogleMapsSettings
 
-    api_key = GoogleMapsSettings.current_key() or settings.GOOGLE_MAPS_API_KEY
+    return GoogleMapsSettings.current_key() or settings.GOOGLE_MAPS_API_KEY
+
+
+def get_google_maps_client() -> GoogleMapsClient:
+    api_key = _resolve_api_key()
     if api_key:
         return RealGoogleMapsClient(api_key)
     return MockGoogleMapsClient()
+
+
+def static_map_url(markers: list[tuple[str, list[str]]], *, size: str = "400x300") -> str:
+    """A Google Static Maps API image URL for an at-a-glance hover
+    preview — no JavaScript Maps SDK needed, just an <img src>. markers
+    is a list of (style, locations) pairs, each becoming one `markers=`
+    param — e.g. [("color:blue|label:J", ["52.63,1.30"]),
+    ("color:red", ["NR1 1AA", "IP1 2AB"])] — a location can be a
+    "lat,lng" pair or a free-text address/postcode (Google geocodes it
+    server-side when rendering the image, same as Distance Matrix
+    origins). Returns "" (nothing to render) when there's no API key
+    configured or no markers to plot — this API needs the SAME key as
+    Distance Matrix (Static Maps just has to also be enabled for it in
+    Google Cloud console), but note it's used from an <img src> in the
+    page HTML rather than a server-side call, so unlike the Distance
+    Matrix key this one is visible to anyone who views the page source
+    — restrict it by HTTP referrer to this app's own domain in Google
+    Cloud console instead of relying on it being obscure."""
+    api_key = _resolve_api_key()
+    marker_params = [(style, locations) for style, locations in markers if locations]
+    if not api_key or not marker_params:
+        return ""
+    from urllib.parse import urlencode
+
+    params = [("size", size)]
+    for style, locations in marker_params:
+        params.append(("markers", f"{style}|" + "|".join(locations)))
+    params.append(("key", api_key))
+    return "https://maps.googleapis.com/maps/api/staticmap?" + urlencode(params)

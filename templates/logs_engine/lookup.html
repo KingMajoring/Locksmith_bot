@@ -32,13 +32,14 @@
       <p class="sub">
         By total time — drive there, ~{{ job_duration_minutes }} min for the job
         itself, then the drive back home — from whichever is closer, their
-        home location or a soonest already-booked future job. Outbound drive
-        capped at 2 hours, and not filtered by who's actually on shift yet,
-        so check before assigning.
+        home location or their SOONEST already-booked future job only (not
+        every job they have booked — see "Jobs booked", hover the number for
+        a map). Outbound drive capped at 2 hours, and not filtered by who's
+        actually on shift yet, so check before assigning.
       </p>
       {% if nearest_locksmiths %}
         <table>
-          <tr><th>Locksmith</th><th>Postcode</th><th>Distance</th><th>Drive time</th><th>Total time</th><th>Why</th></tr>
+          <tr><th>Locksmith</th><th>Postcode</th><th>Distance</th><th>Drive time</th><th>Total time</th><th>Jobs booked</th><th>Why</th></tr>
           {% for ranked in nearest_locksmiths %}
             <tr>
               <td>{{ ranked.locksmith.name }}</td>
@@ -58,6 +59,19 @@
                   <span class="drive-time-pill {{ ranked.total_minutes|drive_time_class }}">{{ ranked.total_minutes }} min</span>
                 {% else %}
                   <span class="sub">unknown — no home location on file</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if ranked.map_url %}
+                  <span class="map-preview-trigger">
+                    {{ ranked.future_job_count }}
+                    <span class="map-preview">
+                      <img src="{{ ranked.map_url }}" width="400" height="300"
+                           alt="Map for {{ ranked.locksmith.name }} — this job in blue, their other booked jobs in red">
+                    </span>
+                  </span>
+                {% else %}
+                  {{ ranked.future_job_count }}
                 {% endif %}
               </td>
               <td>

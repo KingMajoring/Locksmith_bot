@@ -169,6 +169,31 @@ tr:last-child td { border-bottom: none; }
 .drive-time-pale-red { background: var(--danger-bg); color: var(--danger); }
 .drive-time-red { background: var(--danger); color: #fff; }
 
+/* Logs Engine "Jobs booked" hover preview — a small Static Maps image
+   (this job in blue, the locksmith's other booked jobs in red), shown
+   on hover with no JavaScript needed. */
+.map-preview-trigger {
+  position: relative;
+  cursor: help;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+.map-preview-trigger .map-preview {
+  display: none;
+  position: absolute;
+  z-index: 20;
+  top: 1.3rem;
+  left: 0;
+}
+.map-preview-trigger:hover .map-preview { display: block; }
+.map-preview img {
+  display: block;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+  background: var(--card-bg);
+}
+
 .btn {
   display: inline-block;
   background: var(--wgtk-orange);

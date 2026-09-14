@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 from django.core.mail import EmailMessage
 from django.test import TestCase, override_settings
 
-from .google_maps import MockGoogleMapsClient, RealGoogleMapsClient, get_google_maps_client
+from .google_maps import MockGoogleMapsClient, RealGoogleMapsClient, get_google_maps_client, static_map_url
 from .graph_email_backend import MicrosoftGraphEmailBackend
 from .handl import MockHandlClient, SQLHandlClient, get_handl_client
 from .models import GoogleMapsSettings, OptimoSettings
@@ -1720,3 +1720,30 @@ class GetGoogleMapsClientTests(TestCase):
         GoogleMapsSettings.objects.create(api_key="admin-set-key")
         client = get_google_maps_client()
         self.assertEqual(client._api_key, "admin-set-key")
+
+
+@override_settings(GOOGLE_MAPS_API_KEY="test-key")
+class StaticMapUrlTests(TestCase):
+    def test_builds_url_with_one_marker_param_per_style(self):
+        url = static_map_url([
+            ("color:blue|label:J", ["52.63,1.30"]),
+            ("color:red", ["NR1 1AA", "IP1 2AB"]),
+        ])
+        self.assertIn("size=400x300", url)
+        self.assertIn("key=test-key", url)
+        self.assertIn("markers=color%3Ablue%7Clabel%3AJ%7C52.63%2C1.30", url)
+        self.assertIn("markers=color%3Ared%7CNR1+1AA%7CIP1+2AB", url)
+
+    def test_empty_without_an_api_key(self):
+        with override_settings(GOOGLE_MAPS_API_KEY=""):
+            self.assertEqual(static_map_url([("color:blue", ["52.63,1.30"])]), "")
+
+    def test_empty_with_no_markers(self):
+        self.assertEqual(static_map_url([("color:red", [])]), "")
+
+    def test_skips_styles_with_no_locations(self):
+        url = static_map_url([
+            ("color:blue|label:J", ["52.63,1.30"]),
+            ("color:red", []),
+        ])
+        self.assertEqual(url.count("markers="), 1)

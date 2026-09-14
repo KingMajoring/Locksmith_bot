@@ -15,10 +15,17 @@ _MAX_DRIVE_TIME_MINUTES doesn't make the list at all, home or future
 job alike. Ranking also isn't just the drive there: a locksmith has to
 actually do the job (see _JOB_DURATION_MINUTES) and then get home
 afterwards, so RankedLocksmith.total_minutes covers the whole round
-trip, not just the outbound leg — see _nearest_locksmiths. Shift
-information (who's actually on today, via Microsoft Teams Shifts)
-isn't wired up yet, so this ranks every eligible active locksmith
-rather than only ones on shift — a human still picks from the list.
+trip, not just the outbound leg — see _nearest_locksmiths. That figure
+still only accounts for the ONE soonest future job though, not a
+locksmith's whole day — RankedLocksmith.future_job_count and map_url
+(a small Static Maps preview: this job in blue, all their other booked
+jobs in red) exist so a human can see when someone's actually busier
+than the numbers alone suggest, since fully chaining multiple booked
+jobs into one total would need real route ordering, not attempted
+here. Shift information (who's actually on today, via Microsoft Teams
+Shifts) isn't wired up yet, so this ranks every eligible active
+locksmith rather than only ones on shift — a human still picks from
+the list.
 """
 import logging
 from dataclasses import dataclass
@@ -27,7 +34,7 @@ from math import asin, cos, radians, sin, sqrt
 from django.contrib.auth.decorators import login_required
 from django.shortcuts import render
 
-from apps.integrations.google_maps import LocksmithDistance, get_google_maps_client
+from apps.integrations.google_maps import LocksmithDistance, get_google_maps_client, static_map_url
 from apps.integrations.handl import FutureLocksmithAttendance, get_handl_client
 from apps.job_completion.services.labels import display_loss_type
 from apps.locksmiths.models import Locksmith
@@ -71,6 +78,15 @@ class RankedLocksmith:
     # afterwards — None when the return leg couldn't be resolved (no
     # home location on file at all, or that lookup itself failed).
     total_minutes: int | None
+    # How many future jobs this locksmith already has booked in total —
+    # NOT just the one `attendance` (the soonest) points at. total_minutes
+    # above only ever accounts for that one, so a high count here is a
+    # sign this locksmith may be busier than the figures suggest.
+    future_job_count: int
+    # Google Static Maps preview (this job in blue, every one of this
+    # locksmith's other booked jobs in red) for an at-a-glance hover —
+    # "" when there's no API key configured or nothing to plot.
+    map_url: str
 
 
 def _straight_line_miles(lat1, lng1, lat2, lng2):
@@ -102,11 +118,18 @@ def _home_origin(locksmith, job):
     return locksmith.home_postcode
 
 
-def _soonest_future_attendance_by_locksmith(locksmiths):
-    """{locksmith.pk: FutureLocksmithAttendance}, the soonest upcoming
-    job (with a usable postcode) each of these locksmiths is already
-    booked to attend — soonest, because a locksmith already going to be
-    nearby tomorrow is a more useful suggestion than one three weeks out.
+def _future_attendance_summary_by_locksmith(locksmiths):
+    """{locksmith.pk: {"soonest": FutureLocksmithAttendance, "count": int,
+    "postcodes": [str, ...]}} for every one of these locksmiths with at
+    least one upcoming job (with a usable postcode) already booked in.
+
+    "soonest" (used to pick the outbound origin) is just the earliest —
+    a locksmith already going to be nearby tomorrow is a more useful
+    suggestion than one three weeks out — but "count"/"postcodes" cover
+    ALL of them, not just that one: total_minutes elsewhere only ever
+    accounts for the soonest job, so the count is what actually tells
+    office staff a locksmith might have a full day already booked, and
+    the postcodes feed the map preview (see RankedLocksmith.map_url).
     Best-effort: a Handl failure here just means the ranking falls back
     to home-postcode distance alone, same as every other lookup on this
     page."""
@@ -118,15 +141,17 @@ def _soonest_future_attendance_by_locksmith(locksmiths):
     except Exception:
         logger.exception("Failed to fetch future locksmith attendances for Logs Engine")
         return {}
-    soonest = {}
+    summary = {}
     for attendance in attendances:
         locksmith = soter_id_to_locksmith.get(attendance.soter_locksmith_id)
         if locksmith is None or not attendance.vehicle_postcode:
             continue
-        existing = soonest.get(locksmith.pk)
-        if existing is None or attendance.available_from < existing.available_from:
-            soonest[locksmith.pk] = attendance
-    return soonest
+        entry = summary.setdefault(locksmith.pk, {"soonest": attendance, "count": 0, "postcodes": []})
+        entry["count"] += 1
+        entry["postcodes"].append(attendance.vehicle_postcode)
+        if attendance.available_from < entry["soonest"].available_from:
+            entry["soonest"] = attendance
+    return summary
 
 
 def _return_minutes_by_locksmith(ranked, job):
@@ -195,7 +220,7 @@ def _nearest_locksmiths(job):
     if not locksmiths:
         return [], ""
 
-    soonest_future = _soonest_future_attendance_by_locksmith(locksmiths)
+    future_summary = _future_attendance_summary_by_locksmith(locksmiths)
 
     # Two candidate origins per locksmith where they have both: home
     # base, and their soonest future job's postcode — ranked together
@@ -208,7 +233,7 @@ def _nearest_locksmiths(job):
             origins.append(home_origin)
             origin_locksmiths.append(locksmith)
             origin_attendances.append(None)
-        attendance = soonest_future.get(locksmith.pk)
+        attendance = future_summary.get(locksmith.pk, {}).get("soonest")
         if attendance:
             origins.append(attendance.vehicle_postcode)
             origin_locksmiths.append(locksmith)
@@ -240,6 +265,7 @@ def _nearest_locksmiths(job):
         return [], ""
 
     return_minutes_by_locksmith = _return_minutes_by_locksmith(ranked, job)
+    job_location = f"{job.vehicle_latitude},{job.vehicle_longitude}"
 
     results = []
     for locksmith, distance, attendance in ranked:
@@ -251,7 +277,16 @@ def _nearest_locksmiths(job):
             distance.duration_minutes + _JOB_DURATION_MINUTES + return_minutes
             if return_minutes is not None else None
         )
-        results.append(RankedLocksmith(locksmith, distance, attendance, total_minutes))
+        locksmith_summary = future_summary.get(locksmith.pk, {})
+        map_url = static_map_url([
+            ("color:blue|label:J", [job_location]),
+            ("color:red", locksmith_summary.get("postcodes", [])),
+        ])
+        results.append(RankedLocksmith(
+            locksmith, distance, attendance, total_minutes,
+            future_job_count=locksmith_summary.get("count", 0),
+            map_url=map_url,
+        ))
 
     results.sort(key=lambda r: (r.total_minutes is None, r.total_minutes, r.distance.distance_metres))
     return results, ""
