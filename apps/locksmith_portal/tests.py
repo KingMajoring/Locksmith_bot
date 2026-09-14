@@ -195,9 +195,12 @@ class DashboardTests(TestCase):
         job = response.context["jobs"][0]
         self.assertEqual(job["vehicle_address"], "42 Corsehill Crescent, Hamilton, Lanarkshire")
         self.assertContains(response, "42 Corsehill Crescent, Hamilton, Lanarkshire")
-        # Maps/Waze are only offered once a locksmith opens the job, not on
-        # the dashboard card itself.
-        self.assertNotContains(response, "job-nav-link")
+        # A Maps/Waze navigate link straight to the vehicle's coordinates
+        # sits right on the dashboard card, not just once a locksmith
+        # opens the job.
+        self.assertContains(response, "job-nav-link")
+        self.assertIn("query=55.7536673,-4.062251", job["maps_url"])
+        self.assertIn("q=55.7536673,-4.062251", job["waze_url"])
 
     @patch("apps.locksmith_portal.views.get_handl_client")
     @patch("apps.locksmith_portal.views.get_optimo_client")

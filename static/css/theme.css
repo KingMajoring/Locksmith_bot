@@ -362,6 +362,15 @@ input[type=number] { width: 5rem; }
   font-size: 0.85rem;
 }
 .job-call:active { opacity: 0.7; }
+.job-nav-link {
+  display: inline-flex;
+  align-items: center;
+  color: var(--wgtk-green-dark);
+  text-decoration: none;
+  font-weight: 700;
+  font-size: 0.85rem;
+}
+.job-nav-link:active { opacity: 0.7; }
 .job-detail-btn {
   background: none;
   border: 1px solid var(--border);
