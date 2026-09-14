@@ -26,7 +26,8 @@ import hashlib
 import random
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
+from urllib.parse import quote
 
 from django.conf import settings
 
@@ -150,8 +151,22 @@ class RealTeamsShiftsClient(TeamsShiftsClient):
             for member in members
         }
 
+        # Without a server-side date filter this fetches the team's
+        # ENTIRE shift history — confirmed live to make a lookup hang
+        # once WGTK ROTA had months of published shifts across ~28
+        # people, paging through far more data than needed. A generous
+        # +/- 1 day UTC window (covers any BST offset, so nothing right
+        # at the edge of the day gets missed) keeps this fast; the
+        # precise per-shift date check below is still the real source
+        # of truth for what actually counts as "covers for_date".
+        window_start = datetime.combine(for_date - timedelta(days=1), datetime.min.time())
+        window_end = datetime.combine(for_date + timedelta(days=1), datetime.min.time())
+        filter_query = (
+            f"sharedShift/startDateTime ge '{window_start.isoformat()}Z' "
+            f"and sharedShift/endDateTime le '{window_end.isoformat()}Z'"
+        )
         shifts = self._graph_get_all(
-            f"{_GRAPH_BASE}/teams/{self._team_id}/schedule/shifts",
+            f"{_GRAPH_BASE}/teams/{self._team_id}/schedule/shifts?$filter={quote(filter_query)}",
             token,
         )
         results = []

@@ -1814,6 +1814,29 @@ class RealTeamsShiftsClientTests(TestCase):
 
     @patch("requests.get")
     @patch("requests.post")
+    def test_shifts_request_is_date_filtered_server_side(self, mock_post, mock_get):
+        # Confirmed live: fetching the whole team's unfiltered shift
+        # history (months of published shifts across ~28 people) made
+        # a Logs Engine lookup hang. A $filter on the shifts request
+        # itself keeps this to a narrow window instead of relying on
+        # client-side filtering alone to do the work after the fact.
+        mock_post.return_value = _fake_token_response()
+        mock_get.side_effect = [
+            _fake_json_response({"value": []}),
+            _fake_json_response({"value": []}),
+        ]
+        client = self._client()
+
+        client.list_shifts_for_date(date(2026, 9, 15))
+
+        shifts_call_url = mock_get.call_args_list[1].args[0]
+        self.assertIn("/teams/team-id/schedule/shifts?$filter=", shifts_call_url)
+        self.assertIn("sharedShift/startDateTime", shifts_call_url)
+        self.assertIn("2026-09-14", shifts_call_url)  # window starts the day before
+        self.assertIn("2026-09-16", shifts_call_url)  # window ends the day after
+
+    @patch("requests.get")
+    @patch("requests.post")
     def test_draft_only_shift_excluded(self, mock_post, mock_get):
         # A shift with no sharedShift hasn't been published — office
         # staff can't see it in Teams either, so it isn't a real
