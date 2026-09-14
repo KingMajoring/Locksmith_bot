@@ -452,7 +452,9 @@ class LogsEngineNearestLocksmithsTests(TestCase):
         self.assertContains(response, "Already booked nearby")
         # 12 min there (NR14 8PL) + 40 min job + 50 min back home (IP1 2AB)
         self.assertEqual(best.total_minutes, 12 + 40 + 50)
-        self.assertEqual(card.future_job_count, 1)
+        # The booked job is tomorrow, not today, so today's count is 0
+        # even though it's still an option above.
+        self.assertEqual(card.future_job_count, 0)
 
         first_call_origins = mock_get_maps.return_value.get_distances.call_args_list[0][0][0]
         self.assertEqual(first_call_origins, ["IP1 2AB", "NR14 8PL"])
@@ -463,9 +465,10 @@ class LogsEngineNearestLocksmithsTests(TestCase):
     @patch("apps.logs_engine.views.get_handl_client")
     def test_card_lists_every_booked_job_within_window_as_its_own_option(self, mock_get_handl, mock_get_maps):
         # Every job booked within the window becomes its own option on
-        # the card (not just one "best" row) — future_job_count reflects
-        # ALL of a locksmith's booked jobs regardless of date, which is
-        # a superset of the options actually shown.
+        # the card (not just one "best" row), even though none of them
+        # are booked for today — future_job_count is scoped to today
+        # only (see test_todays_job_count_excludes_jobs_on_other_days),
+        # a different, narrower slice than the options shown here.
         locksmith = Locksmith.objects.create(name="WGTK - Busy Andrew", home_postcode="NR14 8PL")
         SoterLocksmithId.objects.create(locksmith=locksmith, soter_locksmith_id="1204")
 
@@ -510,7 +513,10 @@ class LogsEngineNearestLocksmithsTests(TestCase):
         nearest = response.context["nearest_locksmiths"]
         self.assertEqual(len(nearest), 1)
         card = nearest[0]
-        self.assertEqual(card.future_job_count, 3)
+        # None of the 3 booked jobs are today, so today's count is 0
+        # even though all 3 are close enough in the week ahead to
+        # appear as options below.
+        self.assertEqual(card.future_job_count, 0)
         # All 4 candidates (home + 3 future jobs) survive as options.
         self.assertEqual(len(card.options), 4)
         self.assertEqual(card.options[0].attendance.vehicle_reg, "LATER1")  # closest wins, not the soonest
@@ -531,7 +537,7 @@ class LogsEngineNearestLocksmithsTests(TestCase):
             get_future_locksmith_attendances=MagicMock(return_value=[
                 FutureLocksmithAttendance(
                     report_id="502000", soter_locksmith_id="1204", locksmith_name="WGTK - Nearby",
-                    available_from=datetime.now() + timedelta(days=1),
+                    available_from=datetime.now() + timedelta(hours=2),  # today
                     vehicle_postcode="IP1 2AB", vehicle_reg="AB20 CDE",
                 ),
             ]),
@@ -546,8 +552,51 @@ class LogsEngineNearestLocksmithsTests(TestCase):
         card = response.context["nearest_locksmiths"][0]
         self.assertTrue(card.map_url)
         self.assertIn("staticmap", card.map_url)
-        self.assertIn("IP1+2AB", card.map_url)  # their booked job, in red
+        self.assertIn("IP1+2AB", card.map_url)  # their booked job today, in red
         self.assertContains(response, "map-preview-trigger")
+
+    @override_settings(GOOGLE_MAPS_API_KEY="test-key")
+    @patch("apps.logs_engine.views.get_google_maps_client")
+    @patch("apps.logs_engine.views.get_handl_client")
+    def test_todays_job_count_excludes_jobs_on_other_days(self, mock_get_handl, mock_get_maps):
+        # future_job_count/map_url are meant to answer "how busy is this
+        # locksmith TODAY", not "ever" — a job booked in for later this
+        # week shouldn't count or show up on the map here, even though
+        # it's still a selectable option in its own right (see
+        # test_card_lists_every_booked_job_within_window_as_its_own_option).
+        locksmith = Locksmith.objects.create(name="WGTK - Nearby", home_postcode="NR14 8PL")
+        SoterLocksmithId.objects.create(locksmith=locksmith, soter_locksmith_id="1204")
+        mock_get_handl.return_value = MagicMock(
+            get_job_details=MagicMock(return_value={"501179": _job_with_location()}),
+            get_future_locksmith_attendances=MagicMock(return_value=[
+                FutureLocksmithAttendance(
+                    report_id="502000", soter_locksmith_id="1204", locksmith_name="WGTK - Nearby",
+                    available_from=datetime.now() + timedelta(hours=2),  # today
+                    vehicle_postcode="IP1 2AB", vehicle_reg="TODAY1",
+                ),
+                FutureLocksmithAttendance(
+                    report_id="502001", soter_locksmith_id="1204", locksmith_name="WGTK - Nearby",
+                    available_from=datetime.now() + timedelta(days=3),
+                    vehicle_postcode="CB1 2AB", vehicle_reg="LATER1",
+                ),
+            ]),
+        )
+        mock_get_maps.return_value = MagicMock(get_distances=MagicMock(return_value=[
+            LocksmithDistance(origin="NR14 8PL", distance_metres=8369.0, duration_seconds=720, status="OK"),
+            LocksmithDistance(origin="IP1 2AB", distance_metres=8369.0, duration_seconds=720, status="OK"),
+            LocksmithDistance(origin="CB1 2AB", distance_metres=5000.0, duration_seconds=600, status="OK"),
+        ]))
+
+        response = self.client.get(reverse("logs_engine:lookup"), {"report_id": "501179"})
+
+        card = response.context["nearest_locksmiths"][0]
+        # Only the one booked in for today counts.
+        self.assertEqual(card.future_job_count, 1)
+        self.assertIn("IP1+2AB", card.map_url)  # today's job, plotted
+        self.assertNotIn("CB1+2AB", card.map_url)  # later this week, not plotted
+        # Both still show up as their own selectable options though.
+        vehicle_regs = {o.attendance.vehicle_reg for o in card.options if o.attendance}
+        self.assertEqual(vehicle_regs, {"TODAY1", "LATER1"})
 
     @patch("apps.logs_engine.views.get_google_maps_client")
     @patch("apps.logs_engine.views.get_handl_client")

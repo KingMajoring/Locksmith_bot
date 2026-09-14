@@ -25,12 +25,13 @@ _JOB_DURATION_MINUTES) and then get home afterwards, so
 LocksmithOption.total_minutes covers the whole round trip, not just
 the outbound leg — see _nearest_locksmiths.
 LocksmithCard.future_job_count and map_url (a small Static Maps
-preview: this job in blue, all their other booked jobs in red) cover
-EVERY future job regardless of date, even ones outside the window used
-for options above, so a human can see when someone's actually busier
-than the visible options alone suggest, since fully chaining multiple
-booked jobs into one total would need real route ordering, not
-attempted here. LocksmithCard.on_shift shows whether Microsoft Teams
+preview: this job in blue, their other booked jobs today in red) are
+scoped to TODAY only — how busy this locksmith already is on the day
+they'd actually be dispatched for this job, not their whole future
+workload (a job booked in for next month says nothing useful about
+today), since fully chaining multiple booked jobs into one total would
+need real route ordering, not attempted here. LocksmithCard.on_shift
+shows whether Microsoft Teams
 Shifts has this locksmith rostered on right now — best-effort and
 never used to filter the list (shift data can be wrong or stale, e.g.
 an informal shift swap Teams doesn't know about), just another signal
@@ -110,14 +111,15 @@ class LocksmithCard:
     # Every sensible option for this locksmith, best (lowest
     # total_minutes) first — see _nearest_locksmiths.
     options: list[LocksmithOption]
-    # How many future jobs this locksmith already has booked in total —
-    # NOT just how many appear in `options` above (those are limited to
-    # _FUTURE_JOB_WINDOW_DAYS). A high count here is a sign this
-    # locksmith may be busier than their visible options suggest.
+    # How many jobs this locksmith already has booked in TODAY (the
+    # date of this lookup, not the locksmith's whole future workload —
+    # a job booked in for next month says nothing useful about whether
+    # to send them to a job today). Not the same set as `options` above
+    # (those cover the next _FUTURE_JOB_WINDOW_DAYS, today included).
     future_job_count: int
-    # Google Static Maps preview (this job in blue, every one of this
-    # locksmith's other booked jobs in red) for an at-a-glance hover —
-    # "" when there's no API key configured or nothing to plot.
+    # Google Static Maps preview (this job in blue, this locksmith's
+    # other booked jobs TODAY in red) for an at-a-glance hover — "" when
+    # there's no API key configured or nothing to plot.
     map_url: str
     # Whether Microsoft Teams Shifts has this locksmith rostered on
     # right now — None when that couldn't be checked at all (no Team ID
@@ -157,7 +159,7 @@ def _home_origin(locksmith, job):
 
 def _future_attendance_summary_by_locksmith(locksmiths, *, now):
     """{locksmith.pk: {"within_window": [FutureLocksmithAttendance, ...],
-    "count": int, "postcodes": [str, ...]}} for every one of these
+    "today": [FutureLocksmithAttendance, ...]}} for every one of these
     locksmiths with at least one upcoming job (with a usable postcode)
     already booked in.
 
@@ -167,10 +169,11 @@ def _future_attendance_summary_by_locksmith(locksmiths, *, now):
     to actually be closest to the new job wins, rather than always
     defaulting to whichever is chronologically soonest even when a
     later one in the same week would be a far more sensible pick.
-    "count"/"postcodes" cover ALL of their future jobs regardless of
-    date, unrestricted by the window — office staff still want to see
-    (and the map preview still wants to plot) a locksmith's full
-    booked-in workload, not just the near-term slice used for ranking.
+    "today" is scoped to just `now`'s date — this is what
+    LocksmithCard.future_job_count/map_url show office staff: how busy
+    this locksmith is on the day they're actually being dispatched for,
+    not their whole future workload (a job booked in for next month
+    says nothing useful about whether to send them to this one).
     Best-effort: a Handl failure here just means the ranking falls back
     to home-postcode distance alone, same as every other lookup on this
     page."""
@@ -188,9 +191,9 @@ def _future_attendance_summary_by_locksmith(locksmiths, *, now):
         locksmith = soter_id_to_locksmith.get(attendance.soter_locksmith_id)
         if locksmith is None or not attendance.vehicle_postcode:
             continue
-        entry = summary.setdefault(locksmith.pk, {"within_window": [], "count": 0, "postcodes": []})
-        entry["count"] += 1
-        entry["postcodes"].append(attendance.vehicle_postcode)
+        entry = summary.setdefault(locksmith.pk, {"within_window": [], "today": []})
+        if attendance.available_from.date() == now.date():
+            entry["today"].append(attendance)
         if now <= attendance.available_from <= window_end:
             entry["within_window"].append(attendance)
     return summary
@@ -373,14 +376,14 @@ def _nearest_locksmiths(job):
             options.append(LocksmithOption(distance, attendance, total_minutes))
         options.sort(key=lambda o: (o.total_minutes is None, o.total_minutes, o.distance.distance_metres))
 
-        locksmith_summary = future_summary.get(pk, {})
+        todays_attendances = future_summary.get(pk, {}).get("today", [])
         map_url = static_map_url([
             ("color:blue|label:J", [job_location]),
-            ("color:red", locksmith_summary.get("postcodes", [])),
+            ("color:red", [a.vehicle_postcode for a in todays_attendances]),
         ])
         cards.append(LocksmithCard(
             locksmith, options,
-            future_job_count=locksmith_summary.get("count", 0),
+            future_job_count=len(todays_attendances),
             map_url=map_url,
             on_shift=(locksmith.pk in on_shift_pks) if on_shift_pks is not None else None,
         ))

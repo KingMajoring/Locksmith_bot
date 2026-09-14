@@ -35,10 +35,10 @@
         have booked in over the next week (not just the soonest one).
         Each option's total time is the drive there, ~{{ job_duration_minutes }}
         min for the job itself, then the drive back home. Outbound drive
-        capped at 2 hours. "Jobs booked" covers their whole workload, not
-        just the options shown — hover it for a map. Shift status (Teams)
-        is shown but doesn't filter the list — check before assigning
-        either way.
+        capped at 2 hours. "Jobs booked today" covers just today's
+        workload, not the options shown above (those look ahead a
+        week) — hover it for a map. Shift status (Teams) is shown but
+        doesn't filter the list — check before assigning either way.
       </p>
       {% if nearest_locksmiths %}
         {% for card in nearest_locksmiths %}
@@ -54,14 +54,14 @@
             <p class="sub">
               {% if card.map_url %}
                 <span class="map-preview-trigger">
-                  {{ card.future_job_count }} job{{ card.future_job_count|pluralize }} booked in
+                  {{ card.future_job_count }} job{{ card.future_job_count|pluralize }} booked in today
                   <span class="map-preview">
                     <img src="{{ card.map_url }}" width="400" height="300"
-                         alt="Map for {{ card.locksmith.name }} — this job in blue, their other booked jobs in red">
+                         alt="Map for {{ card.locksmith.name }} — this job in blue, their other booked jobs today in red">
                   </span>
                 </span>
               {% else %}
-                {{ card.future_job_count }} job{{ card.future_job_count|pluralize }} booked in
+                {{ card.future_job_count }} job{{ card.future_job_count|pluralize }} booked in today
               {% endif %}
             </p>
             <table>
