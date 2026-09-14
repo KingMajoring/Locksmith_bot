@@ -30,30 +30,39 @@
     <div class="card">
       <h2>Nearest locksmiths</h2>
       <p class="sub">
-        By distance from their home postcode, or a soonest already-booked
-        future job if that's closer — capped at 2 hours' drive, and not
-        filtered by who's actually on shift yet, so check before assigning.
+        By total time — drive there, ~{{ job_duration_minutes }} min for the job
+        itself, then the drive back home — from whichever is closer, their
+        home location or a soonest already-booked future job. Outbound drive
+        capped at 2 hours, and not filtered by who's actually on shift yet,
+        so check before assigning.
       </p>
       {% if nearest_locksmiths %}
         <table>
-          <tr><th>Locksmith</th><th>Postcode</th><th>Distance</th><th>Drive time</th><th>Why</th></tr>
-          {% for locksmith, distance, attendance in nearest_locksmiths %}
+          <tr><th>Locksmith</th><th>Postcode</th><th>Distance</th><th>Drive time</th><th>Total time</th><th>Why</th></tr>
+          {% for ranked in nearest_locksmiths %}
             <tr>
-              <td>{{ locksmith.name }}</td>
+              <td>{{ ranked.locksmith.name }}</td>
               <td>
-                {% if attendance %}
-                  {{ attendance.vehicle_postcode }}
-                {% elif locksmith.home_postcode %}
-                  {{ locksmith.home_postcode }}
+                {% if ranked.attendance %}
+                  {{ ranked.attendance.vehicle_postcode }}
+                {% elif ranked.locksmith.home_postcode %}
+                  {{ ranked.locksmith.home_postcode }}
                 {% else %}
                   Home location
                 {% endif %}
               </td>
-              <td>{{ distance.distance_miles }} mi</td>
-              <td><span class="drive-time-pill {{ distance.duration_minutes|drive_time_class }}">{{ distance.duration_minutes }} min</span></td>
+              <td>{{ ranked.distance.distance_miles }} mi</td>
+              <td><span class="drive-time-pill {{ ranked.distance.duration_minutes|drive_time_class }}">{{ ranked.distance.duration_minutes }} min</span></td>
               <td>
-                {% if attendance %}
-                  Already booked nearby ({{ attendance.vehicle_reg|default:"job" }}, {{ attendance.available_from|date:"D j M, H:i" }})
+                {% if ranked.total_minutes is not None %}
+                  <span class="drive-time-pill {{ ranked.total_minutes|drive_time_class }}">{{ ranked.total_minutes }} min</span>
+                {% else %}
+                  <span class="sub">unknown — no home location on file</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if ranked.attendance %}
+                  Already booked nearby ({{ ranked.attendance.vehicle_reg|default:"job" }}, {{ ranked.attendance.available_from|date:"D j M, H:i" }})
                 {% else %}
                   Home location
                 {% endif %}

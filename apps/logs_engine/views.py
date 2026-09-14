@@ -12,19 +12,23 @@ Google — no point spending a real distance lookup, and a slot in the
 25-origins-per-request batch, confirming what a rough distance already
 rules out — and anyone whose real drive time comes back over
 _MAX_DRIVE_TIME_MINUTES doesn't make the list at all, home or future
-job alike. Shift information (who's actually on today, via Microsoft
-Teams Shifts) isn't wired up yet, so this ranks every eligible active
-locksmith rather than only ones on shift — a human still picks from
-the list.
+job alike. Ranking also isn't just the drive there: a locksmith has to
+actually do the job (see _JOB_DURATION_MINUTES) and then get home
+afterwards, so RankedLocksmith.total_minutes covers the whole round
+trip, not just the outbound leg — see _nearest_locksmiths. Shift
+information (who's actually on today, via Microsoft Teams Shifts)
+isn't wired up yet, so this ranks every eligible active locksmith
+rather than only ones on shift — a human still picks from the list.
 """
 import logging
+from dataclasses import dataclass
 from math import asin, cos, radians, sin, sqrt
 
 from django.contrib.auth.decorators import login_required
 from django.shortcuts import render
 
-from apps.integrations.google_maps import get_google_maps_client
-from apps.integrations.handl import get_handl_client
+from apps.integrations.google_maps import LocksmithDistance, get_google_maps_client
+from apps.integrations.handl import FutureLocksmithAttendance, get_handl_client
 from apps.job_completion.services.labels import display_loss_type
 from apps.locksmiths.models import Locksmith
 
@@ -45,8 +49,28 @@ _MAX_HOME_STRAIGHT_LINE_MILES = 75
 # regardless of which signal (home or a future job) got them onto the
 # list — a future-job postcode has no straight-line pre-filter like a
 # home lat/lng does (see _home_origin), so this is the only thing
-# stopping "already booked nearby" from meaning five hours away.
+# stopping "already booked nearby" from meaning five hours away. Only
+# ever checked against the outbound leg — see total_minutes for the
+# whole round trip.
 _MAX_DRIVE_TIME_MINUTES = 120
+
+# Flat placeholder for how long a job itself takes, on top of the
+# driving — no per-service-type estimate exists yet (a lock change and
+# a full barrel replacement don't take the same time), so this is a
+# rough stand-in used for every job until a real one exists.
+_JOB_DURATION_MINUTES = 40
+
+
+@dataclass(frozen=True)
+class RankedLocksmith:
+    locksmith: Locksmith
+    # Outbound leg only: home (or their soonest future job) -> this job.
+    distance: LocksmithDistance
+    attendance: FutureLocksmithAttendance | None
+    # Outbound drive + _JOB_DURATION_MINUTES + the drive back home
+    # afterwards — None when the return leg couldn't be resolved (no
+    # home location on file at all, or that lookup itself failed).
+    total_minutes: int | None
 
 
 def _straight_line_miles(lat1, lng1, lat2, lng2):
@@ -105,16 +129,58 @@ def _soonest_future_attendance_by_locksmith(locksmiths):
     return soonest
 
 
+def _return_minutes_by_locksmith(ranked, job):
+    """{locksmith.pk: minutes} for the drive back home after this job,
+    for every entry in `ranked` (a list of (locksmith, distance,
+    attendance) triples) that reached the list via a future job.
+
+    A home-based entry doesn't need a lookup here at all — its return
+    leg is the exact same two points as its outbound one, just
+    reversed, so that duration is reused as-is rather than spending a
+    second API call to confirm a UK road is roughly the same length in
+    both directions. A future-job-based entry's return leg goes back to
+    their REAL home, a genuinely different route from its outbound leg
+    (attendance location -> job), so that does need its own lookup —
+    batched in one call the same way the main lookup is. Best-effort,
+    same rationale as every other external lookup on this page: a
+    locksmith with no resolvable home for this just doesn't get a
+    total_minutes figure, rather than breaking the whole list."""
+    lookup_locksmiths, lookup_origins = [], []
+    for locksmith, _distance, attendance in ranked:
+        if attendance is None:
+            continue
+        home_origin = _home_origin(locksmith, job)
+        if home_origin:
+            lookup_locksmiths.append(locksmith)
+            lookup_origins.append(home_origin)
+
+    if not lookup_origins:
+        return {}
+    try:
+        return_distances = get_google_maps_client().get_distances(
+            lookup_origins, job.vehicle_latitude, job.vehicle_longitude,
+        )
+    except Exception:
+        logger.exception("Failed to fetch return-trip Google distances for Logs Engine lookup %s", job.report_id)
+        return {}
+
+    return {
+        locksmith.pk: return_distance.duration_minutes
+        for locksmith, return_distance in zip(lookup_locksmiths, return_distances)
+        if return_distance.status == "OK" and return_distance.duration_minutes is not None
+    }
+
+
 def _nearest_locksmiths(job):
-    """((locksmith, LocksmithDistance, FutureLocksmithAttendance | None)
-    triples, error_message) — ranked nearest first, for every active
-    locksmith who has *either* a home base (lat/lng, or a postcode as a
-    fallback) *or* a soonest already-booked future job with a usable
-    postcode — a locksmith with no home location on file shouldn't be
-    silently excluded just because they happen to already have an
-    upcoming job near this one. The attendance is set when that
-    locksmith's ranked distance came from a future job location rather
-    than their home base.
+    """(list[RankedLocksmith], error_message) — ranked nearest first
+    (by total_minutes, the whole round trip, when known — see
+    RankedLocksmith), for every active locksmith who has *either* a
+    home base (lat/lng, or a postcode as a fallback) *or* a soonest
+    already-booked future job with a usable postcode — a locksmith with
+    no home location on file shouldn't be silently excluded just
+    because they happen to already have an upcoming job near this one.
+    attendance is set when a locksmith's outbound distance came from a
+    future job location rather than their home base.
 
     error_message is set (and the list empty) only when there WERE
     candidate locksmiths to check but the Google call itself failed —
@@ -170,8 +236,25 @@ def _nearest_locksmiths(job):
             best_by_locksmith[locksmith.pk] = (locksmith, distance, attendance)
 
     ranked = list(best_by_locksmith.values())
-    ranked.sort(key=lambda item: item[1].distance_metres)
-    return ranked, ""
+    if not ranked:
+        return [], ""
+
+    return_minutes_by_locksmith = _return_minutes_by_locksmith(ranked, job)
+
+    results = []
+    for locksmith, distance, attendance in ranked:
+        return_minutes = (
+            return_minutes_by_locksmith.get(locksmith.pk) if attendance is not None
+            else distance.duration_minutes  # home-based: return leg assumed symmetric to the outbound one
+        )
+        total_minutes = (
+            distance.duration_minutes + _JOB_DURATION_MINUTES + return_minutes
+            if return_minutes is not None else None
+        )
+        results.append(RankedLocksmith(locksmith, distance, attendance, total_minutes))
+
+    results.sort(key=lambda r: (r.total_minutes is None, r.total_minutes, r.distance.distance_metres))
+    return results, ""
 
 
 @login_required
@@ -198,6 +281,7 @@ def lookup(request):
             "service_label": display_loss_type(job.loss_type) if job else "",
             "nearest_locksmiths": nearest_locksmiths,
             "nearest_locksmiths_error": nearest_locksmiths_error,
+            "job_duration_minutes": _JOB_DURATION_MINUTES,
             "locksmiths_missing_postcode": (
                 Locksmith.objects.filter(
                     active=True, home_postcode="", home_latitude__isnull=True,
