@@ -55,10 +55,10 @@
       {% elif job.vehicle_latitude is None %}
         <p class="empty">This job has no vehicle location recorded in Handl, so distance can't be calculated.</p>
       {% else %}
-        <p class="empty">No active locksmith has a home postcode set yet.</p>
+        <p class="empty">No active locksmith has a home postcode set, and none has an already-booked future job nearby either.</p>
       {% endif %}
       {% if locksmiths_missing_postcode %}
-        <p class="sub">{{ locksmiths_missing_postcode }} active locksmith{{ locksmiths_missing_postcode|pluralize }} {{ locksmiths_missing_postcode|pluralize:"has,have" }} no home postcode set, so {{ locksmiths_missing_postcode|pluralize:"isn't,aren't" }} included above — <a href="{% url 'admin:locksmiths_locksmith_changelist' %}">add it in Admin</a>.</p>
+        <p class="sub">{{ locksmiths_missing_postcode }} active locksmith{{ locksmiths_missing_postcode|pluralize }} {{ locksmiths_missing_postcode|pluralize:"has,have" }} no home postcode set, so {{ locksmiths_missing_postcode|pluralize:"isn't,aren't" }} included above unless they already have a future job booked nearby — <a href="{% url 'admin:locksmiths_locksmith_changelist' %}">add it in Admin</a>.</p>
       {% endif %}
     </div>
   {% endif %}

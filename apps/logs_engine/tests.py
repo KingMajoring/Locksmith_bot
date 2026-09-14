@@ -146,6 +146,41 @@ class LogsEngineNearestLocksmithsTests(TestCase):
         self.assertContains(response, "1 active locksmith has no home postcode set")
         mock_get_maps.return_value.get_distances.assert_not_called()
 
+    @patch("apps.logs_engine.views.get_google_maps_client")
+    @patch("apps.logs_engine.views.get_handl_client")
+    def test_locksmith_with_no_home_postcode_still_shown_via_future_job(self, mock_get_handl, mock_get_maps):
+        # No home postcode on file at all shouldn't silently drop a
+        # locksmith who already has an upcoming job right near this one.
+        no_home_postcode = Locksmith.objects.create(name="WGTK - No Postcode", home_postcode="")
+        SoterLocksmithId.objects.create(locksmith=no_home_postcode, soter_locksmith_id="1204")
+
+        mock_get_handl.return_value = MagicMock(
+            get_job_details=MagicMock(return_value={"501179": _job_with_location()}),
+            get_future_locksmith_attendances=MagicMock(return_value=[
+                FutureLocksmithAttendance(
+                    report_id="502000",
+                    soter_locksmith_id="1204",
+                    locksmith_name="WGTK - No Postcode",
+                    available_from=datetime.now() + timedelta(days=1),
+                    vehicle_postcode="NR14 8PL",
+                    vehicle_reg="AB20 CDE",
+                ),
+            ]),
+        )
+        mock_get_maps.return_value = MagicMock(get_distances=MagicMock(return_value=[
+            LocksmithDistance(origin="NR14 8PL", distance_metres=8369.0, duration_seconds=720, status="OK"),
+        ]))
+
+        response = self.client.get(reverse("logs_engine:lookup"), {"report_id": "501179"})
+
+        nearest = response.context["nearest_locksmiths"]
+        self.assertEqual(len(nearest), 1)
+        locksmith, distance, attendance = nearest[0]
+        self.assertEqual(locksmith.pk, no_home_postcode.pk)
+        self.assertIsNotNone(attendance)
+        call_origins = mock_get_maps.return_value.get_distances.call_args[0][0]
+        self.assertEqual(call_origins, ["NR14 8PL"])  # only the future-job origin, no home postcode
+
     @patch("apps.logs_engine.views.get_handl_client")
     def test_no_vehicle_location_skips_distance_lookup(self, mock_get_handl):
         mock_get_handl.return_value = MagicMock(get_job_details=MagicMock(

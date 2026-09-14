@@ -3,9 +3,11 @@ ReportID at a time to see the job's own details, and which active WGTK
 locksmith is best placed to take it: ranked by distance from whichever
 is closer, their home postcode or where their soonest already-booked
 future job already has them going (they're in that area anyway, so
-that beats driving over from home). Shift information (who's actually
-on today, via Microsoft Teams Shifts) isn't wired up yet, so this ranks
-every active locksmith with a postcode set rather than only ones on
+that beats driving over from home) — either signal alone is enough to
+put a locksmith in the running, so one with no home postcode on file
+can still surface via an upcoming job. Shift information (who's
+actually on today, via Microsoft Teams Shifts) isn't wired up yet, so
+this ranks every eligible active locksmith rather than only ones on
 shift — a human still picks from the list.
 """
 import logging
@@ -50,17 +52,19 @@ def _soonest_future_attendance_by_locksmith(locksmiths):
 
 def _nearest_locksmiths(job):
     """(locksmith, LocksmithDistance, FutureLocksmithAttendance | None)
-    triples, nearest first, for every active locksmith with a home
-    postcode set — the attendance is set when that locksmith's ranked
-    distance came from a future job location rather than their home
-    postcode. Best-effort, same rationale as every other external
-    lookup on this page — a missing vehicle location or a Google API
-    failure just means no suggestions rather than a broken page."""
+    triples, nearest first, for every active locksmith who has *either*
+    a home postcode set *or* a soonest already-booked future job with a
+    usable postcode — a locksmith with no home postcode on file
+    shouldn't be silently excluded just because they happen to already
+    have an upcoming job near this one. The attendance is set when that
+    locksmith's ranked distance came from a future job location rather
+    than their home postcode. Best-effort, same rationale as every
+    other external lookup on this page — a missing vehicle location or
+    a Google API failure just means no suggestions rather than a broken
+    page."""
     if job.vehicle_latitude is None or job.vehicle_longitude is None:
         return []
-    locksmiths = list(
-        Locksmith.objects.filter(active=True).exclude(home_postcode="").order_by("name")
-    )
+    locksmiths = list(Locksmith.objects.filter(active=True).order_by("name"))
     if not locksmiths:
         return []
 
@@ -68,17 +72,23 @@ def _nearest_locksmiths(job):
 
     # Two candidate origins per locksmith where they have both: home
     # postcode, and their soonest future job's postcode — ranked
-    # together below so whichever is actually closer wins.
+    # together below so whichever is actually closer wins. A locksmith
+    # with neither gets no origin at all, and so never enters the
+    # ranking.
     origins, origin_locksmiths, origin_attendances = [], [], []
     for locksmith in locksmiths:
-        origins.append(locksmith.home_postcode)
-        origin_locksmiths.append(locksmith)
-        origin_attendances.append(None)
+        if locksmith.home_postcode:
+            origins.append(locksmith.home_postcode)
+            origin_locksmiths.append(locksmith)
+            origin_attendances.append(None)
         attendance = soonest_future.get(locksmith.pk)
         if attendance:
             origins.append(attendance.vehicle_postcode)
             origin_locksmiths.append(locksmith)
             origin_attendances.append(attendance)
+
+    if not origins:
+        return []
 
     try:
         distances = get_google_maps_client().get_distances(
