@@ -38,6 +38,7 @@ INSTALLED_APPS = [
     "apps.job_completion",
     "apps.locksmith_portal",
     "apps.panel",
+    "apps.logs_engine",
 ]
 
 MIDDLEWARE = [

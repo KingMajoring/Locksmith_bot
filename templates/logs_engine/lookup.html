@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Logs Engine{% endblock %}
+{% block content %}
+<h1>Logs Engine</h1>
+<p>Look up a job by its Handl ReportID.</p>
+
+<form method="get" class="card field-group">
+  <label for="report_id">Report ID</label>
+  <input type="text" id="report_id" name="report_id" value="{{ report_id }}"
+         placeholder="e.g. 501179" autofocus>
+  <p style="margin-top:1rem;"><button class="btn" type="submit">Look up</button></p>
+</form>
+
+{% if searched %}
+  <div class="card">
+    {% if job %}
+      <h2>Report {{ job.report_id }}</h2>
+      <table>
+        <tr><th>Reg</th><td>{{ job.reg|default:"—" }}</td></tr>
+        <tr><th>Make, Model, Year</th><td>{{ job.make }} {{ job.model }} {{ job.year }}</td></tr>
+        <tr><th>Service</th><td>{{ service_label|default:"—" }}</td></tr>
+      </table>
+    {% else %}
+      <p class="empty">No job found for ReportID {{ report_id }}.</p>
+    {% endif %}
+  </div>
+{% endif %}
+{% endblock %}
