@@ -7,8 +7,13 @@ from django.test import TestCase, override_settings
 from .google_maps import MockGoogleMapsClient, RealGoogleMapsClient, get_google_maps_client, static_map_url
 from .graph_email_backend import MicrosoftGraphEmailBackend
 from .handl import MockHandlClient, SQLHandlClient, get_handl_client
-from .models import GoogleMapsSettings, OptimoSettings
+from .models import GoogleMapsSettings, OptimoSettings, TeamsShiftsSettings
 from .optimo import MockOptimoClient, RealOptimoClient, get_optimo_client
+from .teams_shifts import (
+    MockTeamsShiftsClient,
+    RealTeamsShiftsClient,
+    get_teams_shifts_client,
+)
 from .photos import AzureBlobPhotoStorage, MockPhotoStorage, get_photo_storage
 
 
@@ -1747,3 +1752,164 @@ class StaticMapUrlTests(TestCase):
             ("color:red", []),
         ])
         self.assertEqual(url.count("markers="), 1)
+
+
+class MockTeamsShiftsClientTests(TestCase):
+    def test_deterministic_for_same_date(self):
+        client = MockTeamsShiftsClient()
+        first = client.list_shifts_for_date(date(2026, 9, 15))
+        second = client.list_shifts_for_date(date(2026, 9, 15))
+        self.assertEqual(first, second)
+
+    def test_shift_covers_the_requested_date(self):
+        client = MockTeamsShiftsClient()
+        for shift in client.list_shifts_for_date(date(2026, 9, 15)):
+            self.assertEqual(shift.shift_start.date(), date(2026, 9, 15))
+            self.assertLess(shift.shift_start, shift.shift_end)
+            self.assertIn("@", shift.email)
+
+
+def _fake_json_response(payload):
+    resp = MagicMock()
+    resp.json.return_value = payload
+    resp.raise_for_status.return_value = None
+    return resp
+
+
+class RealTeamsShiftsClientTests(TestCase):
+    def _client(self):
+        return RealTeamsShiftsClient(
+            client_id="client-id", client_secret="client-secret",
+            tenant_id="tenant-id", team_id="team-id",
+        )
+
+    @patch("requests.get")
+    @patch("requests.post")
+    def test_maps_shifts_to_emails_via_team_membership(self, mock_post, mock_get):
+        mock_post.return_value = _fake_token_response()
+        mock_get.side_effect = [
+            _fake_json_response({"value": [
+                {"id": "user-1", "mail": "andrew.s@wgtk.co.uk"},
+                {"id": "user-2", "mail": None, "userPrincipalName": "blain.h@wgtk.co.uk"},
+            ]}),
+            _fake_json_response({"value": [
+                {
+                    "userId": "user-1",
+                    "sharedShift": {"startDateTime": "2026-09-15T07:00:00Z", "endDateTime": "2026-09-15T16:00:00Z"},
+                },
+                {
+                    "userId": "user-2",
+                    "sharedShift": {"startDateTime": "2026-09-15T08:00:00Z", "endDateTime": "2026-09-15T17:00:00Z"},
+                },
+            ]}),
+        ]
+        client = self._client()
+
+        shifts = client.list_shifts_for_date(date(2026, 9, 15))
+
+        self.assertEqual({s.email for s in shifts}, {"andrew.s@wgtk.co.uk", "blain.h@wgtk.co.uk"})
+        token_call = mock_post.call_args
+        self.assertIn("tenant-id", token_call.args[0])
+        self.assertEqual(token_call.kwargs["data"]["client_id"], "client-id")
+
+    @patch("requests.get")
+    @patch("requests.post")
+    def test_draft_only_shift_excluded(self, mock_post, mock_get):
+        # A shift with no sharedShift hasn't been published — office
+        # staff can't see it in Teams either, so it isn't a real
+        # commitment yet.
+        mock_post.return_value = _fake_token_response()
+        mock_get.side_effect = [
+            _fake_json_response({"value": [{"id": "user-1", "mail": "andrew.s@wgtk.co.uk"}]}),
+            _fake_json_response({"value": [
+                {"userId": "user-1", "draftShift": {"startDateTime": "2026-09-15T07:00:00Z", "endDateTime": "2026-09-15T16:00:00Z"}},
+            ]}),
+        ]
+        client = self._client()
+
+        shifts = client.list_shifts_for_date(date(2026, 9, 15))
+
+        self.assertEqual(shifts, [])
+
+    @patch("requests.get")
+    @patch("requests.post")
+    def test_shift_on_a_different_date_excluded(self, mock_post, mock_get):
+        mock_post.return_value = _fake_token_response()
+        mock_get.side_effect = [
+            _fake_json_response({"value": [{"id": "user-1", "mail": "andrew.s@wgtk.co.uk"}]}),
+            _fake_json_response({"value": [
+                {
+                    "userId": "user-1",
+                    "sharedShift": {"startDateTime": "2026-09-16T07:00:00Z", "endDateTime": "2026-09-16T16:00:00Z"},
+                },
+            ]}),
+        ]
+        client = self._client()
+
+        shifts = client.list_shifts_for_date(date(2026, 9, 15))
+
+        self.assertEqual(shifts, [])
+
+    @patch("requests.get")
+    @patch("requests.post")
+    def test_follows_odata_next_link_for_both_lookups(self, mock_post, mock_get):
+        mock_post.return_value = _fake_token_response()
+        mock_get.side_effect = [
+            _fake_json_response({
+                "value": [{"id": "user-1", "mail": "andrew.s@wgtk.co.uk"}],
+                "@odata.nextLink": "https://graph.microsoft.com/v1.0/next-members-page",
+            }),
+            _fake_json_response({"value": [{"id": "user-2", "mail": "blain.h@wgtk.co.uk"}]}),
+            _fake_json_response({
+                "value": [{
+                    "userId": "user-1",
+                    "sharedShift": {"startDateTime": "2026-09-15T07:00:00Z", "endDateTime": "2026-09-15T16:00:00Z"},
+                }],
+                "@odata.nextLink": "https://graph.microsoft.com/v1.0/next-shifts-page",
+            }),
+            _fake_json_response({"value": [{
+                "userId": "user-2",
+                "sharedShift": {"startDateTime": "2026-09-15T08:00:00Z", "endDateTime": "2026-09-15T17:00:00Z"},
+            }]}),
+        ]
+        client = self._client()
+
+        shifts = client.list_shifts_for_date(date(2026, 9, 15))
+
+        self.assertEqual(mock_get.call_count, 4)
+        self.assertEqual({s.email for s in shifts}, {"andrew.s@wgtk.co.uk", "blain.h@wgtk.co.uk"})
+
+
+class TeamsShiftsSettingsTests(TestCase):
+    def test_current_team_id_blank_with_no_row(self):
+        self.assertEqual(TeamsShiftsSettings.current_team_id(), "")
+
+    def test_current_team_id_reads_the_row(self):
+        TeamsShiftsSettings.objects.create(team_id="the-team-id")
+        self.assertEqual(TeamsShiftsSettings.current_team_id(), "the-team-id")
+
+
+@override_settings(
+    MS_GRAPH_MAIL_CLIENT_ID="client-id", MS_GRAPH_MAIL_CLIENT_SECRET="client-secret",
+    MS_GRAPH_MAIL_TENANT_ID="tenant-id", MS_GRAPH_TEAM_ID="",
+)
+class GetTeamsShiftsClientTests(TestCase):
+    def test_returns_mock_client_when_no_team_id(self):
+        self.assertIsInstance(get_teams_shifts_client(), MockTeamsShiftsClient)
+
+    def test_returns_real_client_using_admin_stored_team_id(self):
+        TeamsShiftsSettings.objects.create(team_id="admin-set-team")
+        client = get_teams_shifts_client()
+        self.assertIsInstance(client, RealTeamsShiftsClient)
+        self.assertEqual(client._team_id, "admin-set-team")
+
+    @override_settings(MS_GRAPH_TEAM_ID="app-setting-team")
+    def test_falls_back_to_app_setting_team_id(self):
+        client = get_teams_shifts_client()
+        self.assertIsInstance(client, RealTeamsShiftsClient)
+        self.assertEqual(client._team_id, "app-setting-team")
+
+    def test_returns_mock_client_when_team_id_set_but_no_graph_credentials(self):
+        TeamsShiftsSettings.objects.create(team_id="admin-set-team")
+        with override_settings(MS_GRAPH_MAIL_CLIENT_ID=""):
+            self.assertIsInstance(get_teams_shifts_client(), MockTeamsShiftsClient)

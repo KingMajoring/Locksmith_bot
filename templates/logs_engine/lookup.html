@@ -34,15 +34,22 @@
         itself, then the drive back home — from whichever is closer, their
         home location or their SOONEST already-booked future job only (not
         every job they have booked — see "Jobs booked", hover the number for
-        a map). Outbound drive capped at 2 hours, and not filtered by who's
-        actually on shift yet, so check before assigning.
+        a map). Outbound drive capped at 2 hours. Shift status (Teams) is
+        shown but doesn't filter the list — check before assigning either way.
       </p>
       {% if nearest_locksmiths %}
         <table>
           <tr><th>Locksmith</th><th>Postcode</th><th>Distance</th><th>Drive time</th><th>Total time</th><th>Jobs booked</th><th>Why</th></tr>
           {% for ranked in nearest_locksmiths %}
             <tr>
-              <td>{{ ranked.locksmith.name }}</td>
+              <td>
+                {{ ranked.locksmith.name }}
+                {% if ranked.on_shift %}
+                  <span class="shift-badge on">On shift</span>
+                {% elif ranked.on_shift is False %}
+                  <span class="shift-badge off">Off shift</span>
+                {% endif %}
+              </td>
               <td>
                 {% if ranked.attendance %}
                   {{ ranked.attendance.vehicle_postcode }}

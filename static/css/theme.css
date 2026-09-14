@@ -194,6 +194,20 @@ tr:last-child td { border-bottom: none; }
   background: var(--card-bg);
 }
 
+/* Logs Engine "Nearest locksmiths" Teams shift badge — shown, never
+   filters the list (shift data can be wrong or stale). */
+.shift-badge {
+  display: inline-block;
+  margin-left: 0.4rem;
+  padding: 0.05rem 0.5rem;
+  border-radius: var(--radius-pill);
+  font-size: 0.72rem;
+  font-weight: 700;
+  vertical-align: middle;
+}
+.shift-badge.on { background: var(--wgtk-green-pale); color: var(--wgtk-green-dark); }
+.shift-badge.off { background: var(--bg); color: var(--ink-faint); border: 1px solid var(--border); }
+
 .btn {
   display: inline-block;
   background: var(--wgtk-orange);

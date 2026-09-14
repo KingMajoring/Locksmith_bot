@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import GoogleMapsSettings, OptimoSettings
+from .models import GoogleMapsSettings, OptimoSettings, TeamsShiftsSettings
 
 
 @admin.register(OptimoSettings)
@@ -21,6 +21,17 @@ class GoogleMapsSettingsAdmin(admin.ModelAdmin):
 
     def has_add_permission(self, request):
         return not GoogleMapsSettings.objects.exists()
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(TeamsShiftsSettings)
+class TeamsShiftsSettingsAdmin(admin.ModelAdmin):
+    list_display = ("__str__", "team_id", "updated_at")
+
+    def has_add_permission(self, request):
+        return not TeamsShiftsSettings.objects.exists()
 
     def has_delete_permission(self, request, obj=None):
         return False

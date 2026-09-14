@@ -239,6 +239,14 @@ OPTIMO_API_KEY = env("OPTIMO_API_KEY", default="")
 # suggestion — see apps/integrations/google_maps.py.
 GOOGLE_MAPS_API_KEY = env("GOOGLE_MAPS_API_KEY", default="")
 
+# --- Microsoft Teams Shifts, for Logs Engine's "on shift today" info —
+# see apps/integrations/teams_shifts.py. Reuses the MS_GRAPH_MAIL_*
+# app registration above (it needs the Schedule.Read.All application
+# permission granted too, with admin consent) — this is just WGTK's
+# own rota Team ID, normally set via the admin (TeamsShiftsSettings)
+# instead so it can be changed without a redeploy.
+MS_GRAPH_TEAM_ID = env("MS_GRAPH_TEAM_ID", default="")
+
 # --- Scheduled jobs over HTTP (replaces Azure WebJobs) -----------------------
 # Confirmed live: Azure's WebJobs feature (App_Data/jobs/triggered/...)
 # never actually runs here — Kudu's WebJobs discovery scans the

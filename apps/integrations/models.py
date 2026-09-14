@@ -28,6 +28,34 @@ class OptimoSettings(models.Model):
         return obj.api_key if obj else ""
 
 
+class TeamsShiftsSettings(models.Model):
+    """WGTK's own rota Team ID for Microsoft Teams Shifts, editable via
+    the admin rather than an Azure app setting — same single-row
+    pattern as OptimoSettings/GoogleMapsSettings above. Not a secret
+    itself (Graph auth reuses the existing MS_GRAPH_MAIL_* app
+    registration — see apps/integrations/teams_shifts.py), just stored
+    the same way so it can be set/changed without a redeploy.
+
+    Falls back to the MS_GRAPH_TEAM_ID app setting if no row exists yet
+    or its team_id is blank.
+    """
+
+    team_id = models.CharField(max_length=200, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Teams Shifts settings"
+        verbose_name_plural = "Teams Shifts settings"
+
+    def __str__(self):
+        return "Teams Shifts settings"
+
+    @classmethod
+    def current_team_id(cls) -> str:
+        obj = cls.objects.first()
+        return obj.team_id if obj else ""
+
+
 class GoogleMapsSettings(models.Model):
     """The Google Maps (Distance Matrix) API key, editable via the admin
     rather than an Azure app setting — same rationale and single-row

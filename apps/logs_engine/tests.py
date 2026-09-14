@@ -7,6 +7,7 @@ from django.urls import reverse
 
 from apps.integrations.google_maps import LocksmithDistance
 from apps.integrations.handl import FutureLocksmithAttendance, JobDetails
+from apps.integrations.teams_shifts import ShiftAssignment
 from apps.locksmiths.models import Locksmith, SoterLocksmithId
 
 from .templatetags.logs_engine_extras import drive_time_class
@@ -546,6 +547,109 @@ class LogsEngineNearestLocksmithsTests(TestCase):
         ranked = response.context["nearest_locksmiths"][0]
         self.assertEqual(ranked.map_url, "")
         self.assertEqual(ranked.future_job_count, 0)
+
+    @patch("apps.logs_engine.views.get_teams_shifts_client")
+    @patch("apps.logs_engine.views.get_google_maps_client")
+    @patch("apps.logs_engine.views.get_handl_client")
+    def test_on_shift_true_when_teams_reports_them_on_shift_right_now(
+        self, mock_get_handl, mock_get_maps, mock_get_shifts
+    ):
+        from django.utils import timezone as django_timezone
+
+        Locksmith.objects.create(name="WGTK - Nearby", home_postcode="NR14 8PL", email="andrew.s@wgtk.co.uk")
+        mock_get_handl.return_value = MagicMock(
+            get_job_details=MagicMock(return_value={"501179": _job_with_location()}),
+            get_future_locksmith_attendances=MagicMock(return_value=[]),
+        )
+        mock_get_maps.return_value = MagicMock(get_distances=MagicMock(return_value=[
+            LocksmithDistance(origin="NR14 8PL", distance_metres=8369.0, duration_seconds=720, status="OK"),
+        ]))
+        now = django_timezone.localtime(django_timezone.now()).replace(tzinfo=None)
+        mock_get_shifts.return_value = MagicMock(list_shifts_for_date=MagicMock(return_value=[
+            ShiftAssignment(
+                email="andrew.s@wgtk.co.uk",
+                shift_start=now - timedelta(hours=1), shift_end=now + timedelta(hours=1),
+            ),
+        ]))
+
+        response = self.client.get(reverse("logs_engine:lookup"), {"report_id": "501179"})
+
+        ranked = response.context["nearest_locksmiths"][0]
+        self.assertTrue(ranked.on_shift)
+        self.assertContains(response, "On shift")
+        mock_get_shifts.return_value.list_shifts_for_date.assert_called_once_with(now.date())
+
+    @patch("apps.logs_engine.views.get_teams_shifts_client")
+    @patch("apps.logs_engine.views.get_google_maps_client")
+    @patch("apps.logs_engine.views.get_handl_client")
+    def test_on_shift_false_when_scheduled_but_outside_current_shift_window(
+        self, mock_get_handl, mock_get_maps, mock_get_shifts
+    ):
+        from django.utils import timezone as django_timezone
+
+        Locksmith.objects.create(name="WGTK - Nearby", home_postcode="NR14 8PL", email="andrew.s@wgtk.co.uk")
+        mock_get_handl.return_value = MagicMock(
+            get_job_details=MagicMock(return_value={"501179": _job_with_location()}),
+            get_future_locksmith_attendances=MagicMock(return_value=[]),
+        )
+        mock_get_maps.return_value = MagicMock(get_distances=MagicMock(return_value=[
+            LocksmithDistance(origin="NR14 8PL", distance_metres=8369.0, duration_seconds=720, status="OK"),
+        ]))
+        now = django_timezone.localtime(django_timezone.now()).replace(tzinfo=None)
+        mock_get_shifts.return_value = MagicMock(list_shifts_for_date=MagicMock(return_value=[
+            # Rostered on today, but that shift already finished hours ago.
+            ShiftAssignment(
+                email="andrew.s@wgtk.co.uk",
+                shift_start=now - timedelta(hours=10), shift_end=now - timedelta(hours=5),
+            ),
+        ]))
+
+        response = self.client.get(reverse("logs_engine:lookup"), {"report_id": "501179"})
+
+        ranked = response.context["nearest_locksmiths"][0]
+        self.assertIs(ranked.on_shift, False)
+        self.assertContains(response, "Off shift")
+
+    @patch("apps.logs_engine.views.get_teams_shifts_client")
+    @patch("apps.logs_engine.views.get_google_maps_client")
+    @patch("apps.logs_engine.views.get_handl_client")
+    def test_on_shift_none_when_locksmith_has_no_email(self, mock_get_handl, mock_get_maps, mock_get_shifts):
+        Locksmith.objects.create(name="WGTK - Nearby", home_postcode="NR14 8PL")  # no email
+        mock_get_handl.return_value = MagicMock(
+            get_job_details=MagicMock(return_value={"501179": _job_with_location()}),
+            get_future_locksmith_attendances=MagicMock(return_value=[]),
+        )
+        mock_get_maps.return_value = MagicMock(get_distances=MagicMock(return_value=[
+            LocksmithDistance(origin="NR14 8PL", distance_metres=8369.0, duration_seconds=720, status="OK"),
+        ]))
+
+        response = self.client.get(reverse("logs_engine:lookup"), {"report_id": "501179"})
+
+        ranked = response.context["nearest_locksmiths"][0]
+        self.assertIsNone(ranked.on_shift)
+        mock_get_shifts.assert_not_called()
+
+    @patch("apps.logs_engine.views.get_teams_shifts_client")
+    @patch("apps.logs_engine.views.get_google_maps_client")
+    @patch("apps.logs_engine.views.get_handl_client")
+    def test_on_shift_none_when_teams_lookup_fails(self, mock_get_handl, mock_get_maps, mock_get_shifts):
+        Locksmith.objects.create(name="WGTK - Nearby", home_postcode="NR14 8PL", email="andrew.s@wgtk.co.uk")
+        mock_get_handl.return_value = MagicMock(
+            get_job_details=MagicMock(return_value={"501179": _job_with_location()}),
+            get_future_locksmith_attendances=MagicMock(return_value=[]),
+        )
+        mock_get_maps.return_value = MagicMock(get_distances=MagicMock(return_value=[
+            LocksmithDistance(origin="NR14 8PL", distance_metres=8369.0, duration_seconds=720, status="OK"),
+        ]))
+        mock_get_shifts.return_value = MagicMock(
+            list_shifts_for_date=MagicMock(side_effect=Exception("boom"))
+        )
+
+        response = self.client.get(reverse("logs_engine:lookup"), {"report_id": "501179"})
+
+        self.assertEqual(response.status_code, 200)
+        ranked = response.context["nearest_locksmiths"][0]
+        self.assertIsNone(ranked.on_shift)
 
     @patch("apps.logs_engine.views.get_google_maps_client")
     @patch("apps.logs_engine.views.get_handl_client")

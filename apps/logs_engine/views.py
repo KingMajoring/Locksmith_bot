@@ -22,10 +22,11 @@ locksmith's whole day — RankedLocksmith.future_job_count and map_url
 jobs in red) exist so a human can see when someone's actually busier
 than the numbers alone suggest, since fully chaining multiple booked
 jobs into one total would need real route ordering, not attempted
-here. Shift information (who's actually on today, via Microsoft Teams
-Shifts) isn't wired up yet, so this ranks every eligible active
-locksmith rather than only ones on shift — a human still picks from
-the list.
+here. RankedLocksmith.on_shift shows whether Microsoft Teams Shifts
+has this locksmith rostered on right now — best-effort and never used
+to filter the list (shift data can be wrong or stale, e.g. an informal
+shift swap Teams doesn't know about), just another signal alongside
+the rest: a human still picks from the list.
 """
 import logging
 from dataclasses import dataclass
@@ -33,9 +34,11 @@ from math import asin, cos, radians, sin, sqrt
 
 from django.contrib.auth.decorators import login_required
 from django.shortcuts import render
+from django.utils import timezone as django_timezone
 
 from apps.integrations.google_maps import LocksmithDistance, get_google_maps_client, static_map_url
 from apps.integrations.handl import FutureLocksmithAttendance, get_handl_client
+from apps.integrations.teams_shifts import get_teams_shifts_client
 from apps.job_completion.services.labels import display_loss_type
 from apps.locksmiths.models import Locksmith
 
@@ -87,6 +90,11 @@ class RankedLocksmith:
     # locksmith's other booked jobs in red) for an at-a-glance hover —
     # "" when there's no API key configured or nothing to plot.
     map_url: str
+    # Whether Microsoft Teams Shifts has this locksmith rostered on
+    # right now — None when that couldn't be checked at all (no Team ID
+    # configured, no email on file, or the Graph call itself failed),
+    # distinct from False ("checked, and they're not on shift").
+    on_shift: bool | None
 
 
 def _straight_line_miles(lat1, lng1, lat2, lng2):
@@ -152,6 +160,26 @@ def _future_attendance_summary_by_locksmith(locksmiths):
         if attendance.available_from < entry["soonest"].available_from:
             entry["soonest"] = attendance
     return summary
+
+
+def _on_shift_locksmith_pks(locksmiths):
+    """{locksmith.pk, ...} for every one of these locksmiths currently
+    inside a published Teams Shift right now — not just scheduled
+    sometime today. Returns None (not an empty set) when this couldn't
+    be checked at all, so callers can tell "confirmed nobody's on
+    shift" apart from "the lookup failed" rather than defaulting every
+    locksmith to off-shift on a Graph outage or missing Team ID."""
+    emails_by_pk = {l.pk: l.email.strip().lower() for l in locksmiths if l.email}
+    if not emails_by_pk:
+        return None
+    now = django_timezone.localtime(django_timezone.now()).replace(tzinfo=None)
+    try:
+        shifts = get_teams_shifts_client().list_shifts_for_date(now.date())
+    except Exception:
+        logger.exception("Failed to fetch Teams shifts for Logs Engine")
+        return None
+    on_shift_emails = {s.email.lower() for s in shifts if s.shift_start <= now <= s.shift_end}
+    return {pk for pk, email in emails_by_pk.items() if email in on_shift_emails}
 
 
 def _return_minutes_by_locksmith(ranked, job):
@@ -265,6 +293,7 @@ def _nearest_locksmiths(job):
         return [], ""
 
     return_minutes_by_locksmith = _return_minutes_by_locksmith(ranked, job)
+    on_shift_pks = _on_shift_locksmith_pks([locksmith for locksmith, _distance, _attendance in ranked])
     job_location = f"{job.vehicle_latitude},{job.vehicle_longitude}"
 
     results = []
@@ -286,6 +315,7 @@ def _nearest_locksmiths(job):
             locksmith, distance, attendance, total_minutes,
             future_job_count=locksmith_summary.get("count", 0),
             map_url=map_url,
+            on_shift=(locksmith.pk in on_shift_pks) if on_shift_pks is not None else None,
         ))
 
     results.sort(key=lambda r: (r.total_minutes is None, r.total_minutes, r.distance.distance_metres))
