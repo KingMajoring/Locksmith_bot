@@ -1051,6 +1051,72 @@ class MockOptimoClientCompletionStatusTests(TestCase):
         MockOptimoClient().update_completion_status("496390_2026-09-04", "on_route")
 
 
+class MockOptimoClientListOrdersTests(TestCase):
+    def test_every_order_has_a_stop_number_and_arrival_time(self):
+        summaries = MockOptimoClient().list_orders_for_date(date(2026, 9, 14))
+        self.assertTrue(summaries)
+        for summary in summaries:
+            self.assertIsNotNone(summary.stop_number)
+            self.assertIsNotNone(summary.arrival_time_start)
+
+    def test_stop_numbers_are_not_already_in_list_order(self):
+        # Guards against list_orders_for_date accidentally handing back
+        # stop_number == index+1 — real search_orders results aren't
+        # pre-sorted by route position, so a test built on already-sorted
+        # data wouldn't actually exercise the dashboard's own sort.
+        summaries = MockOptimoClient().list_orders_for_date(date(2026, 9, 14))
+        stop_numbers = [s.stop_number for s in summaries]
+        self.assertNotEqual(stop_numbers, sorted(stop_numbers))
+
+
+class RealOptimoClientListOrdersTests(TestCase):
+    def _mock_response(self, orders):
+        response = MagicMock()
+        response.json.return_value = {"orders": orders}
+        return response
+
+    @patch("requests.post")
+    def test_parses_stop_number_and_arrival_time(self, mock_post):
+        mock_post.return_value = self._mock_response([
+            {
+                "data": {"orderNo": "496390_2026-09-14"},
+                "scheduleInformation": {
+                    "driverSerial": "011",
+                    "distance": 1200,
+                    "travelTime": 300,
+                    "stopNumber": 3,
+                    "arrivalTimeStart": {"utcTime": "2026-09-14T08:30:00"},
+                },
+            },
+        ])
+        client = RealOptimoClient("KEY")
+
+        summaries = client.list_orders_for_date(date(2026, 9, 14))
+
+        self.assertEqual(len(summaries), 1)
+        self.assertEqual(summaries[0].stop_number, 3)
+        self.assertEqual(
+            summaries[0].arrival_time_start,
+            datetime(2026, 9, 14, 8, 30, 0, tzinfo=dt_timezone.utc),
+        )
+
+    @patch("requests.post")
+    def test_missing_stop_number_and_arrival_time_are_none(self, mock_post):
+        mock_post.return_value = self._mock_response([
+            {
+                "data": {"orderNo": "496390_2026-09-14"},
+                "scheduleInformation": {"driverSerial": "011"},
+            },
+        ])
+        client = RealOptimoClient("KEY")
+
+        summaries = client.list_orders_for_date(date(2026, 9, 14))
+
+        self.assertEqual(len(summaries), 1)
+        self.assertIsNone(summaries[0].stop_number)
+        self.assertIsNone(summaries[0].arrival_time_start)
+
+
 class RealOptimoClientCompletionStatusTests(TestCase):
     def _mock_response(self, updates):
         # The API reference's documented response example uses "orders"

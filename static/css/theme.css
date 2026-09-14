@@ -323,6 +323,13 @@ input[type=number] { width: 5rem; }
 .job-main { display: flex; flex-direction: column; gap: 0.15rem; min-width: 0; }
 .job-meta { font-size: 0.8rem; }
 .job-location { font-size: 0.8rem; }
+.job-stop {
+  display: inline-block;
+  color: var(--wgtk-orange-dark);
+  font-weight: 700;
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+}
 .job-link::after {
   content: "→";
   color: var(--wgtk-orange);

@@ -19,7 +19,7 @@ import hashlib
 import random
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from datetime import date, datetime, timezone as dt_timezone
+from datetime import date, datetime, timedelta, timezone as dt_timezone
 
 from django.conf import settings
 
@@ -30,6 +30,14 @@ class OptimoOrderSummary:
     driver_serial: str
     distance_metres: float
     travel_time_seconds: int
+    # Optimo's own position in the driver's route for the day (as shown
+    # in its driver app, e.g. "Stop: 3") and the scheduled arrival
+    # window start — both from scheduleInformation, so the portal's own
+    # job list can be put in the same order without a locksmith having
+    # to cross-check Optimo separately. Optional/defaulted since not
+    # every existing caller constructs one with these.
+    stop_number: int | None = None
+    arrival_time_start: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -97,12 +105,21 @@ class MockOptimoClient(OptimoClient):
     def list_orders_for_date(self, for_date: date) -> list[OptimoOrderSummary]:
         rng = self._rng_for(for_date)
         count = rng.randint(15, 25)
+        # Shuffled rather than 1..count in order — search_orders doesn't
+        # come back pre-sorted by route position on the real API either,
+        # so this keeps local dev honest about needing to sort by
+        # stop_number rather than relying on list order.
+        stop_numbers = list(range(1, count + 1))
+        rng.shuffle(stop_numbers)
+        day_start = datetime.combine(for_date, datetime.min.time(), tzinfo=dt_timezone.utc).replace(hour=8)
         return [
             OptimoOrderSummary(
                 order_no=f"{40000 + i}_{for_date.isoformat()}",
                 driver_serial=rng.choice(self._DRIVER_SERIALS),
                 distance_metres=round(rng.uniform(500, 25000), 1),
                 travel_time_seconds=rng.randint(60, 2400),
+                stop_number=stop_numbers[i],
+                arrival_time_start=day_start + timedelta(minutes=30 * stop_numbers[i]),
             )
             for i in range(count)
         ]
@@ -211,6 +228,10 @@ class RealOptimoClient(OptimoClient):
                     driver_serial=schedule.get("driverSerial", ""),
                     distance_metres=float(schedule.get("distance") or 0),
                     travel_time_seconds=int(schedule.get("travelTime") or 0),
+                    stop_number=(
+                        int(schedule["stopNumber"]) if schedule.get("stopNumber") is not None else None
+                    ),
+                    arrival_time_start=_parse_optimo_time(schedule.get("arrivalTimeStart")),
                 )
             )
         return summaries

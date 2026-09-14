@@ -1,4 +1,4 @@
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 from django.contrib.auth import get_user_model
@@ -495,6 +495,68 @@ class DashboardTests(TestCase):
         self.assertContains(response, "job-failed")
         self.assertContains(response, "&#10007; Failed")
         self.assertNotContains(response, "job-completed")
+
+    @patch("apps.locksmith_portal.views.get_optimo_client")
+    def test_dashboard_orders_jobs_by_optimo_stop_number(self, mock_get_optimo):
+        today = timezone.localdate()
+        order_no_a = f"1001_{today.isoformat()}"
+        order_no_b = f"1002_{today.isoformat()}"
+        mock_client = MagicMock()
+        # Returned with the later stop first — the dashboard should
+        # still show them in route order (stop 2 before stop 5), not
+        # the order Optimo happened to list them in.
+        mock_client.list_orders_for_date.return_value = [
+            OptimoOrderSummary(
+                order_no=order_no_a, driver_serial="011", distance_metres=0,
+                travel_time_seconds=0, stop_number=5,
+            ),
+            OptimoOrderSummary(
+                order_no=order_no_b, driver_serial="011", distance_metres=0,
+                travel_time_seconds=0, stop_number=2,
+            ),
+        ]
+        mock_get_optimo.return_value = mock_client
+
+        response = self.client.get(reverse("locksmith_portal:dashboard"))
+        jobs = response.context["jobs"]
+        self.assertEqual([job["order_no"] for job in jobs], [order_no_b, order_no_a])
+        self.assertEqual([job["stop_number"] for job in jobs], [2, 5])
+
+    @patch("apps.locksmith_portal.views.get_optimo_client")
+    def test_dashboard_shows_stop_number_and_arrival_time(self, mock_get_optimo):
+        today = timezone.localdate()
+        order_no = f"1001_{today.isoformat()}"
+        # Built from the local wall-clock time (not a hardcoded UTC
+        # offset) so the "8:30 AM" assertion below holds regardless of
+        # whether the test runs during BST or GMT.
+        arrival_local = timezone.make_aware(datetime(today.year, today.month, today.day, 8, 30))
+        mock_client = MagicMock()
+        mock_client.list_orders_for_date.return_value = [
+            OptimoOrderSummary(
+                order_no=order_no, driver_serial="011", distance_metres=0, travel_time_seconds=0,
+                stop_number=2, arrival_time_start=arrival_local,
+            ),
+        ]
+        mock_get_optimo.return_value = mock_client
+
+        response = self.client.get(reverse("locksmith_portal:dashboard"))
+        self.assertContains(response, "Stop 2")
+        self.assertContains(response, "8:30 AM")
+
+    @patch("apps.locksmith_portal.views.get_optimo_client")
+    def test_dashboard_hides_stop_badge_when_optimo_gives_no_stop_number(self, mock_get_optimo):
+        today = timezone.localdate()
+        order_no = f"1001_{today.isoformat()}"
+        mock_client = MagicMock()
+        mock_client.list_orders_for_date.return_value = [
+            OptimoOrderSummary(
+                order_no=order_no, driver_serial="011", distance_metres=0, travel_time_seconds=0,
+            ),
+        ]
+        mock_get_optimo.return_value = mock_client
+
+        response = self.client.get(reverse("locksmith_portal:dashboard"))
+        self.assertNotContains(response, "job-stop")
 
     @patch("apps.locksmith_portal.views.get_optimo_client")
     def test_dashboard_date_navigation(self, mock_get_optimo):

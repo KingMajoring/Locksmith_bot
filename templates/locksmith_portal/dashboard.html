@@ -65,6 +65,9 @@
         <a class="job-link"
            href="{% url 'locksmith_portal:job_overview' order_no=job.order_no %}?date={{ selected_date|date:'Y-m-d' }}">
           <span class="job-main">
+            {% if job.stop_number or job.arrival_time_start %}
+              <span class="job-stop">{% if job.stop_number %}Stop {{ job.stop_number }}{% endif %}{% if job.stop_number and job.arrival_time_start %} · {% endif %}{% if job.arrival_time_start %}{{ job.arrival_time_start|date:"g:i A" }}{% endif %}</span>
+            {% endif %}
             <strong>Job {{ job.report_id }}</strong>
             {% if job.reg or job.make or job.model or job.service %}
               <span class="job-meta">{% if job.reg %}{{ job.reg }} · {% endif %}{{ job.make }} {{ job.model }} {{ job.year }}{% if job.service %} · {{ job.service }}{% endif %}</span>

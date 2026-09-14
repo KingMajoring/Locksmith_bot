@@ -317,7 +317,16 @@ def _jobs_for_date(locksmith, for_date):
     A locksmith flagged sees_all_jobs_for_testing (an office/admin test
     account exercising the portal, not a real field locksmith) instead
     gets every job scheduled that day, unfiltered by driver — they have
-    no real Optimo driverSerial of their own to filter by."""
+    no real Optimo driverSerial of their own to filter by.
+
+    Ordered by Optimo's own route position (scheduleInformation's
+    stopNumber — the same "Stop: N" shown in Optimo's own driver app),
+    so the portal's job list reads in the order a locksmith will
+    actually do them without cross-checking Optimo separately. A job
+    Optimo hasn't given a stop number to (shouldn't normally happen for
+    a scheduled order, but search_orders is an external API) sorts
+    after every job that has one, in whatever order Optimo returned
+    them."""
     summaries = get_optimo_client().list_orders_for_date(for_date)
 
     if not locksmith.sees_all_jobs_for_testing:
@@ -333,7 +342,13 @@ def _jobs_for_date(locksmith, for_date):
         report_id = _report_id_from_order_no(summary.order_no)
         if report_id is None:
             continue
-        jobs.append({"order_no": summary.order_no, "report_id": report_id})
+        jobs.append({
+            "order_no": summary.order_no,
+            "report_id": report_id,
+            "stop_number": summary.stop_number,
+            "arrival_time_start": summary.arrival_time_start,
+        })
+    jobs.sort(key=lambda job: (job["stop_number"] is None, job["stop_number"] or 0))
     return jobs
 
 
