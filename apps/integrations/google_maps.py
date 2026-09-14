@@ -79,6 +79,15 @@ class RealGoogleMapsClient(GoogleMapsClient):
     requests library."""
 
     _BASE_URL = "https://maps.googleapis.com/maps/api/distancematrix/json"
+    # Distance Matrix rejects a request with more than 25 origins (or
+    # destinations) in one call with MAX_DIMENSIONS_EXCEEDED — confirmed
+    # live: Logs Engine sends one origin per locksmith (two for anyone
+    # with both a home location and an upcoming future job), which
+    # crossed 25 the moment enough locksmiths had a home location set,
+    # and every result came back empty as a result. Batching keeps each
+    # request under that limit and stitches the results back together
+    # in the caller's original order.
+    _MAX_ORIGINS_PER_REQUEST = 25
 
     def __init__(self, api_key: str):
         self._api_key = api_key
@@ -86,10 +95,18 @@ class RealGoogleMapsClient(GoogleMapsClient):
     def get_distances(
         self, origins: list[str], destination_lat: float, destination_lng: float
     ) -> list[LocksmithDistance]:
-        import requests
-
         if not origins:
             return []
+        results = []
+        for start in range(0, len(origins), self._MAX_ORIGINS_PER_REQUEST):
+            batch = origins[start:start + self._MAX_ORIGINS_PER_REQUEST]
+            results.extend(self._fetch_batch(batch, destination_lat, destination_lng))
+        return results
+
+    def _fetch_batch(
+        self, origins: list[str], destination_lat: float, destination_lng: float
+    ) -> list[LocksmithDistance]:
+        import requests
 
         response = requests.get(
             self._BASE_URL,

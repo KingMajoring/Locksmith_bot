@@ -1661,6 +1661,42 @@ class RealGoogleMapsClientTests(TestCase):
             self.assertEqual(client.get_distances([], 52.6309, 1.2974), [])
             mock_get.assert_not_called()
 
+    @patch("requests.get")
+    def test_batches_requests_over_25_origins(self, mock_get):
+        # Distance Matrix rejects more than 25 origins in one request
+        # with MAX_DIMENSIONS_EXCEEDED (confirmed live once enough
+        # locksmiths had a home location set) — 30 origins should split
+        # into a 25 + 5 pair of requests, not one oversized call.
+        origins = [f"PC{i}" for i in range(30)]
+
+        def fake_get(url, params, timeout):
+            batch = params["origins"].split("|")
+            return self._mock_response(rows=[
+                {"elements": [{"status": "OK", "distance": {"value": 1000}, "duration": {"value": 100}}]}
+                for _ in batch
+            ])
+
+        mock_get.side_effect = fake_get
+        client = RealGoogleMapsClient("KEY")
+
+        results = client.get_distances(origins, 52.6309, 1.2974)
+
+        self.assertEqual(mock_get.call_count, 2)
+        first_batch = mock_get.call_args_list[0].kwargs["params"]["origins"].split("|")
+        second_batch = mock_get.call_args_list[1].kwargs["params"]["origins"].split("|")
+        self.assertEqual(len(first_batch), 25)
+        self.assertEqual(len(second_batch), 5)
+        self.assertEqual([r.origin for r in results], origins)  # stitched back in order
+
+    @patch("requests.get")
+    def test_batch_failure_propagates(self, mock_get):
+        origins = [f"PC{i}" for i in range(30)]
+        mock_get.return_value = self._mock_response(status="OVER_QUERY_LIMIT")
+        client = RealGoogleMapsClient("KEY")
+
+        with self.assertRaises(ValueError):
+            client.get_distances(origins, 52.6309, 1.2974)
+
 
 @override_settings(GOOGLE_MAPS_API_KEY="")
 class GetGoogleMapsClientTests(TestCase):
