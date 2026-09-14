@@ -159,11 +159,19 @@ class RealTeamsShiftsClient(TeamsShiftsClient):
         # at the edge of the day gets missed) keeps this fast; the
         # precise per-shift date check below is still the real source
         # of truth for what actually counts as "covers for_date".
+        #
+        # Graph's shifts $filter treats these as DateTimeOffset
+        # literals, NOT string literals — quoting them (e.g. ge
+        # '2026-09-14T00:00:00Z') is a type mismatch and Graph rejects
+        # the whole request with 400 Bad Request. Confirmed live: this
+        # exact query 400'd until the quotes were removed, matching
+        # Microsoft's own documented example for this endpoint, which
+        # is unquoted.
         window_start = datetime.combine(for_date - timedelta(days=1), datetime.min.time())
         window_end = datetime.combine(for_date + timedelta(days=1), datetime.min.time())
         filter_query = (
-            f"sharedShift/startDateTime ge '{window_start.isoformat()}Z' "
-            f"and sharedShift/endDateTime le '{window_end.isoformat()}Z'"
+            f"sharedShift/startDateTime ge {window_start.isoformat()}Z "
+            f"and sharedShift/endDateTime le {window_end.isoformat()}Z"
         )
         shifts = self._graph_get_all(
             f"{_GRAPH_BASE}/teams/{self._team_id}/schedule/shifts?$filter={quote(filter_query)}",
