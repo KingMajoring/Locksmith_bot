@@ -165,6 +165,14 @@ class LocksmithCard:
     # None when there's no shift on file for today at all (a day off),
     # or the Teams lookup itself failed/isn't configured.
     expected_home: datetime | None
+    # Every date (within the fetched window) Teams has a published
+    # shift on file for this locksmith at all — shown next to a "no
+    # Teams shift on file for that day" option so a human can tell "we
+    # have nothing for them all week" apart from "we have shifts for
+    # every OTHER day but this one specifically", which point at very
+    # different problems. Empty list, not None, when the lookup ran
+    # fine and genuinely found nothing.
+    shift_dates_on_file: list
 
 
 def _straight_line_miles(lat1, lng1, lat2, lng2):
@@ -494,6 +502,7 @@ def _nearest_locksmiths(job):
             locksmith, options,
             on_shift=shift_info.on_shift if shift_info is not None else None,
             expected_home=shift_info.expected_home if shift_info is not None else None,
+            shift_dates_on_file=sorted(shift_info.starts_by_date) if shift_info is not None else [],
         ))
 
     cards.sort(key=lambda c: (

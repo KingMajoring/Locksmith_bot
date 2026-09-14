@@ -81,6 +81,11 @@
                       <span class="sub">unknown — no home location on file</span>
                     {% elif option.attendance %}
                       <span class="sub">unknown — no Teams shift on file for that day</span>
+                      {% if card.shift_dates_on_file %}
+                        <div class="sub">(Teams has shifts on file for them on: {% for d in card.shift_dates_on_file %}{{ d|date:"D j M" }}{% if not forloop.last %}, {% endif %}{% endfor %})</div>
+                      {% else %}
+                        <div class="sub">(no shifts on file for them at all this week)</div>
+                      {% endif %}
                     {% else %}
                       <span class="sub">unknown</span>
                     {% endif %}

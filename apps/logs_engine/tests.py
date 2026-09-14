@@ -5,6 +5,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone as django_timezone
+from django.utils.dateformat import format as django_dateformat
 
 from apps.integrations.google_maps import LocksmithDistance
 from apps.integrations.handl import FutureLocksmithAttendance, JobDetails
@@ -926,6 +927,66 @@ class LogsEngineNearestLocksmithsTests(TestCase):
         self.assertIsNotNone(worst.total_minutes)  # the round trip itself is still resolvable
         self.assertIsNone(worst.expected_home_after)  # but there's no shift to anchor it to
         self.assertContains(response, "no Teams shift on file for that day")
+        self.assertEqual(card.shift_dates_on_file, [])
+        self.assertContains(response, "no shifts on file for them at all this week")
+
+    @patch("apps.logs_engine.views.get_teams_shifts_client")
+    @patch("apps.logs_engine.views.get_google_maps_client")
+    @patch("apps.logs_engine.views.get_handl_client")
+    def test_shift_dates_on_file_surfaced_when_the_needed_day_is_missing(
+        self, mock_get_handl, mock_get_maps, mock_get_shifts
+    ):
+        # Confirmed live: a real shift existed in Teams for the exact
+        # day a future-job option needed, and it still came back as
+        # "no Teams shift on file for that day" — with no diagnostic on
+        # the page, there was no way to tell "we have nothing for this
+        # person at all" apart from "we have shifts for OTHER days but
+        # somehow missed this specific one", which point at very
+        # different root causes. Surfacing which dates we DO have data
+        # for turns that back into something checkable.
+        locksmith = Locksmith.objects.create(
+            name="WGTK - Andrew S", home_postcode="NR14 8PL", email="andrew.s@wgtk.co.uk",
+        )
+        SoterLocksmithId.objects.create(locksmith=locksmith, soter_locksmith_id="1204")
+        needed_date = django_timezone.localtime(django_timezone.now()).replace(tzinfo=None) + timedelta(days=1)
+        other_date = needed_date + timedelta(days=1)
+        mock_get_handl.return_value = MagicMock(
+            get_job_details=MagicMock(return_value={"501179": _job_with_location()}),
+            get_future_locksmith_attendances=MagicMock(return_value=[
+                FutureLocksmithAttendance(
+                    report_id="502000", soter_locksmith_id="1204", locksmith_name="WGTK - Andrew S",
+                    available_from=needed_date,
+                    vehicle_postcode="IP1 2AB", vehicle_reg="AB20 CDE",
+                ),
+            ]),
+        )
+        mock_get_maps.return_value = MagicMock(get_distances=MagicMock(side_effect=[
+            [
+                LocksmithDistance(origin="NR14 8PL", distance_metres=8369.0, duration_seconds=720, status="OK"),
+                LocksmithDistance(origin="IP1 2AB", distance_metres=40000.0, duration_seconds=3000, status="OK"),
+            ],
+            [
+                LocksmithDistance(origin="NR14 8PL", distance_metres=8369.0, duration_seconds=720, status="OK"),
+            ],
+        ]))
+        # A shift on file, but for a DIFFERENT day than the one needed.
+        mock_get_shifts.return_value = MagicMock(list_shifts_for_date_range=MagicMock(return_value=[
+            ShiftAssignment(
+                email="andrew.s@wgtk.co.uk",
+                shift_start=other_date.replace(hour=8, minute=0, second=0, microsecond=0),
+                shift_end=other_date.replace(hour=17, minute=0, second=0, microsecond=0),
+            ),
+        ]))
+
+        response = self.client.get(reverse("logs_engine:lookup"), {"report_id": "501179"})
+
+        card = response.context["nearest_locksmiths"][0]
+        worst = card.options[1]
+        self.assertIsNotNone(worst.attendance)
+        self.assertIsNone(worst.expected_home_after)
+        self.assertEqual(card.shift_dates_on_file, [other_date.date()])
+        self.assertContains(response, "Teams has shifts on file for them on")
+        self.assertContains(response, django_dateformat(other_date.date(), "D j M"))
 
     @patch("apps.logs_engine.views.get_google_maps_client")
     @patch("apps.logs_engine.views.get_handl_client")
