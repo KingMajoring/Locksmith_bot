@@ -235,6 +235,10 @@ STOCK_CHECK_NO_REPEAT_WEEKS = env.int("STOCK_CHECK_NO_REPEAT_WEEKS", default=4)
 OPTIMO_API_BASE_URL = env("OPTIMO_API_BASE_URL", default="")
 OPTIMO_API_KEY = env("OPTIMO_API_KEY", default="")
 
+# --- Google Maps (Distance Matrix) API, for Logs Engine's nearest-locksmith
+# suggestion — see apps/integrations/google_maps.py.
+GOOGLE_MAPS_API_KEY = env("GOOGLE_MAPS_API_KEY", default="")
+
 # --- Scheduled jobs over HTTP (replaces Azure WebJobs) -----------------------
 # Confirmed live: Azure's WebJobs feature (App_Data/jobs/triggered/...)
 # never actually runs here — Kudu's WebJobs discovery scans the

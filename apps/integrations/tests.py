@@ -4,9 +4,10 @@ from unittest.mock import MagicMock, patch
 from django.core.mail import EmailMessage
 from django.test import TestCase, override_settings
 
+from .google_maps import MockGoogleMapsClient, RealGoogleMapsClient, get_google_maps_client
 from .graph_email_backend import MicrosoftGraphEmailBackend
 from .handl import MockHandlClient, SQLHandlClient, get_handl_client
-from .models import OptimoSettings
+from .models import GoogleMapsSettings, OptimoSettings
 from .optimo import MockOptimoClient, RealOptimoClient, get_optimo_client
 from .photos import AzureBlobPhotoStorage, MockPhotoStorage, get_photo_storage
 
@@ -1492,3 +1493,126 @@ class GetPhotoStorageTests(TestCase):
     @override_settings(AZURE_STORAGE_CONNECTION_STRING="DefaultEndpointsProtocol=https;AccountName=x;AccountKey=y")
     def test_returns_azure_when_connection_string_set(self):
         self.assertIsInstance(get_photo_storage(), AzureBlobPhotoStorage)
+
+
+class MockGoogleMapsClientTests(TestCase):
+    def test_returns_one_result_per_origin_in_order(self):
+        origins = ["NR14 8PL", "IP1 2AB", "CO1 1AA"]
+        results = MockGoogleMapsClient().get_distances(origins, 52.6309, 1.2974)
+        self.assertEqual([r.origin for r in results], origins)
+        for result in results:
+            self.assertEqual(result.status, "OK")
+            self.assertIsNotNone(result.distance_metres)
+            self.assertIsNotNone(result.duration_seconds)
+
+    def test_is_deterministic_per_origin_and_destination(self):
+        first = MockGoogleMapsClient().get_distances(["NR14 8PL"], 52.6309, 1.2974)
+        second = MockGoogleMapsClient().get_distances(["NR14 8PL"], 52.6309, 1.2974)
+        self.assertEqual(first[0].distance_metres, second[0].distance_metres)
+
+    def test_different_destination_gives_different_distance(self):
+        a = MockGoogleMapsClient().get_distances(["NR14 8PL"], 52.6309, 1.2974)
+        b = MockGoogleMapsClient().get_distances(["NR14 8PL"], 55.7536673, -4.062251)
+        self.assertNotEqual(a[0].distance_metres, b[0].distance_metres)
+
+    def test_empty_origins_returns_empty(self):
+        self.assertEqual(MockGoogleMapsClient().get_distances([], 52.6309, 1.2974), [])
+
+
+class LocksmithDistanceTests(TestCase):
+    def test_distance_miles_converts_from_metres(self):
+        from .google_maps import LocksmithDistance
+
+        result = LocksmithDistance(origin="NR14 8PL", distance_metres=16093.44, duration_seconds=None, status="OK")
+        self.assertEqual(result.distance_miles, 10.0)
+
+    def test_duration_minutes_converts_from_seconds(self):
+        from .google_maps import LocksmithDistance
+
+        result = LocksmithDistance(origin="NR14 8PL", distance_metres=None, duration_seconds=660, status="OK")
+        self.assertEqual(result.duration_minutes, 11)
+
+    def test_none_values_stay_none(self):
+        from .google_maps import LocksmithDistance
+
+        result = LocksmithDistance(origin="NR14 8PL", distance_metres=None, duration_seconds=None, status="NOT_FOUND")
+        self.assertIsNone(result.distance_miles)
+        self.assertIsNone(result.duration_minutes)
+
+
+class RealGoogleMapsClientTests(TestCase):
+    def _mock_response(self, status="OK", rows=None):
+        response = MagicMock()
+        response.json.return_value = {"status": status, "rows": rows or []}
+        return response
+
+    @patch("requests.get")
+    def test_parses_distance_and_duration_per_origin(self, mock_get):
+        mock_get.return_value = self._mock_response(rows=[
+            {"elements": [{"status": "OK", "distance": {"value": 8369}, "duration": {"value": 720}}]},
+            {"elements": [{"status": "OK", "distance": {"value": 3218}, "duration": {"value": 300}}]},
+        ])
+        client = RealGoogleMapsClient("KEY")
+
+        results = client.get_distances(["NR14 8PL", "IP1 2AB"], 52.6309, 1.2974)
+
+        self.assertEqual(results[0].origin, "NR14 8PL")
+        self.assertEqual(results[0].distance_metres, 8369.0)
+        self.assertEqual(results[0].duration_seconds, 720)
+        self.assertEqual(results[1].distance_metres, 3218.0)
+
+        params = mock_get.call_args.kwargs["params"]
+        self.assertEqual(params["origins"], "NR14 8PL|IP1 2AB")
+        self.assertEqual(params["destinations"], "52.6309,1.2974")
+        self.assertEqual(params["key"], "KEY")
+
+    @patch("requests.get")
+    def test_unresolvable_origin_gets_null_distance_not_an_exception(self, mock_get):
+        mock_get.return_value = self._mock_response(rows=[
+            {"elements": [{"status": "NOT_FOUND"}]},
+        ])
+        client = RealGoogleMapsClient("KEY")
+
+        results = client.get_distances(["not a real postcode"], 52.6309, 1.2974)
+
+        self.assertEqual(results[0].status, "NOT_FOUND")
+        self.assertIsNone(results[0].distance_metres)
+        self.assertIsNone(results[0].duration_seconds)
+
+    @patch("requests.get")
+    def test_raises_on_overall_request_failure(self, mock_get):
+        mock_get.return_value = self._mock_response(status="REQUEST_DENIED")
+        client = RealGoogleMapsClient("KEY")
+
+        with self.assertRaises(ValueError):
+            client.get_distances(["NR14 8PL"], 52.6309, 1.2974)
+
+    def test_empty_origins_returns_empty_without_a_request(self):
+        client = RealGoogleMapsClient("KEY")
+        with patch("requests.get") as mock_get:
+            self.assertEqual(client.get_distances([], 52.6309, 1.2974), [])
+            mock_get.assert_not_called()
+
+
+@override_settings(GOOGLE_MAPS_API_KEY="")
+class GetGoogleMapsClientTests(TestCase):
+    def test_returns_mock_client_when_unconfigured(self):
+        self.assertIsInstance(get_google_maps_client(), MockGoogleMapsClient)
+
+    def test_returns_real_client_using_admin_stored_key(self):
+        GoogleMapsSettings.objects.create(api_key="admin-set-key")
+        client = get_google_maps_client()
+        self.assertIsInstance(client, RealGoogleMapsClient)
+        self.assertEqual(client._api_key, "admin-set-key")
+
+    @override_settings(GOOGLE_MAPS_API_KEY="app-setting-key")
+    def test_falls_back_to_app_setting_when_no_admin_key(self):
+        client = get_google_maps_client()
+        self.assertIsInstance(client, RealGoogleMapsClient)
+        self.assertEqual(client._api_key, "app-setting-key")
+
+    @override_settings(GOOGLE_MAPS_API_KEY="app-setting-key")
+    def test_admin_stored_key_takes_priority_over_app_setting(self):
+        GoogleMapsSettings.objects.create(api_key="admin-set-key")
+        client = get_google_maps_client()
+        self.assertEqual(client._api_key, "admin-set-key")

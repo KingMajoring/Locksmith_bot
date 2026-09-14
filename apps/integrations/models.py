@@ -26,3 +26,29 @@ class OptimoSettings(models.Model):
     def current_key(cls) -> str:
         obj = cls.objects.first()
         return obj.api_key if obj else ""
+
+
+class GoogleMapsSettings(models.Model):
+    """The Google Maps (Distance Matrix) API key, editable via the admin
+    rather than an Azure app setting — same rationale and single-row
+    pattern as OptimoSettings above.
+
+    Falls back to the GOOGLE_MAPS_API_KEY app setting (see
+    apps/integrations/google_maps.py get_google_maps_client()) if no row
+    exists yet or its api_key is blank.
+    """
+
+    api_key = models.CharField(max_length=200, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Google Maps API settings"
+        verbose_name_plural = "Google Maps API settings"
+
+    def __str__(self):
+        return "Google Maps API settings"
+
+    @classmethod
+    def current_key(cls) -> str:
+        obj = cls.objects.first()
+        return obj.api_key if obj else ""

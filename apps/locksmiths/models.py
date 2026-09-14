@@ -66,6 +66,14 @@ class Locksmith(models.Model):
         "locksmith picks Maps or Waze there, so they aren't asked again on "
         "every job. Clear this to have them asked again next time.",
     )
+    home_postcode = models.CharField(
+        max_length=16, blank=True,
+        help_text="This locksmith's home/base postcode — there's no live GPS "
+        "tracking of where a locksmith actually is, so this is used as a "
+        "stand-in \"where they're based\" for Logs Engine's nearest-locksmith "
+        "distance lookup (Area: office job lookup). Office-entered, not synced "
+        "from anywhere.",
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

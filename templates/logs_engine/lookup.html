@@ -24,5 +24,35 @@
       <p class="empty">No job found for ReportID {{ report_id }}.</p>
     {% endif %}
   </div>
+
+  {% if job %}
+    <div class="card">
+      <h2>Nearest locksmiths</h2>
+      <p class="sub">
+        By distance from their home postcode — not filtered by who's
+        actually on shift yet, so check before assigning.
+      </p>
+      {% if nearest_locksmiths %}
+        <table>
+          <tr><th>Locksmith</th><th>Postcode</th><th>Distance</th><th>Drive time</th></tr>
+          {% for locksmith, distance in nearest_locksmiths %}
+            <tr>
+              <td>{{ locksmith.name }}</td>
+              <td>{{ locksmith.home_postcode }}</td>
+              <td>{{ distance.distance_miles }} mi</td>
+              <td>{{ distance.duration_minutes }} min</td>
+            </tr>
+          {% endfor %}
+        </table>
+      {% elif job.vehicle_latitude is None %}
+        <p class="empty">This job has no vehicle location recorded in Handl, so distance can't be calculated.</p>
+      {% else %}
+        <p class="empty">No active locksmith has a home postcode set yet.</p>
+      {% endif %}
+      {% if locksmiths_missing_postcode %}
+        <p class="sub">{{ locksmiths_missing_postcode }} active locksmith{{ locksmiths_missing_postcode|pluralize }} {{ locksmiths_missing_postcode|pluralize:"has,have" }} no home postcode set, so {{ locksmiths_missing_postcode|pluralize:"isn't,aren't" }} included above — <a href="{% url 'admin:locksmiths_locksmith_changelist' %}">add it in Admin</a>.</p>
+      {% endif %}
+    </div>
+  {% endif %}
 {% endif %}
 {% endblock %}
