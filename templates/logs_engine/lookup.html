@@ -46,7 +46,7 @@
                 {% elif locksmith.home_postcode %}
                   {{ locksmith.home_postcode }}
                 {% else %}
-                  GPS location
+                  Home location
                 {% endif %}
               </td>
               <td>{{ distance.distance_miles }} mi</td>
@@ -54,10 +54,8 @@
               <td>
                 {% if attendance %}
                   Already booked nearby ({{ attendance.vehicle_reg|default:"job" }}, {{ attendance.available_from|date:"D j M, H:i" }})
-                {% elif locksmith.home_latitude is not None %}
-                  GPS location
                 {% else %}
-                  Home postcode
+                  Home location
                 {% endif %}
               </td>
             </tr>

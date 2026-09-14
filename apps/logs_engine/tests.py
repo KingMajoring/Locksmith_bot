@@ -461,7 +461,7 @@ class LogsEngineNearestLocksmithsTests(TestCase):
         locksmith_result, distance, attendance = nearest[0]
         self.assertEqual(distance.distance_metres, 8369.0)
         self.assertIsNone(attendance)
-        self.assertContains(response, "Home postcode")
+        self.assertContains(response, "Home location")
 
     @patch("apps.logs_engine.views.get_google_maps_client")
     @patch("apps.logs_engine.views.get_handl_client")
