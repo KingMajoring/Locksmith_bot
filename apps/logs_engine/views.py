@@ -5,12 +5,18 @@ is closer, their home postcode or where their soonest already-booked
 future job already has them going (they're in that area anyway, so
 that beats driving over from home) — either signal alone is enough to
 put a locksmith in the running, so one with no home postcode on file
-can still surface via an upcoming job. Shift information (who's
-actually on today, via Microsoft Teams Shifts) isn't wired up yet, so
-this ranks every eligible active locksmith rather than only ones on
-shift — a human still picks from the list.
+can still surface via an upcoming job. A locksmith with a known home
+location clearly too far from the job (straight-line, see
+_MAX_HOME_STRAIGHT_LINE_MILES) is filtered out before ever calling
+Google — no point spending a real distance lookup, and a slot in the
+25-origins-per-request batch, confirming what a rough distance already
+rules out. Shift information (who's actually on today, via Microsoft
+Teams Shifts) isn't wired up yet, so this ranks every eligible active
+locksmith rather than only ones on shift — a human still picks from
+the list.
 """
 import logging
+from math import asin, cos, radians, sin, sqrt
 
 from django.contrib.auth.decorators import login_required
 from django.shortcuts import render
@@ -22,14 +28,43 @@ from apps.locksmiths.models import Locksmith
 
 logger = logging.getLogger(__name__)
 
+_EARTH_RADIUS_MILES = 3958.8
 
-def _home_origin(locksmith):
+# A locksmith whose home is further than this from the job, as the crow
+# flies, isn't a sensible suggestion — no real point spending a Distance
+# Matrix API call (and a slot in RealGoogleMapsClient's 25-origins-per-
+# request batch) confirming that Glasgow is a long way from Aylesbury.
+# Generous rather than tight: UK driving distance often runs 1.3-1.4x
+# straight-line, and this is filtering out candidates entirely, not
+# just how they're ranked.
+_MAX_HOME_STRAIGHT_LINE_MILES = 75
+
+
+def _straight_line_miles(lat1, lng1, lat2, lng2):
+    lat1, lng1, lat2, lng2 = map(radians, (lat1, lng1, lat2, lng2))
+    dlat, dlng = lat2 - lat1, lng2 - lng1
+    a = sin(dlat / 2) ** 2 + cos(lat1) * cos(lat2) * sin(dlng / 2) ** 2
+    return 2 * _EARTH_RADIUS_MILES * asin(sqrt(a))
+
+
+def _home_origin(locksmith, job):
     """Google Distance Matrix origin string for this locksmith's home
     base — precise lat,lng when we have it (from Optimo's own "driver
     starting location" export, see apps.locksmiths.services — a proper
     coordinate is more accurate than a postcode's centroid), else
-    falling back to their home postcode. "" when neither is set."""
+    falling back to their home postcode. "" when neither is set, or when
+    a lat/lng home is clearly too far from this job to be worth a real
+    distance lookup (see _MAX_HOME_STRAIGHT_LINE_MILES) — a postcode-only
+    home can't be cheaply distance-checked this way (no coordinate to
+    measure from without geocoding it), so is always let through; there
+    are few enough of those on file that it doesn't matter."""
     if locksmith.home_latitude is not None and locksmith.home_longitude is not None:
+        distance = _straight_line_miles(
+            job.vehicle_latitude, job.vehicle_longitude,
+            locksmith.home_latitude, locksmith.home_longitude,
+        )
+        if distance > _MAX_HOME_STRAIGHT_LINE_MILES:
+            return ""
         return f"{locksmith.home_latitude},{locksmith.home_longitude}"
     return locksmith.home_postcode
 
@@ -93,7 +128,7 @@ def _nearest_locksmiths(job):
     # neither gets no origin at all, and so never enters the ranking.
     origins, origin_locksmiths, origin_attendances = [], [], []
     for locksmith in locksmiths:
-        home_origin = _home_origin(locksmith)
+        home_origin = _home_origin(locksmith, job)
         if home_origin:
             origins.append(home_origin)
             origin_locksmiths.append(locksmith)

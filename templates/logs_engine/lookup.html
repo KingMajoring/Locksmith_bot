@@ -73,7 +73,7 @@
         </p>
         <p class="sub" style="font-family:monospace;">{{ nearest_locksmiths_error }}</p>
       {% else %}
-        <p class="empty">No active locksmith has a home postcode set, and none has an already-booked future job nearby either.</p>
+        <p class="empty">No active locksmith is close enough to this job (or already has a future job booked nearby) to suggest.</p>
       {% endif %}
       {% if locksmiths_missing_postcode %}
         <p class="sub">{{ locksmiths_missing_postcode }} active locksmith{{ locksmiths_missing_postcode|pluralize }} {{ locksmiths_missing_postcode|pluralize:"has,have" }} no home postcode set, so {{ locksmiths_missing_postcode|pluralize:"isn't,aren't" }} included above unless they already have a future job booked nearby — <a href="{% url 'admin:locksmiths_locksmith_changelist' %}">add it in Admin</a>.</p>

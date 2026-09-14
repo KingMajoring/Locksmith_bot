@@ -10,6 +10,7 @@ from apps.integrations.handl import FutureLocksmithAttendance, JobDetails
 from apps.locksmiths.models import Locksmith, SoterLocksmithId
 
 from .templatetags.logs_engine_extras import drive_time_class
+from .views import _straight_line_miles
 
 
 def _job_with_location(**overrides):
@@ -154,6 +155,49 @@ class LogsEngineNearestLocksmithsTests(TestCase):
 
         call_origins = mock_get_maps.return_value.get_distances.call_args[0][0]
         self.assertEqual(call_origins, ["52.6075364,1.2922435"])
+        self.assertEqual(len(response.context["nearest_locksmiths"]), 1)
+
+    @patch("apps.logs_engine.views.get_google_maps_client")
+    @patch("apps.logs_engine.views.get_handl_client")
+    def test_home_lat_lng_too_far_away_excluded_before_calling_google(self, mock_get_handl, mock_get_maps):
+        # Job is near Norwich (see _job_with_location); this locksmith's
+        # home is in Glasgow, ~350+ miles away as the crow flies — not a
+        # sensible suggestion, and not worth a real API call confirming
+        # that.
+        Locksmith.objects.create(
+            name="WGTK - Too Far", home_postcode="G1 1AA",
+            home_latitude=55.8642, home_longitude=-4.2518,
+        )
+        mock_get_handl.return_value = MagicMock(
+            get_job_details=MagicMock(return_value={"501179": _job_with_location()}),
+            get_future_locksmith_attendances=MagicMock(return_value=[]),
+        )
+        mock_get_maps.return_value = MagicMock(get_distances=MagicMock(return_value=[]))
+
+        response = self.client.get(reverse("logs_engine:lookup"), {"report_id": "501179"})
+
+        mock_get_maps.return_value.get_distances.assert_not_called()
+        self.assertEqual(response.context["nearest_locksmiths"], [])
+
+    @patch("apps.logs_engine.views.get_google_maps_client")
+    @patch("apps.logs_engine.views.get_handl_client")
+    def test_postcode_only_home_never_distance_filtered(self, mock_get_handl, mock_get_maps):
+        # No lat/lng on file means no straight-line distance to check —
+        # always let a postcode-only home through rather than silently
+        # dropping it.
+        Locksmith.objects.create(name="WGTK - Postcode Only", home_postcode="G1 1AA")
+        mock_get_handl.return_value = MagicMock(
+            get_job_details=MagicMock(return_value={"501179": _job_with_location()}),
+            get_future_locksmith_attendances=MagicMock(return_value=[]),
+        )
+        mock_get_maps.return_value = MagicMock(get_distances=MagicMock(return_value=[
+            LocksmithDistance(origin="G1 1AA", distance_metres=560000.0, duration_seconds=30000, status="OK"),
+        ]))
+
+        response = self.client.get(reverse("logs_engine:lookup"), {"report_id": "501179"})
+
+        call_origins = mock_get_maps.return_value.get_distances.call_args[0][0]
+        self.assertEqual(call_origins, ["G1 1AA"])
         self.assertEqual(len(response.context["nearest_locksmiths"]), 1)
 
     @patch("apps.logs_engine.views.get_google_maps_client")
@@ -415,3 +459,13 @@ class DriveTimeClassFilterTests(TestCase):
 
     def test_none_is_blank(self):
         self.assertEqual(drive_time_class(None), "")
+
+
+class StraightLineMilesTests(TestCase):
+    def test_known_distance_london_to_paris(self):
+        # Real-world reference distance, ~213 miles as the crow flies.
+        miles = _straight_line_miles(51.5074, -0.1278, 48.8566, 2.3522)
+        self.assertAlmostEqual(miles, 213, delta=5)
+
+    def test_zero_for_the_same_point(self):
+        self.assertAlmostEqual(_straight_line_miles(52.63, 1.29, 52.63, 1.29), 0, delta=0.001)
