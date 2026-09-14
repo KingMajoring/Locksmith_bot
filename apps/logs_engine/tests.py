@@ -452,9 +452,10 @@ class LogsEngineNearestLocksmithsTests(TestCase):
         self.assertContains(response, "Already booked nearby")
         # 12 min there (NR14 8PL) + 40 min job + 50 min back home (IP1 2AB)
         self.assertEqual(best.total_minutes, 12 + 40 + 50)
-        # The booked job is tomorrow, not today, so today's count is 0
-        # even though it's still an option above.
-        self.assertEqual(card.future_job_count, 0)
+        # The attendance option's own day has just itself booked; the
+        # home option's day (today) has nothing booked at all.
+        self.assertEqual(best.day_job_count, 1)
+        self.assertEqual(card.options[1].day_job_count, 0)
 
         first_call_origins = mock_get_maps.return_value.get_distances.call_args_list[0][0][0]
         self.assertEqual(first_call_origins, ["IP1 2AB", "NR14 8PL"])
@@ -465,10 +466,10 @@ class LogsEngineNearestLocksmithsTests(TestCase):
     @patch("apps.logs_engine.views.get_handl_client")
     def test_card_lists_every_booked_job_within_window_as_its_own_option(self, mock_get_handl, mock_get_maps):
         # Every job booked within the window becomes its own option on
-        # the card (not just one "best" row), even though none of them
-        # are booked for today — future_job_count is scoped to today
-        # only (see test_todays_job_count_excludes_jobs_on_other_days),
-        # a different, narrower slice than the options shown here.
+        # the card (not just one "best" row) — each on its own distinct
+        # day here, so each option's day_job_count only ever counts
+        # itself (see test_day_job_count_scoped_to_each_options_own_day
+        # for a case where two options share the same day).
         locksmith = Locksmith.objects.create(name="WGTK - Busy Andrew", home_postcode="NR14 8PL")
         SoterLocksmithId.objects.create(locksmith=locksmith, soter_locksmith_id="1204")
 
@@ -513,15 +514,15 @@ class LogsEngineNearestLocksmithsTests(TestCase):
         nearest = response.context["nearest_locksmiths"]
         self.assertEqual(len(nearest), 1)
         card = nearest[0]
-        # None of the 3 booked jobs are today, so today's count is 0
-        # even though all 3 are close enough in the week ahead to
-        # appear as options below.
-        self.assertEqual(card.future_job_count, 0)
         # All 4 candidates (home + 3 future jobs) survive as options.
         self.assertEqual(len(card.options), 4)
         self.assertEqual(card.options[0].attendance.vehicle_reg, "LATER1")  # closest wins, not the soonest
         vehicle_regs = {o.attendance.vehicle_reg for o in card.options if o.attendance}
         self.assertEqual(vehicle_regs, {"LATER1", "SOONEST1", "LATER2"})
+        # Each is on its own distinct day, so each only counts itself —
+        # home's day (today) has nothing booked at all.
+        for option in card.options:
+            self.assertEqual(option.day_job_count, 1 if option.attendance else 0)
 
         first_call_origins = mock_get_maps.return_value.get_distances.call_args_list[0][0][0]
         self.assertEqual(first_call_origins, ["NR14 8PL", "CB1 2AB", "IP1 2AB", "PE1 3AA"])
@@ -550,20 +551,20 @@ class LogsEngineNearestLocksmithsTests(TestCase):
         response = self.client.get(reverse("logs_engine:lookup"), {"report_id": "501179"})
 
         card = response.context["nearest_locksmiths"][0]
-        self.assertTrue(card.map_url)
-        self.assertIn("staticmap", card.map_url)
-        self.assertIn("IP1+2AB", card.map_url)  # their booked job today, in red
+        attendance_option = next(o for o in card.options if o.attendance is not None)
+        self.assertTrue(attendance_option.map_url)
+        self.assertIn("staticmap", attendance_option.map_url)
+        self.assertIn("IP1+2AB", attendance_option.map_url)  # their booked job that day, in red
         self.assertContains(response, "map-preview-trigger")
 
     @override_settings(GOOGLE_MAPS_API_KEY="test-key")
     @patch("apps.logs_engine.views.get_google_maps_client")
     @patch("apps.logs_engine.views.get_handl_client")
-    def test_todays_job_count_excludes_jobs_on_other_days(self, mock_get_handl, mock_get_maps):
-        # future_job_count/map_url are meant to answer "how busy is this
-        # locksmith TODAY", not "ever" — a job booked in for later this
-        # week shouldn't count or show up on the map here, even though
-        # it's still a selectable option in its own right (see
-        # test_card_lists_every_booked_job_within_window_as_its_own_option).
+    def test_day_job_count_scoped_to_each_options_own_day(self, mock_get_handl, mock_get_maps):
+        # day_job_count/map_url answer "how busy is this locksmith on
+        # THIS option's own day" — a job booked in for a different day
+        # shouldn't count towards, or appear on the map for, an option
+        # on another day, even on the same card.
         locksmith = Locksmith.objects.create(name="WGTK - Nearby", home_postcode="NR14 8PL")
         SoterLocksmithId.objects.create(locksmith=locksmith, soter_locksmith_id="1204")
         mock_get_handl.return_value = MagicMock(
@@ -590,13 +591,21 @@ class LogsEngineNearestLocksmithsTests(TestCase):
         response = self.client.get(reverse("logs_engine:lookup"), {"report_id": "501179"})
 
         card = response.context["nearest_locksmiths"][0]
-        # Only the one booked in for today counts.
-        self.assertEqual(card.future_job_count, 1)
-        self.assertIn("IP1+2AB", card.map_url)  # today's job, plotted
-        self.assertNotIn("CB1+2AB", card.map_url)  # later this week, not plotted
-        # Both still show up as their own selectable options though.
-        vehicle_regs = {o.attendance.vehicle_reg for o in card.options if o.attendance}
-        self.assertEqual(vehicle_regs, {"TODAY1", "LATER1"})
+        home_option = next(o for o in card.options if o.attendance is None)
+        by_reg = {o.attendance.vehicle_reg: o for o in card.options if o.attendance}
+
+        # Home (today) and TODAY1 (also today) share the same day, so
+        # both see just the one job actually booked in for today.
+        self.assertEqual(home_option.day_job_count, 1)
+        self.assertIn("IP1+2AB", home_option.map_url)
+        self.assertEqual(by_reg["TODAY1"].day_job_count, 1)
+        self.assertIn("IP1+2AB", by_reg["TODAY1"].map_url)
+
+        # LATER1's own day (3 days out) has only itself booked —
+        # today's job doesn't leak into its count or its map.
+        self.assertEqual(by_reg["LATER1"].day_job_count, 1)
+        self.assertIn("CB1+2AB", by_reg["LATER1"].map_url)
+        self.assertNotIn("IP1+2AB", by_reg["LATER1"].map_url)
 
     @patch("apps.logs_engine.views.get_google_maps_client")
     @patch("apps.logs_engine.views.get_handl_client")
@@ -612,9 +621,9 @@ class LogsEngineNearestLocksmithsTests(TestCase):
 
         response = self.client.get(reverse("logs_engine:lookup"), {"report_id": "501179"})
 
-        card = response.context["nearest_locksmiths"][0]
-        self.assertEqual(card.map_url, "")
-        self.assertEqual(card.future_job_count, 0)
+        option = response.context["nearest_locksmiths"][0].options[0]
+        self.assertEqual(option.map_url, "")
+        self.assertEqual(option.day_job_count, 0)
 
     @patch("apps.logs_engine.views.get_teams_shifts_client")
     @patch("apps.logs_engine.views.get_google_maps_client")

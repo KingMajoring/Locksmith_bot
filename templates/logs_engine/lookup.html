@@ -35,10 +35,11 @@
         have booked in over the next week (not just the soonest one).
         Each option's total time is the drive there, ~{{ job_duration_minutes }}
         min for the job itself, then the drive back home. Outbound drive
-        capped at 2 hours. "Jobs booked today" covers just today's
-        workload, not the options shown above (those look ahead a
-        week) — hover it for a map. Shift status (Teams) is shown but
-        doesn't filter the list — check before assigning either way.
+        capped at 2 hours. "Jobs that day" is how busy this locksmith
+        already is on THAT option's own day (today for home, that job's
+        date for an already-booked option) — hover it for a map. Shift
+        status (Teams) is shown but doesn't filter the list — check
+        before assigning either way.
       </p>
       {% if nearest_locksmiths %}
         {% for card in nearest_locksmiths %}
@@ -51,21 +52,8 @@
                 <span class="shift-badge off">Off shift</span>
               {% endif %}
             </h3>
-            <p class="sub">
-              {% if card.map_url %}
-                <span class="map-preview-trigger">
-                  {{ card.future_job_count }} job{{ card.future_job_count|pluralize }} booked in today
-                  <span class="map-preview">
-                    <img src="{{ card.map_url }}" width="400" height="300"
-                         alt="Map for {{ card.locksmith.name }} — this job in blue, their other booked jobs today in red">
-                  </span>
-                </span>
-              {% else %}
-                {{ card.future_job_count }} job{{ card.future_job_count|pluralize }} booked in today
-              {% endif %}
-            </p>
             <table>
-              <tr><th>Option</th><th>Distance</th><th>Drive time</th><th>Total time</th></tr>
+              <tr><th>Option</th><th>Distance</th><th>Drive time</th><th>Total time</th><th>Jobs that day</th></tr>
               {% for option in card.options %}
                 <tr>
                   <td>
@@ -74,7 +62,7 @@
                       {{ option.attendance.vehicle_reg|default:"job" }},
                       {{ option.attendance.available_from|date:"D j M, H:i" }})
                     {% else %}
-                      Home location{% if card.locksmith.home_postcode %} ({{ card.locksmith.home_postcode }}){% endif %}
+                      Home location (today){% if card.locksmith.home_postcode %}, {{ card.locksmith.home_postcode }}{% endif %}
                     {% endif %}
                   </td>
                   <td>{{ option.distance.distance_miles }} mi</td>
@@ -84,6 +72,19 @@
                       <span class="drive-time-pill {{ option.total_minutes|drive_time_class }}">{{ option.total_minutes }} min</span>
                     {% else %}
                       <span class="sub">unknown — no home location on file</span>
+                    {% endif %}
+                  </td>
+                  <td>
+                    {% if option.map_url %}
+                      <span class="map-preview-trigger">
+                        {{ option.day_job_count }} job{{ option.day_job_count|pluralize }}
+                        <span class="map-preview">
+                          <img src="{{ option.map_url }}" width="400" height="300"
+                               alt="Map for {{ card.locksmith.name }} on this option's day — this job in blue, their other booked jobs that day in red">
+                        </span>
+                      </span>
+                    {% else %}
+                      {{ option.day_job_count }} job{{ option.day_job_count|pluralize }}
                     {% endif %}
                   </td>
                 </tr>
