@@ -57,6 +57,7 @@ class MockHandlClientTests(TestCase):
             self.assertTrue(job.vehicle_address)
             self.assertIsNotNone(job.vehicle_latitude)
             self.assertIsNotNone(job.vehicle_longitude)
+            self.assertIsNotNone(job.quoted_price)
 
     def test_get_job_details_is_deterministic_per_report_id(self):
         first = self.client.get_job_details(["1001"])["1001"]
@@ -402,6 +403,7 @@ class SQLHandlClientTests(TestCase):
                 "LossEvent": "Lost Keys",
                 "SuppliedService": "Key Programming",
                 "NetCost": 145.5,
+                "QuotedPrice": 60.0,
                 "ClientName": "Sarah Jones",
                 "OrganisationName": None,
                 "ClientPhone": "07700900123",
@@ -426,6 +428,7 @@ class SQLHandlClientTests(TestCase):
         self.assertIn("Lookup_KeyType", query)
         self.assertIn("Lookup_LossEvent_Details", query)
         self.assertIn("Lookup_LocksmithSuppliedServices", query)
+        self.assertIn("Policy_LocksmithDetails", query)
         self.assertIn("Policy_Financial", query)
         self.assertIn("Policy_HolderDetails", query)
         self.assertIn("Policy_BrokersDetails", query)
@@ -441,6 +444,7 @@ class SQLHandlClientTests(TestCase):
         self.assertEqual(job.loss_type, "Lost Keys")
         self.assertEqual(job.supplied_service, "Key Programming")
         self.assertEqual(job.net_cost, 145.5)
+        self.assertEqual(job.quoted_price, 60.0)
         self.assertIs(job.spare_key, False)
         self.assertEqual(job.vehicle_address, "42 Corsehill Crescent, Hamilton, Lanarkshire")
         self.assertEqual(job.vehicle_latitude, 55.7536673)
@@ -464,6 +468,7 @@ class SQLHandlClientTests(TestCase):
                 "LossEvent": "Lost Keys",
                 "SuppliedService": "Key Programming",
                 "NetCost": 145.5,
+                "QuotedPrice": 60.0,
                 "ClientName": "Sarah Jones",
                 "OrganisationName": None,
                 "ClientPhone": "07700900123",
@@ -497,6 +502,7 @@ class SQLHandlClientTests(TestCase):
                 "LossEvent": "Lost Keys",
                 "SuppliedService": "Key Programming",
                 "NetCost": 145.5,
+                "QuotedPrice": 60.0,
                 "ClientName": "",
                 "OrganisationName": "Acme Fleet Ltd",
                 "ClientPhone": "",
@@ -534,6 +540,7 @@ class SQLHandlClientTests(TestCase):
                 "LossEvent": "Lost Keys",
                 "SuppliedService": "Key Programming",
                 "NetCost": 100.0,
+                "QuotedPrice": 60.0,
                 "ClientName": "Sarah Jones",
                 "OrganisationName": None,
                 "ClientPhone": "07700900123",
@@ -578,6 +585,7 @@ class SQLHandlClientTests(TestCase):
                 "LossEvent": "Lost",
                 "SuppliedService": "",
                 "NetCost": None,
+                "QuotedPrice": 60.0,
                 "ClientName": "Sarah Jones",
                 "OrganisationName": None,
                 "ClientPhone": "07700900123",
@@ -616,6 +624,7 @@ class SQLHandlClientTests(TestCase):
                 "LossEvent": "Lost Keys",
                 "SuppliedService": "Key Programming",
                 "NetCost": None,
+                "QuotedPrice": None,
                 "ClientName": "Sarah Jones",
                 "OrganisationName": None,
                 "ClientPhone": "07700900123",
@@ -634,6 +643,7 @@ class SQLHandlClientTests(TestCase):
         with patch.object(client, "_connection", return_value=fake_conn):
             details = client.get_job_details(["496390"])
         self.assertIsNone(details["496390"].net_cost)
+        self.assertIsNone(details["496390"].quoted_price)
         self.assertIsNone(details["496390"].spare_key)
 
     def test_get_job_details_spare_key_true_maps_to_true(self):
@@ -650,6 +660,7 @@ class SQLHandlClientTests(TestCase):
                 "LossEvent": "Lost Keys",
                 "SuppliedService": "Key Programming",
                 "NetCost": 100.0,
+                "QuotedPrice": 60.0,
                 "ClientName": "Sarah Jones",
                 "OrganisationName": None,
                 "ClientPhone": "07700900123",

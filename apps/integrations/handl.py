@@ -60,6 +60,13 @@ class JobDetails:
     loss_type: str
     supplied_service: str
     net_cost: float | None
+    # Policy_LocksmithDetails.QuotedPrice (same Selected=1 row as
+    # supplied_service) — available from when the job was quoted/booked,
+    # unlike net_cost which stays null/stale until office invoices the
+    # job days later (confirmed live: a job completed minutes earlier
+    # showed £0 van earnings from net_cost alone). What the portal's own
+    # live "today" earnings figure uses instead.
+    quoted_price: float | None = None
     # Policy_KeyClaims.SpareKey (confirmed live against a real AKL job)
     # — False means the customer has no spare key anywhere, so the
     # locksmith has no way in without picking/forcing entry, same as a
@@ -434,6 +441,7 @@ class MockHandlClient(HandlClient):
                 loss_type=rng.choice(self._LOSS_TYPES),
                 supplied_service=rng.choice(self._SUPPLIED_SERVICES),
                 net_cost=round(rng.uniform(60, 350), 2),
+                quoted_price=round(rng.uniform(60, 350), 2),
                 spare_key=rng.choice([True, False]),
                 vehicle_address=", ".join(line for line in address_lines if line),
                 vehicle_latitude=lat,
@@ -847,9 +855,18 @@ class SQLHandlClient(HandlClient):
                 WHERE p.ReportID IN ({id_placeholders})
             ),
             SuppliedServiceRanked AS (
+                -- QuotedPrice rides along on this same row (same
+                -- Selected=1 locksmith-details row already being read
+                -- for SuppliedService) — unlike Policy_Financial.NetCost,
+                -- which only gets populated once office invoices the job
+                -- (confirmed live: a job marked complete minutes earlier
+                -- showed £0 van earnings because of exactly this lag),
+                -- QuotedPrice is there from when the job was quoted/
+                -- booked, so it's what today's live stats use instead.
                 SELECT
                     pld.ReportID,
                     llss.Service AS SuppliedService,
+                    pld.QuotedPrice,
                     ROW_NUMBER() OVER (PARTITION BY pld.ReportID ORDER BY pld.ID DESC) AS rn
                 FROM Policy_LocksmithDetails pld
                 LEFT JOIN Lookup_LocksmithSuppliedServices llss
@@ -948,7 +965,7 @@ class SQLHandlClient(HandlClient):
             )
             SELECT
                 v.ReportID, v.Make, v.Model, v.yearOfManufacture, v.VehicleReg, v.VehicleVIN, v.KeyType,
-                v.SpareKey, lt.LossEvent, ss.SuppliedService, f.NetCost,
+                v.SpareKey, lt.LossEvent, ss.SuppliedService, ss.QuotedPrice, f.NetCost,
                 hp.ClientName, hp.OrganisationName, hp.ClientPhone, br.BrokerName, ld.DetailOfLoss,
                 ld.VehicleAddress1, ld.VehicleAddress2, ld.VehicleAddress3, ld.VehicleAddress4,
                 ld.VehicleAddressLatitude, ld.VehicleAddressLongitude
@@ -1007,6 +1024,7 @@ class SQLHandlClient(HandlClient):
                 loss_type=row["LossEvent"] or "",
                 supplied_service=row["SuppliedService"] or "",
                 net_cost=float(row["NetCost"]) if row["NetCost"] is not None else None,
+                quoted_price=float(row["QuotedPrice"]) if row["QuotedPrice"] is not None else None,
                 spare_key=bool(row["SpareKey"]) if row["SpareKey"] is not None else None,
                 vehicle_address=vehicle_address,
                 vehicle_latitude=(

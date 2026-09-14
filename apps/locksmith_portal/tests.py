@@ -643,9 +643,13 @@ class DashboardTests(TestCase):
             completed_at=timezone.now(),
         )
         mock_get_handl.return_value = MagicMock(get_job_details=MagicMock(return_value={
+            # net_cost deliberately left unset (None) — today's live
+            # figure must come from quoted_price, since net_cost isn't
+            # populated until office invoices the job days later.
             "5": JobDetails(
                 report_id="5", make="", model="", year="", reg="", vin="",
-                service_type="", loss_type="", supplied_service="", net_cost=50.0,
+                service_type="", loss_type="", supplied_service="", net_cost=None,
+                quoted_price=50.0,
             ),
         }))
 

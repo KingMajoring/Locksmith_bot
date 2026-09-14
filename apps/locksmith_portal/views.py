@@ -586,13 +586,21 @@ def _avg_duration_minutes(queryset):
 
 def _todays_live_stats(locksmith, today):
     """This locksmith's job counts/van earnings for *today* specifically,
-    computed live from JobVisit (+ a live Handl lookup for net_cost)
+    computed live from JobVisit (+ a live Handl lookup for the price)
     rather than CompletedJob, which only gets today's jobs once
     tonight's pull_completed_jobs run happens — until then a job
     finished five minutes ago in the portal wouldn't move the numbers
     at all, which reads as the stats not updating. cancelled visits
     (never attended) are excluded, same as CompletedJob's own
-    success/failed-only Status choices."""
+    success/failed-only Status choices.
+
+    Uses quoted_price rather than net_cost for the earnings figure —
+    net_cost (Policy_Financial) only gets populated once office
+    invoices the job, days after it's actually done, so it's reliably
+    empty for anything finished today (confirmed live: a job marked
+    complete minutes earlier showed £0 here). quoted_price
+    (Policy_LocksmithDetails, same row as supplied_service) is there
+    from when the job was quoted/booked."""
     visits_today = list(
         JobVisit.objects.filter(
             locksmith=locksmith, completed_at__date=today,
@@ -609,9 +617,9 @@ def _todays_live_stats(locksmith, today):
             logger.exception("Failed to fetch Handl job details for today's live stats")
             details = {}
         van_earnings = sum(
-            details[v.report_id].net_cost
+            details[v.report_id].quoted_price
             for v in completed_today
-            if v.report_id in details and details[v.report_id].net_cost
+            if v.report_id in details and details[v.report_id].quoted_price
         )
 
     return {
