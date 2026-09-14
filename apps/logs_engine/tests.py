@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
 from django.urls import reverse
+from django.utils import timezone as django_timezone
 
 from apps.integrations.google_maps import LocksmithDistance
 from apps.integrations.handl import FutureLocksmithAttendance, JobDetails
@@ -533,12 +534,16 @@ class LogsEngineNearestLocksmithsTests(TestCase):
     def test_map_url_present_when_api_key_configured(self, mock_get_handl, mock_get_maps):
         locksmith = Locksmith.objects.create(name="WGTK - Nearby", home_postcode="NR14 8PL")
         SoterLocksmithId.objects.create(locksmith=locksmith, soter_locksmith_id="1204")
+        # Anchored to Django's own (Europe/London) notion of "now", same
+        # as the view uses — plain datetime.now() reads the container's
+        # system clock, which can be a different date near midnight.
+        now = django_timezone.localtime(django_timezone.now()).replace(tzinfo=None)
         mock_get_handl.return_value = MagicMock(
             get_job_details=MagicMock(return_value={"501179": _job_with_location()}),
             get_future_locksmith_attendances=MagicMock(return_value=[
                 FutureLocksmithAttendance(
                     report_id="502000", soter_locksmith_id="1204", locksmith_name="WGTK - Nearby",
-                    available_from=datetime.now() + timedelta(hours=2),  # today
+                    available_from=now + timedelta(hours=1),  # today
                     vehicle_postcode="IP1 2AB", vehicle_reg="AB20 CDE",
                 ),
             ]),
@@ -567,17 +572,21 @@ class LogsEngineNearestLocksmithsTests(TestCase):
         # on another day, even on the same card.
         locksmith = Locksmith.objects.create(name="WGTK - Nearby", home_postcode="NR14 8PL")
         SoterLocksmithId.objects.create(locksmith=locksmith, soter_locksmith_id="1204")
+        # Anchored to Django's own (Europe/London) notion of "now", same
+        # as the view uses — plain datetime.now() reads the container's
+        # system clock, which can be a different date near midnight.
+        now = django_timezone.localtime(django_timezone.now()).replace(tzinfo=None)
         mock_get_handl.return_value = MagicMock(
             get_job_details=MagicMock(return_value={"501179": _job_with_location()}),
             get_future_locksmith_attendances=MagicMock(return_value=[
                 FutureLocksmithAttendance(
                     report_id="502000", soter_locksmith_id="1204", locksmith_name="WGTK - Nearby",
-                    available_from=datetime.now() + timedelta(hours=2),  # today
+                    available_from=now + timedelta(hours=1),  # today
                     vehicle_postcode="IP1 2AB", vehicle_reg="TODAY1",
                 ),
                 FutureLocksmithAttendance(
                     report_id="502001", soter_locksmith_id="1204", locksmith_name="WGTK - Nearby",
-                    available_from=datetime.now() + timedelta(days=3),
+                    available_from=now + timedelta(days=3),
                     vehicle_postcode="CB1 2AB", vehicle_reg="LATER1",
                 ),
             ]),
@@ -654,6 +663,7 @@ class LogsEngineNearestLocksmithsTests(TestCase):
         card = response.context["nearest_locksmiths"][0]
         self.assertTrue(card.on_shift)
         self.assertContains(response, "On shift")
+        self.assertEqual(card.expected_home, now + timedelta(hours=1))
         mock_get_shifts.return_value.list_shifts_for_date.assert_called_once_with(now.date())
 
     @patch("apps.logs_engine.views.get_teams_shifts_client")
@@ -729,6 +739,9 @@ class LogsEngineNearestLocksmithsTests(TestCase):
         card = response.context["nearest_locksmiths"][0]
         self.assertIs(card.on_shift, False)
         self.assertContains(response, "Off shift")
+        # Still shown even though it's already passed — that's the
+        # point: it tells a human they've already finished for today.
+        self.assertEqual(card.expected_home, now - timedelta(hours=5))
 
     @patch("apps.logs_engine.views.get_teams_shifts_client")
     @patch("apps.logs_engine.views.get_google_maps_client")
@@ -747,6 +760,7 @@ class LogsEngineNearestLocksmithsTests(TestCase):
 
         card = response.context["nearest_locksmiths"][0]
         self.assertIsNone(card.on_shift)
+        self.assertIsNone(card.expected_home)
         mock_get_shifts.assert_not_called()
 
     @patch("apps.logs_engine.views.get_teams_shifts_client")
@@ -772,6 +786,7 @@ class LogsEngineNearestLocksmithsTests(TestCase):
         self.assertEqual(response.status_code, 200)
         card = response.context["nearest_locksmiths"][0]
         self.assertIsNone(card.on_shift)
+        self.assertIsNone(card.expected_home)
         self.assertEqual(
             response.context["on_shift_error"],
             "Graph request failed: 403 Forbidden — Insufficient privileges",
@@ -785,6 +800,7 @@ class LogsEngineNearestLocksmithsTests(TestCase):
         locksmith = Locksmith.objects.create(name="WGTK - Andrew S", home_postcode="NR14 8PL")
         SoterLocksmithId.objects.create(locksmith=locksmith, soter_locksmith_id="1204")
 
+        attendance_start = datetime.now() + timedelta(days=1)
         mock_get_handl.return_value = MagicMock(
             get_job_details=MagicMock(return_value={"501179": _job_with_location()}),
             get_future_locksmith_attendances=MagicMock(return_value=[
@@ -792,7 +808,7 @@ class LogsEngineNearestLocksmithsTests(TestCase):
                     report_id="502000",
                     soter_locksmith_id="1204",
                     locksmith_name="WGTK - Andrew S",
-                    available_from=datetime.now() + timedelta(days=1),
+                    available_from=attendance_start,
                     vehicle_postcode="IP1 2AB",
                     vehicle_reg="AB20 CDE",
                 ),
@@ -812,7 +828,9 @@ class LogsEngineNearestLocksmithsTests(TestCase):
             ],
         ]))
 
+        before_request = django_timezone.localtime(django_timezone.now()).replace(tzinfo=None)
         response = self.client.get(reverse("logs_engine:lookup"), {"report_id": "501179"})
+        after_request = django_timezone.localtime(django_timezone.now()).replace(tzinfo=None)
 
         nearest = response.context["nearest_locksmiths"]
         self.assertEqual(len(nearest), 1)
@@ -824,9 +842,21 @@ class LogsEngineNearestLocksmithsTests(TestCase):
         self.assertIsNone(best.attendance)
         self.assertContains(response, "Home location")
         self.assertEqual(best.total_minutes, 12 + 40 + 12)
+        # Home option: departs "now" — expected_home_after lands
+        # somewhere in [now, now+64min] bracketed by the request itself.
+        self.assertGreaterEqual(best.expected_home_after, before_request + timedelta(minutes=12 + 40 + 12))
+        self.assertLessEqual(best.expected_home_after, after_request + timedelta(minutes=12 + 40 + 12))
+
         worst = card.options[1]
         self.assertIsNotNone(worst.attendance)
         self.assertEqual(worst.total_minutes, 50 + 40 + 12)
+        # Future-job option: departs once they finish that booked job
+        # (its own start + the job duration), not "now" — so this
+        # lands tomorrow, not today.
+        self.assertEqual(
+            worst.expected_home_after,
+            attendance_start + timedelta(minutes=40) + timedelta(minutes=50 + 40 + 12),
+        )
 
     @patch("apps.logs_engine.views.get_google_maps_client")
     @patch("apps.logs_engine.views.get_handl_client")

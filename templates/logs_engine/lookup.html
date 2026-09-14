@@ -33,13 +33,16 @@
         One card per locksmith, listing every sensible option for getting
         them to this job — their home location, and any job they already
         have booked in over the next week (not just the soonest one).
-        Each option's total time is the drive there, ~{{ job_duration_minutes }}
-        min for the job itself, then the drive back home. Outbound drive
-        capped at 2 hours. "Jobs that day" is how busy this locksmith
-        already is on THAT option's own day (today for home, that job's
-        date for an already-booked option) — hover it for a map. Shift
-        status (Teams) is shown but doesn't filter the list — check
-        before assigning either way.
+        "Expected home" is when this locksmith would actually walk in
+        their own front door if sent on this job — the drive there,
+        ~{{ job_duration_minutes }} min for the job itself, then the
+        drive back home — next to when Teams says they're normally due
+        home today anyway, this job aside. Outbound drive capped at 2
+        hours. "Jobs that day" is how busy this locksmith already is on
+        THAT option's own day (today for home, that job's date for an
+        already-booked option) — hover it for a map. Shift status
+        (Teams) is shown but doesn't filter the list — check before
+        assigning either way.
       </p>
       {% if nearest_locksmiths %}
         {% for card in nearest_locksmiths %}
@@ -53,7 +56,7 @@
               {% endif %}
             </h3>
             <table>
-              <tr><th>Option</th><th>Distance</th><th>Drive time</th><th>Total time</th><th>Jobs that day</th></tr>
+              <tr><th>Option</th><th>Distance</th><th>Drive time</th><th>Expected home</th><th>Jobs that day</th></tr>
               {% for option in card.options %}
                 <tr>
                   <td>
@@ -68,10 +71,13 @@
                   <td>{{ option.distance.distance_miles }} mi</td>
                   <td><span class="drive-time-pill {{ option.distance.duration_minutes|drive_time_class }}">{{ option.distance.duration_minutes }} min</span></td>
                   <td>
-                    {% if option.total_minutes is not None %}
-                      <span class="drive-time-pill {{ option.total_minutes|drive_time_class }}">{{ option.total_minutes }} min</span>
+                    {% if option.expected_home_after %}
+                      <span class="drive-time-pill {{ option.total_minutes|drive_time_class }}">{{ option.expected_home_after|date:"D, H:i" }}</span>
                     {% else %}
                       <span class="sub">unknown — no home location on file</span>
+                    {% endif %}
+                    {% if card.expected_home %}
+                      <div class="sub">normally home today {{ card.expected_home|date:"H:i" }}</div>
                     {% endif %}
                   </td>
                   <td>

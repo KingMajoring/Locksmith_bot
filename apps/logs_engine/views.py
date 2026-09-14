@@ -23,7 +23,19 @@ dropped, home or future job alike. Ranking also isn't just the drive
 there: a locksmith has to actually do the job (see
 _JOB_DURATION_MINUTES) and then get home afterwards, so
 LocksmithOption.total_minutes covers the whole round trip, not just
-the outbound leg — see _nearest_locksmiths.
+the outbound leg, and expected_home_after is that same round trip
+expressed as an actual clock time — when they'd actually walk in the
+door if sent on this job — anchored to when they'd realistically set
+off: right now for the home option, or when they'd finish their
+already-booked job for a future-job option (that job's own start time
++ _JOB_DURATION_MINUTES), not "now" for every option regardless of
+which day it's actually on. LocksmithCard.expected_home is the
+BEFORE to that AFTER — when Microsoft Teams Shifts says they're
+normally due home today anyway, this job aside — so a human can see at
+a glance whether sending them somewhere actually changes their day.
+Both are None when there's nothing to base them on (no home location
+on file, no shift on file for today, Teams unreachable, etc.) — see
+_nearest_locksmiths/_shift_info_by_locksmith.
 Each option also carries its OWN day_job_count/map_url (a small Static
 Maps preview: this job in blue, this locksmith's other booked jobs
 that SAME day in red) — a locksmith with options spread across several
@@ -43,7 +55,7 @@ alongside the rest: a human still picks from the list.
 """
 import logging
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from math import asin, cos, radians, sin, sqrt
 
 from django.contrib.auth.decorators import login_required
@@ -104,9 +116,16 @@ class LocksmithOption:
     distance: LocksmithDistance
     attendance: FutureLocksmithAttendance | None
     # Outbound drive + _JOB_DURATION_MINUTES + the drive back home
-    # afterwards — None when the return leg couldn't be resolved (no
-    # home location on file at all, or that lookup itself failed).
+    # afterwards, as a duration — None when the return leg couldn't be
+    # resolved (no home location on file at all, or that lookup itself
+    # failed). Kept for sorting/colour-coding; expected_home_after is
+    # the figure actually shown to office staff.
     total_minutes: int | None
+    # The same round trip as total_minutes, but as an actual
+    # clock-time: when this locksmith would walk in their own front
+    # door if sent on this job. None under the same conditions as
+    # total_minutes (nothing to add the round trip on top of).
+    expected_home_after: datetime | None
     # How many jobs this locksmith already has booked in on THIS
     # option's day — today for the home option, or that future job's
     # own date for a future-job option. Includes this option's own job
@@ -129,6 +148,11 @@ class LocksmithCard:
     # configured, no email on file, or the Graph call itself failed),
     # distinct from False ("checked, and they're not on shift").
     on_shift: bool | None
+    # When Teams expects this locksmith to finish (and be home) TODAY,
+    # this job aside — the BEFORE to each option's expected_home_after.
+    # None when there's no shift on file for today at all (a day off),
+    # or the Teams lookup itself failed/isn't configured.
+    expected_home: datetime | None
 
 
 def _straight_line_miles(lat1, lng1, lat2, lng2):
@@ -202,18 +226,32 @@ def _future_attendance_summary_by_locksmith(locksmiths, *, now):
     return summary
 
 
-def _on_shift_locksmith_pks(locksmiths, *, now):
-    """({locksmith.pk, ...} | None, error_message) for every one of
-    these locksmiths currently inside a published Teams Shift right
-    now — not just scheduled sometime today. The set is None (not just
-    empty) when this couldn't be checked at all, so callers can tell
-    "confirmed nobody's on shift" apart from "the lookup failed" rather
-    than defaulting every locksmith to off-shift on a Graph outage or
-    missing Team ID. error_message is set (and the set None) only when
-    there WERE emails to check but the Teams/Graph call itself failed —
-    same rationale as _nearest_locksmiths' own error_message: worth
-    surfacing directly, since this office tool has no other easy way to
-    see it.
+@dataclass(frozen=True)
+class ShiftInfo:
+    # Whether this locksmith is currently inside a published Teams
+    # Shift right now — not just scheduled sometime today.
+    on_shift: bool
+    # The latest shift_end among today's published shifts for this
+    # locksmith — when Teams expects them home today. None when they
+    # have no shift on file for today at all (a day off).
+    expected_home: datetime | None
+
+
+def _shift_info_by_locksmith(locksmiths, *, now):
+    """({locksmith.pk: ShiftInfo} | None, error_message).
+
+    The dict is None (not just empty) when this couldn't be checked at
+    all, so callers can tell "confirmed nobody's on shift, and nobody
+    has a shift on file today" apart from "the lookup failed" rather
+    than defaulting every locksmith to off-shift/no-shift-data on a
+    Graph outage or missing Team ID. error_message is set (and the
+    dict None) only when there WERE emails to check but the
+    Teams/Graph call itself failed — same rationale as
+    _nearest_locksmiths' own error_message: worth surfacing directly,
+    since this office tool has no other easy way to see it. A
+    locksmith with no email on file at all just gets on_shift=False,
+    expected_home=None (as if they simply have no shift today), same
+    as before this function also tracked expected_home.
 
     Matches by Locksmith.user.email (the real Microsoft sign-in email,
     verified the first time this locksmith actually logged in — see
@@ -234,8 +272,19 @@ def _on_shift_locksmith_pks(locksmiths, *, now):
     except Exception as exc:
         logger.exception("Failed to fetch Teams shifts for Logs Engine")
         return None, str(exc)
-    on_shift_emails = {s.email.lower() for s in shifts if s.shift_start <= now <= s.shift_end}
-    return {pk for pk, email in emails_by_pk.items() if email in on_shift_emails}, ""
+
+    shifts_by_email = {}
+    for shift in shifts:
+        shifts_by_email.setdefault(shift.email.lower(), []).append(shift)
+
+    result = {}
+    for locksmith in locksmiths:
+        todays_shifts = shifts_by_email.get(emails_by_pk.get(locksmith.pk, ""), [])
+        result[locksmith.pk] = ShiftInfo(
+            on_shift=any(s.shift_start <= now <= s.shift_end for s in todays_shifts),
+            expected_home=max((s.shift_end for s in todays_shifts), default=None),
+        )
+    return result, ""
 
 
 def _return_minutes_by_locksmith(locksmiths_needing_return, job):
@@ -302,7 +351,7 @@ def _nearest_locksmiths(job):
     tool has no other easy way to see that. Empty list with no error
     just means no locksmith had a usable location, or none resolved.
     on_shift_error is the same idea for the Teams Shifts lookup (see
-    _on_shift_locksmith_pks) — set only when that call itself failed,
+    _shift_info_by_locksmith) — set only when that call itself failed,
     never for a locksmith simply not being on shift."""
     if job.vehicle_latitude is None or job.vehicle_longitude is None:
         return [], "", ""
@@ -360,7 +409,7 @@ def _nearest_locksmiths(job):
         if any(attendance is not None for _distance, attendance in options)
     ]
     return_minutes_by_locksmith = _return_minutes_by_locksmith(locksmiths_needing_return, job)
-    on_shift_pks, on_shift_error = _on_shift_locksmith_pks(list(locksmiths_by_pk.values()), now=now)
+    shift_info_by_pk, on_shift_error = _shift_info_by_locksmith(list(locksmiths_by_pk.values()), now=now)
     job_location = f"{job.vehicle_latitude},{job.vehicle_longitude}"
 
     cards = []
@@ -377,6 +426,16 @@ def _nearest_locksmiths(job):
                 distance.duration_minutes + _JOB_DURATION_MINUTES + return_minutes
                 if return_minutes is not None else None
             )
+            # When they'd actually set off: right now for the home
+            # option, or when they'd finish their already-booked job
+            # (that job's own start time + _JOB_DURATION_MINUTES) for a
+            # future-job option — so the resulting clock time lands on
+            # the day the option is actually for, not always "today".
+            departure = (
+                attendance.available_from + timedelta(minutes=_JOB_DURATION_MINUTES)
+                if attendance is not None else now
+            )
+            expected_home_after = departure + timedelta(minutes=total_minutes) if total_minutes is not None else None
             # Home has no date of its own — today is the sensible one,
             # since that's when they'd be leaving from home for this
             # job; a future-job option uses that job's own date.
@@ -387,14 +446,16 @@ def _nearest_locksmiths(job):
                 ("color:red", [a.vehicle_postcode for a in day_attendances]),
             ])
             options.append(LocksmithOption(
-                distance, attendance, total_minutes,
+                distance, attendance, total_minutes, expected_home_after,
                 day_job_count=len(day_attendances), map_url=map_url,
             ))
         options.sort(key=lambda o: (o.total_minutes is None, o.total_minutes, o.distance.distance_metres))
 
+        shift_info = shift_info_by_pk.get(pk) if shift_info_by_pk is not None else None
         cards.append(LocksmithCard(
             locksmith, options,
-            on_shift=(locksmith.pk in on_shift_pks) if on_shift_pks is not None else None,
+            on_shift=shift_info.on_shift if shift_info is not None else None,
+            expected_home=shift_info.expected_home if shift_info is not None else None,
         ))
 
     cards.sort(key=lambda c: (
