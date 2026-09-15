@@ -56,6 +56,7 @@ from .models import (
     JobTimingSummary,
     JobVisit,
     JobVisitPhoto,
+    PayPeriod,
     PortalDisposal,
     PortalDisposalEdit,
     SafetyAlert,
@@ -632,26 +633,42 @@ def _todays_live_stats(locksmith, today):
     }
 
 
+def _pay_period_start(for_date):
+    """Start date of the admin-managed PayPeriod (see models.py) that
+    covers for_date — so the dashboard's "this pay period" figures land
+    on the same cut-off dates as the real pay run, not the calendar
+    month (WGTK's pay periods don't line up with calendar months at
+    all — e.g. the "January" period actually runs 16 Dec-19 Jan).
+    Falls back to the calendar month start if no PayPeriod row covers
+    this date (e.g. next year's dates haven't been entered into Admin
+    yet) rather than showing nothing."""
+    period = PayPeriod.objects.filter(start_date__lte=for_date, end_date__gte=for_date).first()
+    return period.start_date if period else for_date.replace(day=1)
+
+
 def _locksmith_stats(locksmith):
     """This locksmith's own numbers for the portal dashboard — a
     self-visible counterpart to the office-only benchmarking already
     built for Job Completion (see services/benchmarking.py). Job count
-    and van earnings are both month-to-date and today-only, so a
+    and van earnings are both this-pay-period and today-only, so a
     locksmith can see either; own vs company average duration uses the
     same 90-day/success-only window that service uses, just aggregated
     across all loss types rather than one at a time.
 
+    "mtd" (the dict keys/template panel below) means "this pay period
+    to date", not calendar month-to-date — see _pay_period_start.
+
     CompletedJob is synced overnight (see module docstring), so it's
-    always missing today's own jobs — month-to-date explicitly excludes
-    today from that query and adds _todays_live_stats' live numbers in
-    instead, rather than leaving today's contribution to catch up
-    whenever tonight's pull runs."""
+    always missing today's own jobs — this-pay-period-to-date
+    explicitly excludes today from that query and adds
+    _todays_live_stats' live numbers in instead, rather than leaving
+    today's contribution to catch up whenever tonight's pull runs."""
     today = timezone.localdate()
-    month_start = today.replace(day=1)
+    period_start = _pay_period_start(today)
     window_start = today - timedelta(days=90)
 
     synced_mtd = CompletedJob.objects.filter(
-        locksmith=locksmith, job_date__gte=month_start, job_date__lt=today,
+        locksmith=locksmith, job_date__gte=period_start, job_date__lt=today,
     )
     completed_synced = synced_mtd.filter(status=CompletedJob.Status.SUCCESS)
     todays = _todays_live_stats(locksmith, today)

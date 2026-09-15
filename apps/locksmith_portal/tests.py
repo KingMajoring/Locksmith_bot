@@ -20,11 +20,13 @@ from .models import (
     JobTimingSummary,
     JobVisit,
     JobVisitPhoto,
+    PayPeriod,
     PortalDisposal,
     PortalDisposalEdit,
     SafetyAlert,
     SeniorStaffContact,
 )
+from .views import _pay_period_start
 
 User = get_user_model()
 
@@ -634,13 +636,13 @@ class DashboardTests(TestCase):
         # for the day's job list.
         mock_get_optimo.return_value = MagicMock(list_orders_for_date=MagicMock(return_value=[]))
         today = timezone.localdate()
-        month_start = today.replace(day=1)
-        last_month = month_start - timedelta(days=1)
+        period_start = _pay_period_start(today)
+        before_period = period_start - timedelta(days=1)
         yesterday = today - timedelta(days=1)
         other_locksmith, _ = _make_locksmith_user(email="other@wgtk.co.uk", soter_ids=("999",))
 
         # Already synced by last night's pull_completed_jobs run — counts
-        # towards month-to-date via CompletedJob.
+        # towards this pay period via CompletedJob.
         CompletedJob.objects.create(
             order_no="1_a", report_id="1", job_date=yesterday, locksmith=self.locksmith,
             status=CompletedJob.Status.SUCCESS, net_cost=100.0,
@@ -651,9 +653,9 @@ class DashboardTests(TestCase):
             status=CompletedJob.Status.FAILED, net_cost=75.0,
         )  # a failed job's net_cost shouldn't count towards van earnings
         CompletedJob.objects.create(
-            order_no="3_a", report_id="3", job_date=last_month, locksmith=self.locksmith,
+            order_no="3_a", report_id="3", job_date=before_period, locksmith=self.locksmith,
             status=CompletedJob.Status.SUCCESS, net_cost=200.0,
-        )  # outside the month-to-date window — shouldn't count
+        )  # outside this pay period — shouldn't count
         CompletedJob.objects.create(
             order_no="4_a", report_id="4", job_date=yesterday, locksmith=other_locksmith,
             status=CompletedJob.Status.SUCCESS,
@@ -708,6 +710,27 @@ class DashboardTests(TestCase):
         self.assertEqual(stats["van_earnings_mtd"], 0)
         self.assertEqual(stats["van_earnings_today"], 0)
         self.assertContains(response, "£0.00")
+
+
+class PayPeriodStartTests(TestCase):
+    def test_uses_the_admin_configured_period_covering_the_date(self):
+        PayPeriod.objects.all().delete()
+        PayPeriod.objects.create(start_date=date(2026, 8, 18), end_date=date(2026, 9, 18))
+        self.assertEqual(_pay_period_start(date(2026, 9, 1)), date(2026, 8, 18))
+
+    def test_a_pay_period_rarely_lines_up_with_the_calendar_month(self):
+        # The real point of this feature: "January" is 16 Dec-19 Jan,
+        # nothing like the calendar month.
+        PayPeriod.objects.all().delete()
+        PayPeriod.objects.create(start_date=date(2025, 12, 16), end_date=date(2026, 1, 19))
+        self.assertEqual(_pay_period_start(date(2026, 1, 5)), date(2025, 12, 16))
+
+    def test_falls_back_to_calendar_month_start_when_no_period_configured(self):
+        # E.g. next year's pay-run dates haven't been entered into Admin
+        # yet — better to show something (even if not quite right) than
+        # nothing.
+        PayPeriod.objects.all().delete()
+        self.assertEqual(_pay_period_start(date(2027, 3, 17)), date(2027, 3, 1))
 
 
 class StockCheckEntryTests(TestCase):

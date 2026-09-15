@@ -385,6 +385,25 @@ class JobTimingSummary(models.Model):
         return f"Timing summary for {self.order_no}"
 
 
+class PayPeriod(models.Model):
+    """One payroll pay period, admin-managed so office can enter next
+    year's cut-off dates without a code change (see _pay_period_start in
+    views.py, which uses this to work out where "this pay period" starts
+    for the dashboard's van-earnings figure). WGTK's pay periods don't
+    line up with calendar months — e.g. the "January" period actually
+    runs 16 Dec-19 Jan — so this has to be the real dates from the pay
+    run calendar, not computed from a rule."""
+
+    start_date = models.DateField(unique=True)
+    end_date = models.DateField()
+
+    class Meta:
+        ordering = ["start_date"]
+
+    def __str__(self):
+        return f"{self.start_date:%d %b %Y} – {self.end_date:%d %b %Y}"
+
+
 class SeniorStaffContact(models.Model):
     """Who gets a lone-worker safety alert (panic button, overdue-job
     escalation — see views.panic_alert and the check_overdue_visits

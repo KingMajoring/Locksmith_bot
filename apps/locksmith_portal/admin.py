@@ -5,6 +5,7 @@ from .models import (
     JobTimingSummary,
     JobVisit,
     JobVisitPhoto,
+    PayPeriod,
     PortalDisposal,
     PortalDisposalEdit,
     SafetyAlert,
@@ -80,6 +81,17 @@ class FaultyPartReportAdmin(admin.ModelAdmin):
 
     def has_delete_permission(self, request, obj=None):
         return False
+
+
+@admin.register(PayPeriod)
+class PayPeriodAdmin(admin.ModelAdmin):
+    """WGTK's pay-run cut-off dates, so the locksmith dashboard's "This
+    pay period" van-earnings figure matches what actually lands on the
+    pay run rather than the calendar month. Add next year's dates here
+    once the pay run calendar is confirmed — no code change needed."""
+
+    list_display = ("start_date", "end_date")
+    ordering = ("start_date",)
 
 
 @admin.register(SeniorStaffContact)
