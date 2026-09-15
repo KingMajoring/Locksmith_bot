@@ -91,16 +91,17 @@
   <div class="day-nav">
     <a class="day-nav-link" href="?date={{ prev_date|date:'Y-m-d' }}">&larr; {{ prev_date|date:"D j M" }}</a>
     <h2>{% if is_today %}Today's jobs{% else %}Jobs — {{ selected_date|date:"D j M" }}{% endif %}</h2>
-    {% if next_date %}
-      <a class="day-nav-link" href="?date={{ next_date|date:'Y-m-d' }}">{{ next_date|date:"D j M" }} &rarr;</a>
-    {% else %}
-      <span class="day-nav-link disabled">&nbsp;</span>
-    {% endif %}
+    <span class="day-nav-right">
+      <span class="day-nav-calendar">
+        <span aria-hidden="true">📅</span>
+        <input type="date" id="job-date-picker" aria-label="Jump to date"
+               value="{{ selected_date|date:'Y-m-d' }}" max="{{ today|date:'Y-m-d' }}">
+      </span>
+      {% if next_date %}
+        <a class="day-nav-link" href="?date={{ next_date|date:'Y-m-d' }}">{{ next_date|date:"D j M" }} &rarr;</a>
+      {% endif %}
+    </span>
   </div>
-  <label class="day-nav-jump" for="job-date-picker">
-    📅 Jump to date
-    <input type="date" id="job-date-picker" value="{{ selected_date|date:'Y-m-d' }}" max="{{ today|date:'Y-m-d' }}">
-  </label>
   {% if locksmith.sees_all_jobs_for_testing %}
     <p class="sub">Test account — showing every job scheduled that day, not just your own.</p>
   {% endif %}

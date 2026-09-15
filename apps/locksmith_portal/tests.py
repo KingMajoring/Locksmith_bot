@@ -3658,10 +3658,19 @@ class DashboardCalendarPickerTests(TestCase):
     def test_date_picker_defaults_to_selected_date_and_clamps_to_today(self):
         today = timezone.localdate()
         response = self.client.get(reverse("locksmith_portal:dashboard"))
-        self.assertContains(response, f'id="job-date-picker" value="{today.isoformat()}"')
+        self.assertContains(response, 'id="job-date-picker"')
+        self.assertContains(response, f'value="{today.isoformat()}"')
         self.assertContains(response, f'max="{today.isoformat()}"')
 
     def test_date_picker_reflects_a_past_selected_date(self):
         past = timezone.localdate() - timedelta(days=3)
         response = self.client.get(reverse("locksmith_portal:dashboard"), {"date": past.isoformat()})
-        self.assertContains(response, f'id="job-date-picker" value="{past.isoformat()}"')
+        self.assertContains(response, f'value="{past.isoformat()}"')
+
+    def test_calendar_sits_in_the_day_nav_row_beside_the_heading(self):
+        response = self.client.get(reverse("locksmith_portal:dashboard"))
+        self.assertContains(response, "day-nav-calendar")
+
+    def test_no_next_date_link_shown_on_today(self):
+        response = self.client.get(reverse("locksmith_portal:dashboard"))
+        self.assertNotContains(response, "day-nav-link disabled")

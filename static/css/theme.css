@@ -428,6 +428,12 @@ input[type=number] { width: 5rem; }
   border-radius: var(--radius);
   font-size: 0.95rem;
 }
+/* .portal-main .btn (mobile stepper buttons, further down this file)
+   forces width:100% at equal specificity — the extra element selector
+   here (button.btn, not just .btn) breaks the tie in our favour
+   regardless of source order, so Search sits beside the input instead
+   of hogging the row and squashing it down to nothing. */
+.job-search-form button.btn { width: auto; flex-shrink: 0; }
 
 .job-done { border-color: var(--wgtk-green-light); }
 .job-tick { color: var(--wgtk-green-dark); font-weight: 700; }
@@ -533,23 +539,28 @@ dialog#detail-of-loss-dialog p {
 .day-nav { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.9rem; }
 .day-nav h2 { margin: 0; font-size: 1rem; text-align: center; }
 .day-nav-link { color: var(--wgtk-orange); text-decoration: none; font-weight: 700; font-size: 0.85rem; white-space: nowrap; flex-shrink: 0; }
-.day-nav-link.disabled { visibility: hidden; }
-.day-nav-jump {
-  display: flex;
+.day-nav-right { display: flex; align-items: center; gap: 0.6rem; flex-shrink: 0; }
+.day-nav-calendar {
+  position: relative;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 0.4rem;
-  margin-bottom: 0.9rem;
-  color: var(--ink-soft);
-  font-size: 0.8rem;
-  font-weight: 600;
-}
-.day-nav-jump input[type="date"] {
+  width: 1.9rem;
+  height: 1.9rem;
+  font-size: 1.05rem;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 0.3rem 0.5rem;
-  font-size: 0.8rem;
-  color: var(--ink);
+  flex-shrink: 0;
+}
+.day-nav-calendar input[type="date"] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  cursor: pointer;
 }
 
 .disposal-list { list-style: none; padding: 0; margin: 0; }
