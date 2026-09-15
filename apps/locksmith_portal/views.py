@@ -633,17 +633,25 @@ def _todays_live_stats(locksmith, today):
     }
 
 
-def _pay_period_start(for_date):
-    """Start date of the admin-managed PayPeriod (see models.py) that
+def _pay_period_range(for_date):
+    """(start, end) of the admin-managed PayPeriod (see models.py) that
     covers for_date — so the dashboard's "this pay period" figures land
     on the same cut-off dates as the real pay run, not the calendar
     month (WGTK's pay periods don't line up with calendar months at
-    all — e.g. the "January" period actually runs 16 Dec-19 Jan).
-    Falls back to the calendar month start if no PayPeriod row covers
-    this date (e.g. next year's dates haven't been entered into Admin
-    yet) rather than showing nothing."""
+    all — e.g. the "January" period actually runs 16 Dec-19 Jan), and
+    so the dashboard can show the locksmith the actual dates. Falls
+    back to the calendar month if no PayPeriod row covers this date
+    (e.g. next year's dates haven't been entered into Admin yet)
+    rather than showing nothing."""
     period = PayPeriod.objects.filter(start_date__lte=for_date, end_date__gte=for_date).first()
-    return period.start_date if period else for_date.replace(day=1)
+    if period:
+        return period.start_date, period.end_date
+    month_end = (for_date.replace(day=1) + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+    return for_date.replace(day=1), month_end
+
+
+def _pay_period_start(for_date):
+    return _pay_period_range(for_date)[0]
 
 
 def _locksmith_stats(locksmith):
@@ -656,7 +664,7 @@ def _locksmith_stats(locksmith):
     across all loss types rather than one at a time.
 
     "mtd" (the dict keys/template panel below) means "this pay period
-    to date", not calendar month-to-date — see _pay_period_start.
+    to date", not calendar month-to-date — see _pay_period_range.
 
     CompletedJob is synced overnight (see module docstring), so it's
     always missing today's own jobs — this-pay-period-to-date
@@ -664,7 +672,7 @@ def _locksmith_stats(locksmith):
     _todays_live_stats' live numbers in instead, rather than leaving
     today's contribution to catch up whenever tonight's pull runs."""
     today = timezone.localdate()
-    period_start = _pay_period_start(today)
+    period_start, period_end = _pay_period_range(today)
     window_start = today - timedelta(days=90)
 
     synced_mtd = CompletedJob.objects.filter(
@@ -683,6 +691,8 @@ def _locksmith_stats(locksmith):
         "completed_today": todays["completed"],
         "failed_today": todays["failed"],
         "van_earnings_today": todays["van_earnings"],
+        "period_start": period_start,
+        "period_end": period_end,
         "jobs_mtd": synced_mtd.count() + todays["jobs"],
         "completed_mtd": completed_synced.count() + todays["completed"],
         "failed_mtd": synced_mtd.filter(status=CompletedJob.Status.FAILED).count() + todays["failed"],

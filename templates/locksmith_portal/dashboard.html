@@ -45,6 +45,7 @@
     </div>
   </div>
   <div class="stat-row" data-stats-panel="mtd" hidden>
+    <p class="sub stat-period-range">{{ stats.period_start|date:"j M" }} – {{ stats.period_end|date:"j M Y" }}</p>
     <div class="stat-tile">
       <div class="stat-label">Jobs</div>
       <div class="stat-value">{{ stats.jobs_mtd }}</div>

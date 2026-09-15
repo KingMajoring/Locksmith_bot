@@ -259,6 +259,7 @@ tr:last-child td { border-bottom: none; }
 
 .stat-row { display: flex; flex-wrap: wrap; gap: 0.85rem; margin-bottom: 1.25rem; }
 .stat-row[hidden] { display: none; }
+.stat-period-range { flex: 1 0 100%; margin: -0.35rem 0 0; }
 .stat-tile {
   background: #fff;
   border: 1px solid var(--border);
