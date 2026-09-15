@@ -72,6 +72,10 @@ class MockTeamsShiftsClient(TeamsShiftsClient):
         "dean.s@wgtk.co.uk", "james.m@wgtk.co.uk",
     ]
 
+    # Kept for interface parity with RealTeamsShiftsClient — always
+    # empty here since there's no real Graph fetch to report on.
+    raw_fetch_diagnostic = ""
+
     def list_shifts_for_date(self, for_date: date) -> list[ShiftAssignment]:
         rng = random.Random(int(hashlib.sha256(for_date.isoformat().encode()).hexdigest(), 16) % (2**32))
         shifts = []
@@ -123,6 +127,18 @@ class RealTeamsShiftsClient(TeamsShiftsClient):
         self._client_secret = client_secret
         self._tenant_id = tenant_id
         self._team_id = team_id
+        # Populated by list_shifts_for_date_range — a raw one-liner
+        # covering the /groups/{team_id}/members and shifts fetches
+        # themselves, separate from the higher-level "matched a known
+        # locksmith" diagnostic in views.py. Confirmed live: a shift
+        # fetch can come back with real Graph shift objects and still
+        # produce zero usable ShiftAssignments if the SEPARATE
+        # /groups/{team_id}/members call (needed to turn a Graph userId
+        # into an email) itself returns nothing under this app's
+        # client-credentials auth, even when the shifts themselves are
+        # fetched fine — that failure mode is otherwise invisible, since
+        # it looks identical to "no shifts published" from the outside.
+        self.raw_fetch_diagnostic = ""
 
     def _get_access_token(self) -> str:
         import requests
@@ -205,20 +221,37 @@ class RealTeamsShiftsClient(TeamsShiftsClient):
             token,
         )
         results = []
+        skipped_unpublished = 0
+        skipped_unparseable_dates = 0
+        skipped_outside_window = 0
+        skipped_no_member_email = 0
         for shift in shifts:
             shared = shift.get("sharedShift")
             if not shared:
+                skipped_unpublished += 1
                 continue
             start = _parse_graph_datetime(shared.get("startDateTime"))
             end = _parse_graph_datetime(shared.get("endDateTime"))
             if start is None or end is None:
+                skipped_unparseable_dates += 1
                 continue
             if start.date() > end_date or end.date() < start_date:
+                skipped_outside_window += 1
                 continue
             email = email_by_user_id.get(shift.get("userId"), "")
             if not email:
+                skipped_no_member_email += 1
                 continue
             results.append(ShiftAssignment(email=email, shift_start=start, shift_end=end))
+
+        self.raw_fetch_diagnostic = (
+            f"Graph: {len(members)} team member(s) resolved via /groups/{{team}}/members "
+            f"({sum(1 for e in email_by_user_id.values() if e)} with a usable email), "
+            f"{len(shifts)} raw shift(s) from the filtered query, {len(results)} kept "
+            f"(skipped: {skipped_unpublished} unpublished/draft, {skipped_unparseable_dates} unparseable dates, "
+            f"{skipped_outside_window} outside the requested window, "
+            f"{skipped_no_member_email} whose Graph userId didn't match a team member with a known email)."
+        )
         return results
 
 

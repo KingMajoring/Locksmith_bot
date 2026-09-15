@@ -312,8 +312,9 @@ def _shift_info_by_locksmith(locksmiths, *, now, window_end_date):
             emails_by_pk[locksmith.pk] = email.strip().lower()
     if not emails_by_pk:
         return None, "", ""
+    client = get_teams_shifts_client()
     try:
-        shifts = get_teams_shifts_client().list_shifts_for_date_range(now.date(), window_end_date)
+        shifts = client.list_shifts_for_date_range(now.date(), window_end_date)
     except Exception as exc:
         logger.exception("Failed to fetch Teams shifts for Logs Engine")
         return None, str(exc), ""
@@ -326,6 +327,9 @@ def _shift_info_by_locksmith(locksmiths, *, now, window_end_date):
         f"..{window_end_date.isoformat()} across {len(distinct_fetched_emails)} distinct email(s); "
         f"{matched_shift_count} matched one of this app's {len(known_emails)} known locksmith email(s)."
     )
+    raw_fetch_diagnostic = getattr(client, "raw_fetch_diagnostic", "")
+    if isinstance(raw_fetch_diagnostic, str) and raw_fetch_diagnostic:
+        diagnostic = f"{diagnostic} {raw_fetch_diagnostic}"
 
     shifts_by_email = {}
     for shift in shifts:
