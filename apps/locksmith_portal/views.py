@@ -33,7 +33,7 @@ from urllib.parse import quote
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
-from django.db.models import Count, Sum
+from django.db.models import Count, Q, Sum
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -394,6 +394,26 @@ def _disposal_totals(locksmith, order_nos):
     return {row["order_no"]: row for row in rows}
 
 
+def _snapshot_vehicle_onto_visit(visit, report_id):
+    """One-off Handl lookup, only when a JobVisit is first created (see
+    _job_visit_context) — best-effort, same rationale as
+    _write_handl_note: a failure here shouldn't block the locksmith's
+    own progress through the job, it just leaves reg/make/model_name/
+    year blank on this visit."""
+    try:
+        details = get_handl_client().get_job_details([report_id]).get(report_id)
+    except Exception:
+        logger.exception("Failed to snapshot Handl vehicle details onto JobVisit for %s", report_id)
+        return
+    if details is None:
+        return
+    visit.reg = details.reg
+    visit.make = details.make
+    visit.model_name = details.model
+    visit.year = details.year
+    visit.save(update_fields=["reg", "make", "model_name", "year"])
+
+
 def _job_visit_context(request, order_no):
     """Common setup for every on-route/arrived/parts/complete view:
     resolves the locksmith, report_id, and selected day, confirms the
@@ -419,9 +439,11 @@ def _job_visit_context(request, order_no):
         messages.error(request, "That job isn't on your schedule for that day.")
         return None, redirect(dashboard_url)
 
-    visit, _created = JobVisit.objects.get_or_create(
+    visit, created = JobVisit.objects.get_or_create(
         locksmith=locksmith, order_no=order_no, defaults={"report_id": report_id}
     )
+    if created:
+        _snapshot_vehicle_onto_visit(visit, report_id)
 
     return {
         "locksmith": locksmith,
@@ -755,6 +777,77 @@ def _previous_visits_summary(report_id, exclude_order_no):
         }
         for v in visits
     ]
+
+
+@login_required
+def job_search(request):
+    """Find one of this locksmith's own jobs by job number or
+    registration — an alternative to paging back through the
+    dashboard's day-by-day schedule to find an old job (see
+    job_history_detail). Scoped to this locksmith's own JobVisit rows
+    — created the moment they first take any action on a job (see
+    _job_visit_context) — so it only ever surfaces jobs they've
+    actually worked, and reg is the snapshot captured then
+    (_snapshot_vehicle_onto_visit), not a live Handl lookup, so
+    searching doesn't hit Handl at all."""
+    locksmith = _locksmith_for_request(request)
+    if locksmith is None:
+        return _no_locksmith_access(request)
+
+    query = request.GET.get("q", "").strip()
+    results = []
+    if query:
+        results = list(
+            JobVisit.objects.filter(locksmith=locksmith)
+            .filter(
+                Q(report_id__icontains=query)
+                | Q(order_no__icontains=query)
+                | Q(reg__icontains=query)
+            )
+            .order_by("-created_at")[:50]
+        )
+
+    return render(
+        request,
+        "locksmith_portal/job_search.html",
+        {
+            "query": query,
+            "results": results,
+            "is_preview": _is_preview(request),
+        },
+    )
+
+
+@login_required
+def job_history_detail(request, pk):
+    """Read-only look-back at one of this locksmith's own jobs — the
+    notes and photos already recorded, with no way to edit them (that
+    stays on the normal on-route -> arrived -> ... stepper, and only
+    for a job still on that day's live Optimo schedule — see
+    _job_visit_context). Reached from Job search or a dashboard job's
+    history link. Works for a job Optimo no longer schedules that
+    locksmith for on that old date, since it's served entirely from
+    this locksmith's own JobVisit/JobVisitPhoto rows."""
+    locksmith = _locksmith_for_request(request)
+    if locksmith is None:
+        return _no_locksmith_access(request)
+
+    visit = get_object_or_404(JobVisit, pk=pk, locksmith=locksmith)
+
+    photo_groups = {}
+    for photo in visit.photos.all():
+        photo_groups.setdefault(photo.kind, {"label": photo.get_kind_display(), "photos": []})
+        photo_groups[photo.kind]["photos"].append(photo)
+
+    return render(
+        request,
+        "locksmith_portal/job_history_detail.html",
+        {
+            "visit": visit,
+            "photo_groups": list(photo_groups.values()),
+            "is_preview": _is_preview(request),
+        },
+    )
 
 
 @login_required

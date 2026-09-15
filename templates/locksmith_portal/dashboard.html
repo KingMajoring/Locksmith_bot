@@ -97,6 +97,10 @@
       <span class="day-nav-link disabled">&nbsp;</span>
     {% endif %}
   </div>
+  <label class="day-nav-jump" for="job-date-picker">
+    📅 Jump to date
+    <input type="date" id="job-date-picker" value="{{ selected_date|date:'Y-m-d' }}" max="{{ today|date:'Y-m-d' }}">
+  </label>
   {% if locksmith.sees_all_jobs_for_testing %}
     <p class="sub">Test account — showing every job scheduled that day, not just your own.</p>
   {% endif %}
@@ -200,6 +204,14 @@
 </dialog>
 
 <script>
+  (function () {
+    var picker = document.getElementById('job-date-picker');
+    if (!picker) return;
+    picker.addEventListener('change', function () {
+      if (picker.value) window.location.href = '?date=' + picker.value;
+    });
+  })();
+
   (function () {
     var dialog = document.getElementById('detail-of-loss-dialog');
     var dialogText = document.getElementById('detail-of-loss-text');

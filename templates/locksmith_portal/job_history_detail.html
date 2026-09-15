@@ -1,0 +1,62 @@
+{% extends "locksmith_portal/base.html" %}
+{% block title %}Job {{ visit.report_id }} — WGTK Locksmith Portal{% endblock %}
+{% block content %}
+<a class="back-link" href="{% url 'locksmith_portal:job_search' %}">&larr; Back to search</a>
+<h1>Job {{ visit.report_id }}</h1>
+<p class="sub">
+  {% if visit.reg or visit.make or visit.model_name %}{% if visit.reg %}{{ visit.reg }} · {% endif %}{{ visit.make }} {{ visit.model_name }} {{ visit.year }} — {% endif %}
+  {{ visit.created_at|date:"D j M Y" }}
+</p>
+
+<div class="card">
+  <h2>What happened</h2>
+  <p><strong>{{ visit.get_stage_display }}</strong>{% if visit.outcome %} — {{ visit.get_outcome_display }}{% endif %}</p>
+  <dl class="history-timeline">
+    {% if visit.on_route_at %}<dt>On route</dt><dd>{{ visit.on_route_at|date:"H:i" }}</dd>{% endif %}
+    {% if visit.arrived_at %}<dt>Arrived</dt><dd>{{ visit.arrived_at|date:"H:i" }}</dd>{% endif %}
+    {% if visit.access_method %}<dt>Access method</dt><dd>{{ visit.get_access_method_display }}{% if visit.pick_used %} ({{ visit.pick_used }}){% endif %}</dd>{% endif %}
+    {% if visit.parts_done_at %}<dt>Parts disposed</dt><dd>{{ visit.parts_done_at|date:"H:i" }}</dd>{% endif %}
+    {% if visit.completed_at %}<dt>{% if visit.outcome == "failed" %}Failed{% else %}Completed{% endif %}</dt><dd>{{ visit.completed_at|date:"H:i" }}</dd>{% endif %}
+  </dl>
+
+  {% if visit.outcome == "failed" %}
+    <p class="sub">
+      Failure reason: {{ visit.failure_category.name|default:"—" }}
+      {% if visit.failure_sku_needed %} — SKU/part needed: {{ visit.failure_sku_needed }}{% endif %}
+      {% if visit.failure_reattend_action %} — {{ visit.get_failure_reattend_action_display }}{% endif %}
+    </p>
+  {% elif visit.outcome == "cancelled" %}
+    <p class="sub">Cancelled: {{ visit.get_cancel_reason_display }}</p>
+  {% endif %}
+
+  {% if visit.customer_not_present_reason %}
+    <p class="sub">Customer not present to sign: {{ visit.customer_not_present_reason }}</p>
+  {% endif %}
+  {% if visit.further_work_required %}
+    <p class="sub">Further work required: {{ visit.further_work_details }}</p>
+  {% endif %}
+
+  {% if visit.notes %}
+    <h3>Notes</h3>
+    <p>{{ visit.notes|linebreaksbr }}</p>
+  {% endif %}
+</div>
+
+{% if photo_groups %}
+  <div class="card">
+    <h2>Photos</h2>
+    {% for group in photo_groups %}
+      <p class="sub history-photo-group-label">{{ group.label }}</p>
+      <div class="previous-visit-photos">
+        {% for photo in group.photos %}
+          <a href="{{ photo.url }}" target="_blank" class="previous-visit-photo">
+            <img src="{{ photo.url }}" alt="{{ group.label }}" loading="lazy">
+          </a>
+        {% endfor %}
+      </div>
+    {% endfor %}
+  </div>
+{% else %}
+  <p class="empty">No photos recorded for this job.</p>
+{% endif %}
+{% endblock %}

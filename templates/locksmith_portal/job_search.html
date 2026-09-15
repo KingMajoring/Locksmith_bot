@@ -1,0 +1,34 @@
+{% extends "locksmith_portal/base.html" %}
+{% block title %}Search jobs — WGTK Locksmith Portal{% endblock %}
+{% block content %}
+<a class="back-link" href="{% url 'locksmith_portal:dashboard' %}">&larr; Back</a>
+<h1>Search your jobs</h1>
+<p class="sub">Find a job you've already actioned by job number or registration.</p>
+
+<div class="card">
+  <form method="get" class="job-search-form">
+    <input type="search" name="q" value="{{ query }}" placeholder="Job number or reg…" autofocus>
+    <button class="btn" type="submit">Search</button>
+  </form>
+</div>
+
+{% if query %}
+  {% if results %}
+    {% for visit in results %}
+      <div class="job">
+        <a class="job-link" href="{% url 'locksmith_portal:job_history_detail' pk=visit.pk %}">
+          <span class="job-main">
+            <strong>Job {{ visit.report_id }}</strong>
+            {% if visit.reg or visit.make or visit.model_name %}
+              <span class="job-meta">{% if visit.reg %}{{ visit.reg }} · {% endif %}{{ visit.make }} {{ visit.model_name }} {{ visit.year }}</span>
+            {% endif %}
+            <span class="job-meta">{{ visit.created_at|date:"D j M Y" }} — {{ visit.get_stage_display }}{% if visit.outcome %} · {{ visit.get_outcome_display }}{% endif %}</span>
+          </span>
+        </a>
+      </div>
+    {% endfor %}
+  {% else %}
+    <p class="empty">No jobs found for "{{ query }}".</p>
+  {% endif %}
+{% endif %}
+{% endblock %}

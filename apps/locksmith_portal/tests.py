@@ -3469,6 +3469,40 @@ class JobVisitWorkflowTests(TestCase):
             url = reverse(f"locksmith_portal:{name}", args=[self.order_no])
             self.assertEqual(self.client.post(url).status_code, 302, name)
 
+    # --- reg/make/model snapshot for Job search/history (see
+    # _snapshot_vehicle_onto_visit) --------------------------------------
+
+    def test_first_action_snapshots_vehicle_details_onto_the_visit(self):
+        self._set_loss_type("LOST")
+        self.client.get(reverse("locksmith_portal:job_overview", args=[self.order_no]))
+        visit = self._visit()
+        self.assertEqual(visit.reg, "AB20 CDE")
+        self.assertEqual(visit.make, "Ford")
+        self.assertEqual(visit.model_name, "Focus")
+        self.assertEqual(visit.year, "2020")
+
+    def test_snapshot_is_not_refetched_on_a_later_visit(self):
+        self._set_loss_type("LOST")
+        self.client.get(reverse("locksmith_portal:job_overview", args=[self.order_no]))
+        # A later Handl change (e.g. the reg gets corrected) shouldn't
+        # retroactively rewrite an already-snapshotted visit — the
+        # snapshot is taken once, at creation, not kept in sync.
+        self.mock_handl.get_job_details.return_value = {
+            "496390": JobDetails(
+                report_id="496390", make="Vauxhall", model="Corsa", year="2019", reg="ZZ99 ZZZ", vin="VIN2",
+                service_type="Car", loss_type="LOST", supplied_service="", net_cost=100.0,
+            )
+        }
+        self.client.get(reverse("locksmith_portal:job_overview", args=[self.order_no]))
+        visit = self._visit()
+        self.assertEqual(visit.reg, "AB20 CDE")
+
+    def test_snapshot_left_blank_when_handl_lookup_fails(self):
+        self.mock_handl.get_job_details.side_effect = Exception("boom")
+        self.client.get(reverse("locksmith_portal:job_overview", args=[self.order_no]))
+        visit = self._visit()
+        self.assertEqual(visit.reg, "")
+
 
 class DecodeDataUrlTests(TestCase):
     def test_decodes_content_type_and_bytes(self):
@@ -3477,3 +3511,157 @@ class DecodeDataUrlTests(TestCase):
         content_type, content = _decode_data_url("data:image/png;base64,aGVsbG8=")
         self.assertEqual(content_type, "image/png")
         self.assertEqual(content, b"hello")
+
+
+class JobSearchTests(TestCase):
+    """Find one of this locksmith's own jobs by job number or reg,
+    instead of paging back through the dashboard day by day (see
+    views.job_search)."""
+
+    def setUp(self):
+        self.locksmith, self.user = _make_locksmith_user()
+        self.client.force_login(self.user)
+        self.other_locksmith, _other_user = _make_locksmith_user(email="other@wgtk.co.uk")
+
+        self.visit = JobVisit.objects.create(
+            locksmith=self.locksmith, order_no="496390_2026-08-01", report_id="496390",
+            reg="AB20 CDE", make="Ford", model_name="Focus", year="2020",
+            stage=JobVisit.Stage.DONE, outcome=JobVisit.Outcome.COMPLETED,
+        )
+        JobVisit.objects.create(
+            locksmith=self.other_locksmith, order_no="500000_2026-08-01", report_id="500000",
+            reg="AB20 CDE", stage=JobVisit.Stage.DONE,
+        )
+
+    def test_blank_query_shows_no_results(self):
+        response = self.client.get(reverse("locksmith_portal:job_search"))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(list(response.context["results"]), [])
+
+    def test_matches_by_job_number(self):
+        response = self.client.get(reverse("locksmith_portal:job_search"), {"q": "496390"})
+        self.assertEqual(list(response.context["results"]), [self.visit])
+
+    def test_matches_by_reg(self):
+        response = self.client.get(reverse("locksmith_portal:job_search"), {"q": "AB20"})
+        self.assertEqual(list(response.context["results"]), [self.visit])
+        self.assertContains(response, "AB20 CDE")
+
+    def test_reg_search_is_case_insensitive(self):
+        response = self.client.get(reverse("locksmith_portal:job_search"), {"q": "ab20 cde"})
+        self.assertEqual(list(response.context["results"]), [self.visit])
+
+    def test_no_match_shows_empty_message(self):
+        response = self.client.get(reverse("locksmith_portal:job_search"), {"q": "NOTHING"})
+        self.assertContains(response, "No jobs found")
+
+    def test_never_matches_another_locksmiths_job(self):
+        response = self.client.get(reverse("locksmith_portal:job_search"), {"q": "500000"})
+        self.assertEqual(list(response.context["results"]), [])
+
+    def test_result_links_to_history_detail(self):
+        response = self.client.get(reverse("locksmith_portal:job_search"), {"q": "496390"})
+        self.assertContains(
+            response, reverse("locksmith_portal:job_history_detail", args=[self.visit.pk])
+        )
+
+    def test_login_required(self):
+        self.client.logout()
+        response = self.client.get(reverse("locksmith_portal:job_search"))
+        self.assertEqual(response.status_code, 302)
+
+
+class JobHistoryDetailTests(TestCase):
+    """Read-only look-back at a job's own notes/photos — see
+    views.job_history_detail. No edit controls anywhere on this page."""
+
+    def setUp(self):
+        self.locksmith, self.user = _make_locksmith_user()
+        self.client.force_login(self.user)
+        self.other_locksmith, _other_user = _make_locksmith_user(email="other@wgtk.co.uk")
+
+        self.visit = JobVisit.objects.create(
+            locksmith=self.locksmith, order_no="496390_2026-08-01", report_id="496390",
+            reg="AB20 CDE", make="Ford", model_name="Focus", year="2020",
+            stage=JobVisit.Stage.DONE, outcome=JobVisit.Outcome.COMPLETED,
+            notes="Left a spare key with the neighbour.",
+            arrived_at=timezone.now(), completed_at=timezone.now(),
+        )
+        JobVisitPhoto.objects.create(
+            visit=self.visit, kind=JobVisitPhoto.Kind.BEFORE, url="https://example.test/before.jpg"
+        )
+        JobVisitPhoto.objects.create(
+            visit=self.visit, kind=JobVisitPhoto.Kind.AFTER, url="https://example.test/after.jpg"
+        )
+
+    def test_shows_notes_and_outcome(self):
+        url = reverse("locksmith_portal:job_history_detail", args=[self.visit.pk])
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Left a spare key with the neighbour.")
+        self.assertContains(response, "Completed")
+        self.assertContains(response, "AB20 CDE")
+
+    def test_shows_photos_grouped_by_kind(self):
+        url = reverse("locksmith_portal:job_history_detail", args=[self.visit.pk])
+        response = self.client.get(url)
+        self.assertContains(response, "https://example.test/before.jpg")
+        self.assertContains(response, "https://example.test/after.jpg")
+        labels = [group["label"] for group in response.context["photo_groups"]]
+        self.assertEqual(labels, ["Before", "After"])
+
+    def test_no_edit_controls_on_the_page(self):
+        url = reverse("locksmith_portal:job_history_detail", args=[self.visit.pk])
+        response = self.client.get(url)
+        self.assertNotContains(response, "<form")
+        self.assertNotContains(response, "Edit parts")
+
+    def test_no_photos_shows_empty_message(self):
+        JobVisitPhoto.objects.filter(visit=self.visit).delete()
+        url = reverse("locksmith_portal:job_history_detail", args=[self.visit.pk])
+        response = self.client.get(url)
+        self.assertContains(response, "No photos recorded")
+
+    def test_cannot_view_another_locksmiths_job(self):
+        other_visit = JobVisit.objects.create(
+            locksmith=self.other_locksmith, order_no="500000_2026-08-01", report_id="500000",
+            stage=JobVisit.Stage.DONE,
+        )
+        url = reverse("locksmith_portal:job_history_detail", args=[other_visit.pk])
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 404)
+
+    def test_login_required(self):
+        self.client.logout()
+        url = reverse("locksmith_portal:job_history_detail", args=[self.visit.pk])
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 302)
+
+
+class DashboardCalendarPickerTests(TestCase):
+    """Quick date-jump control on the dashboard (see dashboard.html) —
+    an alternative to the day-nav prev/next links for reaching a day
+    that's more than a click or two away."""
+
+    def setUp(self):
+        self.locksmith, self.user = _make_locksmith_user()
+        self.client.force_login(self.user)
+        self.optimo_patch = patch("apps.locksmith_portal.views.get_optimo_client")
+        mock_get_optimo = self.optimo_patch.start()
+        self.addCleanup(self.optimo_patch.stop)
+        mock_get_optimo.return_value.list_orders_for_date.return_value = []
+        self.handl_patch = patch("apps.locksmith_portal.views.get_handl_client")
+        mock_get_handl = self.handl_patch.start()
+        self.addCleanup(self.handl_patch.stop)
+        mock_get_handl.return_value.get_job_details.return_value = {}
+
+    def test_date_picker_defaults_to_selected_date_and_clamps_to_today(self):
+        today = timezone.localdate()
+        response = self.client.get(reverse("locksmith_portal:dashboard"))
+        self.assertContains(response, f'id="job-date-picker" value="{today.isoformat()}"')
+        self.assertContains(response, f'max="{today.isoformat()}"')
+
+    def test_date_picker_reflects_a_past_selected_date(self):
+        past = timezone.localdate() - timedelta(days=3)
+        response = self.client.get(reverse("locksmith_portal:dashboard"), {"date": past.isoformat()})
+        self.assertContains(response, f'id="job-date-picker" value="{past.isoformat()}"')

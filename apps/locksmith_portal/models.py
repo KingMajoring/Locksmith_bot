@@ -215,6 +215,18 @@ class JobVisit(models.Model):
     order_no = models.CharField(max_length=100)
     report_id = models.CharField(max_length=100)
 
+    # A one-off snapshot from Handl, taken when this visit is first
+    # created (see views._job_visit_context) — not kept in sync with
+    # Handl afterwards. Lets Job search and the read-only job history
+    # view (views.job_search/job_history_detail) show and match on
+    # reg/make/model without a live Handl round trip for every old job,
+    # and keeps working for a job Optimo no longer schedules that
+    # locksmith for on that old date.
+    reg = models.CharField(max_length=20, blank=True)
+    make = models.CharField(max_length=100, blank=True)
+    model_name = models.CharField(max_length=100, blank=True)
+    year = models.CharField(max_length=10, blank=True)
+
     stage = models.CharField(max_length=20, choices=Stage.choices, default=Stage.NOT_STARTED)
     on_route_at = models.DateTimeField(null=True, blank=True)
     arrived_at = models.DateTimeField(null=True, blank=True)
