@@ -135,6 +135,9 @@
         </p>
         <p class="sub" style="font-family:monospace;">{{ on_shift_error }}</p>
       {% endif %}
+      {% if teams_shift_diagnostic %}
+        <p class="sub" style="font-family:monospace;">{{ teams_shift_diagnostic }}</p>
+      {% endif %}
     </div>
   {% endif %}
 {% endif %}

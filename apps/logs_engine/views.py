@@ -265,7 +265,7 @@ class ShiftInfo:
 
 
 def _shift_info_by_locksmith(locksmiths, *, now, window_end_date):
-    """({locksmith.pk: ShiftInfo} | None, error_message).
+    """({locksmith.pk: ShiftInfo} | None, error_message, diagnostic).
 
     Fetches shifts for the whole [now.date(), window_end_date] range
     in ONE call (see TeamsShiftsClient.list_shifts_for_date_range) —
@@ -285,6 +285,19 @@ def _shift_info_by_locksmith(locksmiths, *, now, window_end_date):
     at all just gets on_shift=False, expected_home=None, an empty
     starts_by_date (as if they simply have no shifts at all).
 
+    diagnostic is a plain-English one-liner covering how many shifts
+    Graph actually returned for the window and how many of THOSE
+    matched a known locksmith email — set whenever the fetch ran at
+    all (success or failure alike), since "the call succeeded but
+    returned nothing" and "the call succeeded and returned plenty, just
+    none of it matched anyone" are both otherwise invisible: neither
+    looks like an error, both silently produce the exact same "no
+    shift on file" result per locksmith. Confirmed live: a real,
+    published shift existed for the exact window queried and still
+    came back empty for every locksmith on every date, with nothing on
+    the page to say why — this is what should have been there from the
+    start rather than needing to be added after the fact.
+
     Matches by Locksmith.user.email (the real Microsoft sign-in email,
     verified the first time this locksmith actually logged in — see
     apps.accounts.adapter) in preference to Locksmith.email (just
@@ -298,12 +311,21 @@ def _shift_info_by_locksmith(locksmiths, *, now, window_end_date):
         if email:
             emails_by_pk[locksmith.pk] = email.strip().lower()
     if not emails_by_pk:
-        return None, ""
+        return None, "", ""
     try:
         shifts = get_teams_shifts_client().list_shifts_for_date_range(now.date(), window_end_date)
     except Exception as exc:
         logger.exception("Failed to fetch Teams shifts for Logs Engine")
-        return None, str(exc)
+        return None, str(exc), ""
+
+    known_emails = set(emails_by_pk.values())
+    matched_shift_count = sum(1 for s in shifts if s.email.lower() in known_emails)
+    distinct_fetched_emails = {s.email.lower() for s in shifts}
+    diagnostic = (
+        f"Fetched {len(shifts)} published shift(s) from Teams for {now.date().isoformat()}"
+        f"..{window_end_date.isoformat()} across {len(distinct_fetched_emails)} distinct email(s); "
+        f"{matched_shift_count} matched one of this app's {len(known_emails)} known locksmith email(s)."
+    )
 
     shifts_by_email = {}
     for shift in shifts:
@@ -319,12 +341,20 @@ def _shift_info_by_locksmith(locksmiths, *, now, window_end_date):
                 starts_by_date[shift_date] = shift.shift_start
         result[locksmith.pk] = ShiftInfo(
             on_shift=any(s.shift_start <= now <= s.shift_end for s in person_shifts),
+            # Covers today, not just starts today — an overnight shift
+            # (starts late evening, ends past midnight) is still very
+            # much "today's" shift to a human even though its start
+            # date is technically yesterday.
             expected_home=max(
-                (s.shift_end for s in person_shifts if s.shift_start.date() == now.date()), default=None,
+                (
+                    s.shift_end for s in person_shifts
+                    if s.shift_start.date() <= now.date() <= s.shift_end.date()
+                ),
+                default=None,
             ),
             starts_by_date=starts_by_date,
         )
-    return result, ""
+    return result, "", diagnostic
 
 
 def _return_minutes_by_locksmith(locksmiths_needing_return, job):
@@ -372,16 +402,17 @@ def _return_minutes_by_locksmith(locksmiths_needing_return, job):
 
 
 def _nearest_locksmiths(job):
-    """(list[LocksmithCard], distance_error, on_shift_error) — one card
-    per active locksmith who has *either* a home base (lat/lng, or a
-    postcode as a fallback) *or* a job with a usable postcode already
-    booked in within _FUTURE_JOB_WINDOW_DAYS — a locksmith with no home
-    location on file shouldn't be silently excluded just because they
-    happen to already have an upcoming job near this one. Cards are
-    sorted best-option-first; each card's own options are sorted the
-    same way (nearest/lowest total_minutes first) — see LocksmithCard.
-    An option's attendance is set when it came from a future job
-    location rather than the locksmith's home base.
+    """(list[LocksmithCard], distance_error, on_shift_error,
+    teams_shift_diagnostic) — one card per active locksmith who has
+    *either* a home base (lat/lng, or a postcode as a fallback) *or* a
+    job with a usable postcode already booked in within
+    _FUTURE_JOB_WINDOW_DAYS — a locksmith with no home location on file
+    shouldn't be silently excluded just because they happen to already
+    have an upcoming job near this one. Cards are sorted
+    best-option-first; each card's own options are sorted the same way
+    (nearest/lowest total_minutes first) — see LocksmithCard. An
+    option's attendance is set when it came from a future job location
+    rather than the locksmith's home base.
 
     distance_error is set (and the list empty) only when there WERE
     candidate locksmiths to check but the Google call itself failed —
@@ -392,12 +423,18 @@ def _nearest_locksmiths(job):
     just means no locksmith had a usable location, or none resolved.
     on_shift_error is the same idea for the Teams Shifts lookup (see
     _shift_info_by_locksmith) — set only when that call itself failed,
-    never for a locksmith simply not being on shift."""
+    never for a locksmith simply not being on shift.
+    teams_shift_diagnostic is a raw one-liner (see
+    _shift_info_by_locksmith) covering what Graph actually returned for
+    the shifts window — set whenever that lookup ran at all, success or
+    failure, since a call that "succeeds" with zero useful matches
+    looks identical to a locksmith genuinely having no shift, unless
+    this is shown too."""
     if job.vehicle_latitude is None or job.vehicle_longitude is None:
-        return [], "", ""
+        return [], "", "", ""
     locksmiths = list(Locksmith.objects.filter(active=True).select_related("user").order_by("name"))
     if not locksmiths:
-        return [], "", ""
+        return [], "", "", ""
 
     now = django_timezone.localtime(django_timezone.now()).replace(tzinfo=None)
     future_summary = _future_attendance_summary_by_locksmith(locksmiths, now=now)
@@ -421,7 +458,7 @@ def _nearest_locksmiths(job):
             origin_attendances.append(attendance)
 
     if not origins:
-        return [], "", ""
+        return [], "", "", ""
 
     try:
         distances = get_google_maps_client().get_distances(
@@ -429,7 +466,7 @@ def _nearest_locksmiths(job):
         )
     except Exception as exc:
         logger.exception("Failed to fetch Google distances for Logs Engine lookup %s", job.report_id)
-        return [], str(exc), ""
+        return [], str(exc), "", ""
 
     options_by_locksmith_pk = {}
     locksmiths_by_pk = {}
@@ -442,7 +479,7 @@ def _nearest_locksmiths(job):
         options_by_locksmith_pk.setdefault(locksmith.pk, []).append((distance, attendance))
 
     if not options_by_locksmith_pk:
-        return [], "", ""
+        return [], "", "", ""
 
     locksmiths_needing_return = [
         locksmiths_by_pk[pk] for pk, options in options_by_locksmith_pk.items()
@@ -450,7 +487,7 @@ def _nearest_locksmiths(job):
     ]
     return_minutes_by_locksmith = _return_minutes_by_locksmith(locksmiths_needing_return, job)
     window_end_date = now.date() + timedelta(days=_FUTURE_JOB_WINDOW_DAYS)
-    shift_info_by_pk, on_shift_error = _shift_info_by_locksmith(
+    shift_info_by_pk, on_shift_error, teams_shift_diagnostic = _shift_info_by_locksmith(
         list(locksmiths_by_pk.values()), now=now, window_end_date=window_end_date,
     )
     job_location = f"{job.vehicle_latitude},{job.vehicle_longitude}"
@@ -508,7 +545,7 @@ def _nearest_locksmiths(job):
     cards.sort(key=lambda c: (
         c.options[0].total_minutes is None, c.options[0].total_minutes, c.options[0].distance.distance_metres,
     ))
-    return cards, "", on_shift_error
+    return cards, "", on_shift_error, teams_shift_diagnostic
 
 
 @login_required
@@ -523,8 +560,8 @@ def lookup(request):
             details = {}
         job = details.get(report_id)
 
-    nearest_locksmiths, nearest_locksmiths_error, on_shift_error = (
-        _nearest_locksmiths(job) if job else ([], "", "")
+    nearest_locksmiths, nearest_locksmiths_error, on_shift_error, teams_shift_diagnostic = (
+        _nearest_locksmiths(job) if job else ([], "", "", "")
     )
 
     return render(
@@ -538,6 +575,7 @@ def lookup(request):
             "nearest_locksmiths": nearest_locksmiths,
             "nearest_locksmiths_error": nearest_locksmiths_error,
             "on_shift_error": on_shift_error,
+            "teams_shift_diagnostic": teams_shift_diagnostic,
             "job_duration_minutes": _JOB_DURATION_MINUTES,
             "locksmiths_missing_postcode": (
                 Locksmith.objects.filter(

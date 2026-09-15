@@ -668,6 +668,49 @@ class LogsEngineNearestLocksmithsTests(TestCase):
         mock_get_shifts.return_value.list_shifts_for_date_range.assert_called_once_with(
             now.date(), now.date() + timedelta(days=_FUTURE_JOB_WINDOW_DAYS),
         )
+        # Raw diagnostic: proves what Graph actually returned, so a
+        # "succeeded but matched nothing" case is distinguishable from
+        # a genuine "nobody has a shift" case, right on the page.
+        self.assertIn("Fetched 1 published shift(s)", response.context["teams_shift_diagnostic"])
+        self.assertIn("1 matched one of this app's 1 known locksmith email(s)", response.context["teams_shift_diagnostic"])
+        self.assertContains(response, "Fetched 1 published shift(s)")
+
+    @patch("apps.logs_engine.views.get_teams_shifts_client")
+    @patch("apps.logs_engine.views.get_google_maps_client")
+    @patch("apps.logs_engine.views.get_handl_client")
+    def test_teams_shift_diagnostic_shows_unmatched_fetch(self, mock_get_handl, mock_get_maps, mock_get_shifts):
+        # The exact live symptom this was built for: Graph returns real
+        # shifts, but none of them match any known locksmith email —
+        # without this, that's indistinguishable from Graph returning
+        # nothing at all, or from nobody genuinely having a shift.
+        Locksmith.objects.create(name="WGTK - Nearby", home_postcode="NR14 8PL", email="andrew.s@wgtk.co.uk")
+        mock_get_handl.return_value = MagicMock(
+            get_job_details=MagicMock(return_value={"501179": _job_with_location()}),
+            get_future_locksmith_attendances=MagicMock(return_value=[]),
+        )
+        mock_get_maps.return_value = MagicMock(get_distances=MagicMock(return_value=[
+            LocksmithDistance(origin="NR14 8PL", distance_metres=8369.0, duration_seconds=720, status="OK"),
+        ]))
+        now = django_timezone.localtime(django_timezone.now()).replace(tzinfo=None)
+        mock_get_shifts.return_value = MagicMock(list_shifts_for_date_range=MagicMock(return_value=[
+            ShiftAssignment(
+                email="someone.else@wgtk.co.uk",
+                shift_start=now - timedelta(hours=1), shift_end=now + timedelta(hours=1),
+            ),
+            ShiftAssignment(
+                email="another.person@wgtk.co.uk",
+                shift_start=now + timedelta(days=1), shift_end=now + timedelta(days=1, hours=9),
+            ),
+        ]))
+
+        response = self.client.get(reverse("logs_engine:lookup"), {"report_id": "501179"})
+
+        diagnostic = response.context["teams_shift_diagnostic"]
+        self.assertIn("Fetched 2 published shift(s)", diagnostic)
+        self.assertIn("0 matched one of this app's 1 known locksmith email(s)", diagnostic)
+        card = response.context["nearest_locksmiths"][0]
+        self.assertIs(card.on_shift, False)  # checked, and none of the fetched shifts were theirs
+        self.assertFalse(card.shift_dates_on_file)
 
     @patch("apps.logs_engine.views.get_teams_shifts_client")
     @patch("apps.logs_engine.views.get_google_maps_client")
@@ -745,6 +788,39 @@ class LogsEngineNearestLocksmithsTests(TestCase):
         # Still shown even though it's already passed — that's the
         # point: it tells a human they've already finished for today.
         self.assertEqual(card.expected_home, now - timedelta(hours=5))
+
+    @patch("apps.logs_engine.views.get_teams_shifts_client")
+    @patch("apps.logs_engine.views.get_google_maps_client")
+    @patch("apps.logs_engine.views.get_handl_client")
+    def test_expected_home_includes_an_overnight_shift_spanning_midnight(
+        self, mock_get_handl, mock_get_maps, mock_get_shifts
+    ):
+        # An overnight shift (starts late evening, ends past midnight)
+        # has a start date of YESTERDAY, not today — filtering
+        # expected_home strictly by "starts today" would silently drop
+        # it, even though it's still very much today's shift to a
+        # human. Deliberately independent of wall-clock time: the
+        # shift's own end date is pinned to today regardless of when
+        # this test happens to run.
+        Locksmith.objects.create(name="WGTK - Nearby", home_postcode="NR14 8PL", email="andrew.s@wgtk.co.uk")
+        mock_get_handl.return_value = MagicMock(
+            get_job_details=MagicMock(return_value={"501179": _job_with_location()}),
+            get_future_locksmith_attendances=MagicMock(return_value=[]),
+        )
+        mock_get_maps.return_value = MagicMock(get_distances=MagicMock(return_value=[
+            LocksmithDistance(origin="NR14 8PL", distance_metres=8369.0, duration_seconds=720, status="OK"),
+        ]))
+        now = django_timezone.localtime(django_timezone.now()).replace(tzinfo=None)
+        shift_start = (now - timedelta(days=1)).replace(hour=22, minute=0, second=0, microsecond=0)
+        shift_end = now.replace(hour=6, minute=0, second=0, microsecond=0)
+        mock_get_shifts.return_value = MagicMock(list_shifts_for_date_range=MagicMock(return_value=[
+            ShiftAssignment(email="andrew.s@wgtk.co.uk", shift_start=shift_start, shift_end=shift_end),
+        ]))
+
+        response = self.client.get(reverse("logs_engine:lookup"), {"report_id": "501179"})
+
+        card = response.context["nearest_locksmiths"][0]
+        self.assertEqual(card.expected_home, shift_end)
 
     @patch("apps.logs_engine.views.get_teams_shifts_client")
     @patch("apps.logs_engine.views.get_google_maps_client")
