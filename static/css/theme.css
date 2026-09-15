@@ -775,3 +775,20 @@ textarea { width: 100%; padding: 0.6rem 0.7rem; font-size: 1rem; font-family: va
    stacked full-width. */
 .photo-source-buttons button.btn-secondary { width: auto; flex: 1; padding: 0.55rem 0.5rem; font-size: 0.85rem; }
 .photo-input-summary { margin: 0.3rem 0 0; }
+/* Visually hidden, NOT display:none — some mobile browsers (confirmed
+   live: both iOS Safari and Android Chrome) silently refuse to open
+   the camera/gallery picker on a programmatic .click() when the file
+   input itself is display:none. Keeping it in the layout (off-screen,
+   zero-size, clipped) instead of hiding it outright is the standard
+   fix and works everywhere. */
+.photo-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
