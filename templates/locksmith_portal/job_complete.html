@@ -352,17 +352,7 @@
     recognition.addEventListener('end', function () { setListening(false); });
     recognition.addEventListener('error', function () { setListening(false); });
   })();
-
-  // Server also caps this at 3 (see MAX_PHOTOS_PER_KIND) — this just
-  // saves a round trip by telling the locksmith straight away rather
-  // than silently dropping the extras after upload.
-  document.querySelectorAll('input[type=file][multiple]').forEach(function (input) {
-    input.addEventListener('change', function () {
-      if (input.files.length > 3) {
-        alert('Only 3 photos allowed here — please choose 3 or fewer.');
-        input.value = '';
-      }
-    });
-  });
+  // The 3-photos-per-slot cap (and accumulating multiple "Take photo"
+  // taps into one slot) is handled globally in base.html now.
 </script>
 {% endblock %}

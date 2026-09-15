@@ -95,11 +95,69 @@
         input.click();
       });
 
-      // The file input itself is hidden (see _photo_input.html) — this
-      // is the only visible sign of what's actually selected.
+      // A native file input's .files is REPLACED, not appended to, on
+      // every picker use — so each "Take photo" tap was silently
+      // wiping out whatever was already selected for that slot instead
+      // of adding to it (reported live: locksmiths could only ever end
+      // up with the single most recent photo). MAX_PHOTOS below mirrors
+      // the server's own MAX_PHOTOS_PER_KIND cap.
+      //
+      // photoStore holds the running set per input id, independent of
+      // whatever the OS picker just handed back this time — the only
+      // way to make the input "remember" earlier captures is to
+      // rebuild its FileList (via DataTransfer) as store + new each
+      // time. Registered here, ahead of the compression block below,
+      // so compression always compresses the full accumulated set, not
+      // just this event's new picks.
+      var MAX_PHOTOS = 3;
+      var photoStore = {};
+
+      // Same capability check as the compression block below (kept
+      // separate/duplicated rather than shared — reassigning a file
+      // input's .files isn't reliable on every browser, and if it
+      // silently doesn't stick here, falling back to "just this
+      // event's picks" is the same, already-working behaviour rather
+      // than a new failure mode).
+      var canReassignPhotoFiles = (function () {
+        try {
+          var testInput = document.createElement('input');
+          testInput.type = 'file';
+          var dt = new DataTransfer();
+          dt.items.add(new File(['x'], 'test.txt', { type: 'text/plain' }));
+          testInput.files = dt.files;
+          return testInput.files.length === 1;
+        } catch (err) {
+          return false;
+        }
+      })();
+
       document.addEventListener('change', function (e) {
         var input = e.target;
         if (!input || input.tagName !== 'INPUT' || input.type !== 'file') return;
+        if (!input.id || input.id.indexOf('photo-') !== 0) return;
+        if (input.files.length === 0) return;
+
+        if (canReassignPhotoFiles) {
+          var previous = photoStore[input.id] || [];
+          var combined = previous.concat(Array.prototype.slice.call(input.files));
+          if (combined.length > MAX_PHOTOS) {
+            alert('Only ' + MAX_PHOTOS + ' photos allowed here — the extra one(s) weren\'t added.');
+            combined = combined.slice(0, MAX_PHOTOS);
+          }
+          photoStore[input.id] = combined;
+
+          var dataTransfer = new DataTransfer();
+          combined.forEach(function (f) { dataTransfer.items.add(f); });
+          if (dataTransfer.files.length === combined.length) {
+            input.files = dataTransfer.files;
+          } else {
+            photoStore[input.id] = Array.prototype.slice.call(input.files);
+          }
+        }
+
+        // The file input itself is visually hidden (see
+        // _photo_input.html) — this is the only visible sign of what's
+        // actually selected.
         var summary = document.querySelector('[data-summary-for="' + input.id + '"]');
         if (!summary) return;
         var count = input.files.length;
