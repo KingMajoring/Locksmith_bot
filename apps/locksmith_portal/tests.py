@@ -170,6 +170,37 @@ class DashboardTests(TestCase):
 
     @patch("apps.locksmith_portal.views.get_handl_client")
     @patch("apps.locksmith_portal.views.get_optimo_client")
+    def test_dashboard_shows_spare_key_not_akl_when_a_spare_exists(self, mock_get_optimo, mock_get_handl):
+        # Handl files this under the same "LOST" loss_type as a genuine
+        # AKL job — only Policy_KeyClaims.SpareKey=True tells them
+        # apart (see services/labels.py display_loss_type).
+        today = timezone.localdate()
+        order_no = f"1001_{today.isoformat()}"
+        mock_optimo = MagicMock()
+        mock_optimo.list_orders_for_date.return_value = [
+            OptimoOrderSummary(
+                order_no=order_no, driver_serial="011", distance_metres=0, travel_time_seconds=0
+            ),
+        ]
+        mock_get_optimo.return_value = mock_optimo
+        mock_handl = MagicMock()
+        mock_handl.get_job_details.return_value = {
+            "1001": JobDetails(
+                report_id="1001", make="Ford", model="Focus", year="2020", reg="AB20 CDE", vin="VIN1",
+                service_type="Car", loss_type="LOST", supplied_service="", net_cost=100.0,
+                spare_key=True,
+            )
+        }
+        mock_get_handl.return_value = mock_handl
+
+        response = self.client.get(reverse("locksmith_portal:dashboard"))
+        job = response.context["jobs"][0]
+        self.assertEqual(job["service"], "Spare Key")
+        self.assertContains(response, "Spare Key")
+        self.assertNotContains(response, "AKL")
+
+    @patch("apps.locksmith_portal.views.get_handl_client")
+    @patch("apps.locksmith_portal.views.get_optimo_client")
     def test_dashboard_shows_vehicle_address(self, mock_get_optimo, mock_get_handl):
         today = timezone.localdate()
         order_no = f"1001_{today.isoformat()}"
@@ -3200,6 +3231,19 @@ class JobVisitWorkflowTests(TestCase):
         # No spare key was ever held on an AKL job, so there's no
         # client key left to photograph alongside the new one.
         self.assertNotContains(response, "New key with the client&#x27;s key")
+
+    def test_lost_with_spare_key_shows_as_spare_key_not_akl(self):
+        # Handl files this under the same "LOST" loss_type as a genuine
+        # AKL job — only Policy_KeyClaims.SpareKey=True tells them
+        # apart, and a spare existing somewhere means the client does
+        # have a key of their own to photograph, same as any other
+        # Spare Key job.
+        self._set_loss_type("LOST", spare_key=True)
+        self._parts_done_visit()
+        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        response = self.client.get(url)
+        self.assertEqual(response.context["loss_label"], "Spare Key")
+        self.assertContains(response, "New key with the client&#x27;s key")
 
     def test_akl_missing_required_slot_is_rejected(self):
         self._set_loss_type("LOST")

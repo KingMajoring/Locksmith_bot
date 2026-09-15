@@ -575,7 +575,7 @@ def lookup(request):
             "report_id": report_id,
             "searched": bool(report_id),
             "job": job,
-            "service_label": display_loss_type(job.loss_type) if job else "",
+            "service_label": display_loss_type(job.loss_type, spare_key=job.spare_key) if job else "",
             "nearest_locksmiths": nearest_locksmiths,
             "nearest_locksmiths_error": nearest_locksmiths_error,
             "on_shift_error": on_shift_error,

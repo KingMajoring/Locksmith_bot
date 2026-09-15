@@ -67,6 +67,27 @@ class LogsEngineLookupTests(TestCase):
         mock_get_handl.return_value.get_job_details.assert_called_once_with(["501179"])
 
     @patch("apps.logs_engine.views.get_handl_client")
+    def test_service_label_shows_akl_when_no_spare_key(self, mock_get_handl):
+        mock_get_handl.return_value = MagicMock(get_job_details=MagicMock(return_value={
+            "501179": _job_with_location(spare_key=False),
+        }))
+        response = self.client.get(reverse("logs_engine:lookup"), {"report_id": "501179"})
+        self.assertEqual(response.context["service_label"], "AKL")
+        self.assertContains(response, "AKL")
+
+    @patch("apps.logs_engine.views.get_handl_client")
+    def test_service_label_shows_spare_key_when_a_spare_exists(self, mock_get_handl):
+        # Handl files this under the same "LOST" loss_type as a genuine
+        # AKL job — only Policy_KeyClaims.SpareKey=True tells them
+        # apart (see services/labels.py display_loss_type).
+        mock_get_handl.return_value = MagicMock(get_job_details=MagicMock(return_value={
+            "501179": _job_with_location(spare_key=True),
+        }))
+        response = self.client.get(reverse("logs_engine:lookup"), {"report_id": "501179"})
+        self.assertEqual(response.context["service_label"], "Spare Key")
+        self.assertContains(response, "Spare Key")
+
+    @patch("apps.logs_engine.views.get_handl_client")
     def test_unknown_report_id_shows_not_found(self, mock_get_handl):
         mock_get_handl.return_value = MagicMock(get_job_details=MagicMock(return_value={}))
 

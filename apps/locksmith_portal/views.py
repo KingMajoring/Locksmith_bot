@@ -106,11 +106,13 @@ _ARRIVAL_PHOTO_SLOTS_BY_SERVICE = {
 # the business wants captured per job type, rather than one generic
 # "after" bucket. (kind, required) pairs.
 #
-# AKL covers both "Lost - with no spare" and "Lost - with spare" (Handl
-# doesn't have a separate loss_type for these — it's the same "LOST"
-# claim with a true/false spare-key flag) — both need the exact same
-# photos, so one shared list covers it until office asks for them to
-# diverge.
+# Handl doesn't have a separate loss_type for "Lost - with no spare" vs
+# "Lost - with spare" — it's the same "LOST" claim either way, split by
+# a true/false spare-key flag — but display_loss_type() (see
+# services/labels.py) already turns that flag into "AKL" vs "Spare Key"
+# respectively, so this list only ever needs to cover the genuine
+# no-spare-anywhere case; the spare-exists case gets the "Spare Key"
+# entry below instead, CLIENT_KEY photo included.
 _KEY_RELATED_AFTER_PHOTO_SLOTS = [
     (JobVisitPhoto.Kind.BLADE_IN_DOOR, True),
     (JobVisitPhoto.Kind.BLADE_IN_IGNITION, True),
@@ -143,7 +145,7 @@ def _loss_label_for(report_id):
     except Exception:
         logger.exception("Failed to fetch Handl job details for report %s", report_id)
         return ""
-    return display_loss_type(details.loss_type) if details else ""
+    return display_loss_type(details.loss_type, spare_key=details.spare_key) if details else ""
 
 
 def _needs_access_method(report_id):
@@ -763,7 +765,7 @@ def dashboard(request):
         job["model"] = details.model if details else ""
         job["year"] = details.year if details else ""
         job["reg"] = details.reg if details else ""
-        job["service"] = display_loss_type(details.loss_type) if details else ""
+        job["service"] = display_loss_type(details.loss_type, spare_key=details.spare_key) if details else ""
         job["supplied_service"] = details.supplied_service if details else ""
         job["vehicle_address"] = details.vehicle_address if details else ""
         job["maps_url"], job["waze_url"] = _navigation_urls(

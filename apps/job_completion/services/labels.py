@@ -10,10 +10,22 @@ _LOSS_TYPE_LABELS = {
 }
 
 
-def display_loss_type(raw: str) -> str:
+def display_loss_type(raw: str, *, spare_key: bool | None = None) -> str:
+    """spare_key is Handl's Policy_KeyClaims.SpareKey for this specific
+    job (see JobDetails.spare_key) — only meaningful for a "LOST" raw
+    value, where it decides between the two real-world cases Handl
+    files under that one loss_type: genuinely no spare key anywhere
+    ("AKL") vs. a spare still exists somewhere ("Spare Key", the same
+    label already used for jobs Handl itself types that way). Omit it
+    (the default) to get the old behaviour, for a caller with no
+    per-job spare_key to hand — e.g. CompletedJob reporting/
+    benchmarking, which doesn't capture this flag at all."""
     if not raw:
         return raw
-    return _LOSS_TYPE_LABELS.get(raw.strip().upper(), raw)
+    normalized = raw.strip().upper()
+    if normalized == "LOST" and spare_key is True:
+        return "Spare Key"
+    return _LOSS_TYPE_LABELS.get(normalized, raw)
 
 
 def raw_values_for_display_label(label: str) -> list[str]:
