@@ -330,6 +330,7 @@ class JobVisitPhoto(models.Model):
         KEYS_SUPPLIED = "keys_supplied", "Keys supplied"
         CLIENT_KEY = "client_key", "New key with the client's key"
         IGNITION_ON = "ignition_on", "Ignition on"
+        PANELS_REMOVED = "panels_removed", "Panels removed to access the vehicle"
         MILEAGE = "mileage", "Mileage"
         DISCLAIMER_SIGNATURE = "disclaimer_signature", "Disclaimer signature"
         COMPLETION_SIGNATURE = "completion_signature", "Completion sign-off signature"

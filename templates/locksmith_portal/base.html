@@ -74,19 +74,25 @@
       // they meant to photograph the job fresh — a clear "Take photo"
       // option steers them toward a fresh, already-camera-sized shot
       // instead, on top of the compression below.
-      document.querySelectorAll('.photo-source-btn').forEach(function (button) {
-        button.addEventListener('click', function () {
-          var input = document.getElementById(button.dataset.target);
-          if (!input) return;
-          if (button.dataset.capture) {
-            input.setAttribute('capture', button.dataset.capture);
-            input.removeAttribute('multiple');
-          } else {
-            input.removeAttribute('capture');
-            input.setAttribute('multiple', 'multiple');
-          }
-          input.click();
-        });
+      // Delegated on document, not bound per-button at load time: this
+      // script runs before <main> (the page's own content block, where
+      // every photo-source-btn actually lives) has been parsed, so a
+      // one-time querySelectorAll().forEach() here would find zero
+      // buttons and silently attach nothing. Confirmed live: both
+      // buttons rendered but neither opened a picker on tap.
+      document.addEventListener('click', function (e) {
+        var button = e.target.closest('.photo-source-btn');
+        if (!button) return;
+        var input = document.getElementById(button.dataset.target);
+        if (!input) return;
+        if (button.dataset.capture) {
+          input.setAttribute('capture', button.dataset.capture);
+          input.removeAttribute('multiple');
+        } else {
+          input.removeAttribute('capture');
+          input.setAttribute('multiple', 'multiple');
+        }
+        input.click();
       });
 
       // The file input itself is hidden (see _photo_input.html) — this

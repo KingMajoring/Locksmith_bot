@@ -111,9 +111,7 @@ _ARRIVAL_PHOTO_SLOTS_BY_SERVICE = {
 # "Lost - with spare" — it's the same "LOST" claim either way, split by
 # a true/false spare-key flag — but display_loss_type() (see
 # services/labels.py) already turns that flag into "AKL" vs "Spare Key"
-# respectively, so this list only ever needs to cover the genuine
-# no-spare-anywhere case; the spare-exists case gets the "Spare Key"
-# entry below instead, CLIENT_KEY photo included.
+# respectively, so both cases are covered by this one shared list.
 _KEY_RELATED_AFTER_PHOTO_SLOTS = [
     (JobVisitPhoto.Kind.BLADE_IN_DOOR, True),
     (JobVisitPhoto.Kind.BLADE_IN_IGNITION, True),
@@ -123,6 +121,16 @@ _KEY_RELATED_AFTER_PHOTO_SLOTS = [
     # across every key-related job the way the others are.
     (JobVisitPhoto.Kind.IGNITION_ON, False),
     (JobVisitPhoto.Kind.KEYS_SUPPLIED, True),
+    # Optional on every key-related job, not just Spare Key: most of the
+    # time there's no original key left to photograph (lost/broken/
+    # stolen), but occasionally the client does have one the locksmith
+    # wants captured anyway — offered rather than forced. Spare Key
+    # below is the one case this is reliably possible, so it's required
+    # there specifically.
+    (JobVisitPhoto.Kind.CLIENT_KEY, False),
+    # Optional: only relevant when trim/panels genuinely had to come off
+    # to reach the lock/wiring, not every job.
+    (JobVisitPhoto.Kind.PANELS_REMOVED, False),
 ]
 
 _AFTER_PHOTO_SLOTS_BY_SERVICE = {
@@ -131,11 +139,13 @@ _AFTER_PHOTO_SLOTS_BY_SERVICE = {
         (JobVisitPhoto.Kind.KEY_IN_HAND, False),
     ],
     **{label: _KEY_RELATED_AFTER_PHOTO_SLOTS for label in _KEY_RELATED_SERVICE_LABELS},
-    # Only a Spare Key job leaves the client holding a working key of
-    # their own to photograph alongside the new one — for AKL and the
-    # other key-related types every key was lost/broken/stolen, so
-    # there's nothing of the client's left to compare it against.
-    "Spare Key": [*_KEY_RELATED_AFTER_PHOTO_SLOTS, (JobVisitPhoto.Kind.CLIENT_KEY, True)],
+    # A Spare Key job is the one case that reliably leaves the client
+    # holding a working key of their own — make that photo required
+    # here specifically, same slot list otherwise.
+    "Spare Key": [
+        (kind, True) if kind == JobVisitPhoto.Kind.CLIENT_KEY else (kind, required)
+        for kind, required in _KEY_RELATED_AFTER_PHOTO_SLOTS
+    ],
 }
 
 

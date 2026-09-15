@@ -3266,9 +3266,14 @@ class JobVisitWorkflowTests(TestCase):
         self.assertContains(response, "Blade turned in the ignition")
         self.assertContains(response, "Ignition on")
         self.assertContains(response, "Keys supplied")
-        # No spare key was ever held on an AKL job, so there's no
-        # client key left to photograph alongside the new one.
-        self.assertNotContains(response, "New key with the client&#x27;s key")
+        self.assertContains(response, "Panels removed to access the vehicle")
+        # No spare key was ever held on an AKL job, so there's rarely a
+        # client key left to photograph — offered anyway, just not
+        # required here (see Spare Key below, where it is required).
+        self.assertContains(response, "New key with the client&#x27;s key")
+        required_by_kind = {slot["kind"]: slot["required"] for slot in response.context["photo_slots"]}
+        self.assertFalse(required_by_kind[JobVisitPhoto.Kind.CLIENT_KEY])
+        self.assertFalse(required_by_kind[JobVisitPhoto.Kind.PANELS_REMOVED])
 
     def test_lost_with_spare_key_shows_as_spare_key_not_akl(self):
         # Handl files this under the same "LOST" loss_type as a genuine
