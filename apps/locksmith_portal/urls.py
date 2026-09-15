@@ -29,6 +29,11 @@ urlpatterns = [
         name="edit_disposal",
     ),
     path("jobs/<path:order_no>/complete/", views.job_complete, name="job_complete"),
+    path(
+        "jobs/<path:order_no>/photos/<str:kind>/",
+        views.job_photo_upload_one,
+        name="job_photo_upload_one",
+    ),
     path("jobs/<path:order_no>/", views.job_overview, name="job_overview"),
     path("preview/stop/", views.stop_preview, name="stop_preview"),
     path("preview/<int:locksmith_id>/", views.start_preview, name="start_preview"),

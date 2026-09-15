@@ -30,7 +30,7 @@
     <input type="hidden" name="disclaimer_signature" id="disclaimer_signature">
 
     <label>Photos of the door frame <span class="sub">(up to 3 photos)</span></label>
-    {% include "locksmith_portal/_photo_input.html" with kind="door_frame" required=False %}
+    {% include "locksmith_portal/_photo_input.html" with kind="door_frame" required=False label="Door frame" existing_urls=door_frame_photo_urls %}
   </div>
 
   <p style="margin-top:1rem;"><button class="btn" type="submit">Continue</button></p>

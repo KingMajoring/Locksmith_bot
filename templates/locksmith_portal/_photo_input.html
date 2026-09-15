@@ -1,19 +1,38 @@
 {% comment %}
 Camera-or-gallery photo picker for one named slot — used by job_complete,
 job_photo_upload and job_access_method. Args: kind (e.g. "front_of_car"),
-required (bool). Both buttons drive the SAME file input (so the existing
-per-page "max 3" script, the site-wide compression script in base.html,
-and required-field validation all keep working unchanged) — "Take photo"
-just sets capture=environment on it first so the OS opens the camera
-directly instead of the file/gallery chooser. The input is visually
-hidden via CSS (.photo-file-input), NOT the `hidden` attribute — a
-display:none file input silently refuses to open on some mobile
-browsers when clicked programmatically (confirmed live on both iOS
-Safari and Android Chrome).
+required (bool), label (str — the same text used in the "Add at least
+one photo: X" message, so the client-side check reads the same as the
+server-side one), existing_urls (already-uploaded photo URLs for this
+slot, e.g. after a page reload mid-job). order_no comes from the
+including template's own context — not passed explicitly, since
+{% include %} shares context by default.
+
+Each photo uploads immediately via fetch as soon as it's taken/picked
+(see base.html), instead of travelling with the surrounding form's own
+final submit — a completion submit carrying every slot's photos in one
+multipart request was the real shape of the "stuck on save" bug fixed
+earlier by raising the server's request timeout; uploading one small
+photo at a time removes the reason that timeout was ever needed. The
+file input itself only ever exists to trigger the OS picker — nothing
+about it is submitted with the surrounding form. "Take photo" sets
+capture=environment on it first so the OS opens the camera directly
+instead of the file/gallery chooser. Visually hidden via CSS
+(.photo-file-input), not the `hidden` attribute — a display:none file
+input silently refuses to open on some mobile browsers when clicked
+programmatically (confirmed live on both iOS Safari and Android
+Chrome).
 {% endcomment %}
 <div class="photo-source-buttons">
   <button type="button" class="btn-secondary photo-source-btn" data-target="photo-{{ kind }}" data-capture="environment">📷 Take photo</button>
   <button type="button" class="btn-secondary photo-source-btn" data-target="photo-{{ kind }}">🖼️ Gallery</button>
 </div>
-<input type="file" id="photo-{{ kind }}" name="photo_{{ kind }}" accept="image/*" multiple {% if required %}required{% endif %} class="photo-file-input" tabindex="-1" aria-hidden="true">
-<p class="sub photo-input-summary" data-summary-for="photo-{{ kind }}"></p>
+<input type="file" id="photo-{{ kind }}" accept="image/*" multiple class="photo-file-input" tabindex="-1" aria-hidden="true"
+       data-upload-url="{% url 'locksmith_portal:job_photo_upload_one' order_no=order_no kind=kind %}"
+       {% if required %}data-required="1"{% endif %} data-label="{{ label }}">
+<div class="photo-thumbs" data-thumbs-for="photo-{{ kind }}">
+  {% for url in existing_urls %}
+    <a href="{{ url }}" target="_blank" class="photo-thumb"><img src="{{ url }}" loading="lazy"></a>
+  {% endfor %}
+</div>
+<p class="sub photo-input-summary" data-summary-for="photo-{{ kind }}">{% if existing_urls %}{{ existing_urls|length }} photo{{ existing_urls|length|pluralize }} uploaded{% endif %}</p>

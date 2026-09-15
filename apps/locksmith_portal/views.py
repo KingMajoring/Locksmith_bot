@@ -583,39 +583,78 @@ def _photo_links_html(label, urls):
     )
 
 
-def _save_visit_photos(request, visit, report_id, stage, kind, files):
-    """Validates and uploads each file via get_photo_storage(), records
-    a JobVisitPhoto per one, and returns the list of URLs saved (for
-    the Handl note) — a file that fails type/size validation is
-    skipped with an error message rather than aborting the whole
-    batch, so one bad file doesn't lose the rest of a locksmith's
-    photos. Capped at MAX_PHOTOS_PER_KIND per slot — any beyond that are
-    dropped with a message rather than saved, so a slot can't grow
-    unbounded."""
-    if len(files) > MAX_PHOTOS_PER_KIND:
-        messages.warning(
-            request,
-            f"Only the first {MAX_PHOTOS_PER_KIND} photos of "
-            f"{JobVisitPhoto.Kind(kind).label} were saved — {MAX_PHOTOS_PER_KIND} max per photo.",
-        )
-        files = files[:MAX_PHOTOS_PER_KIND]
+def _upload_one_visit_photo(visit, kind, f):
+    """Validates and uploads a single photo file, called from
+    job_photo_upload_one as each photo is taken/picked — see that
+    view's docstring for why uploads happen one at a time, immediately,
+    rather than batched into the stepper's own final submit. Returns
+    (url, None) on success or (None, error_message) if the file itself
+    is rejected (not an image, too large); the per-slot
+    MAX_PHOTOS_PER_KIND cap is the caller's job to check first, since
+    that's about how many are already saved, not about this one
+    file."""
+    if not (f.content_type or "").startswith("image/"):
+        return None, f"'{f.name}' isn't an image."
+    if f.size > MAX_PHOTO_BYTES:
+        return None, f"'{f.name}' is too large ({MAX_PHOTO_BYTES // (1024 * 1024)}MB max)."
+    url = get_photo_storage().upload(
+        report_id=visit.report_id, stage=kind, filename=f.name,
+        content=f.read(), content_type=f.content_type,
+    )
+    JobVisitPhoto.objects.create(visit=visit, kind=kind, url=url)
+    return url, None
 
-    storage = get_photo_storage()
-    urls = []
-    for f in files:
-        if not (f.content_type or "").startswith("image/"):
-            messages.error(request, f"'{f.name}' isn't an image — skipped.")
-            continue
-        if f.size > MAX_PHOTO_BYTES:
-            messages.error(request, f"'{f.name}' is too large ({MAX_PHOTO_BYTES // (1024 * 1024)}MB max) — skipped.")
-            continue
-        url = storage.upload(
-            report_id=report_id, stage=stage, filename=f.name,
-            content=f.read(), content_type=f.content_type,
-        )
-        JobVisitPhoto.objects.create(visit=visit, kind=kind, url=url)
-        urls.append(url)
-    return urls
+
+def _visit_photo_urls(visit, kind):
+    """Already-uploaded photo URLs for one slot, oldest first — used
+    both to build the Handl note at final submit (see job_arrived/
+    job_access_method/job_complete) and to pre-fill a slot's thumbnails
+    on a page reload (see the photo_slots context each of those builds
+    for its template)."""
+    return list(visit.photos.filter(kind=kind).order_by("uploaded_at").values_list("url", flat=True))
+
+
+@login_required
+@require_POST
+def job_photo_upload_one(request, order_no, kind):
+    """AJAX endpoint: uploads ONE photo immediately, the moment it's
+    taken or picked client-side (see base.html's photo-upload JS),
+    rather than waiting for the surrounding on-route/arrived/access-
+    method/complete form's own final submit. That final submit used to
+    carry every photo for every named slot in one multipart request —
+    on a job with several slots that's easily 5-8 photos at once, and
+    was the real shape of the "stuck on save" bug already fixed once by
+    raising the server's request timeout: the timeout raise let a slow
+    upload survive, this makes the upload itself small regardless of
+    how many photos get taken, and surfaces a failed one immediately
+    rather than after the whole form is filled in.
+
+    Returns JSON: {"url": ...} on success, or {"error": ...} (400/403/
+    404) on a rejected file/cap/ownership problem — the caller can
+    show that against just this one photo without losing whatever
+    else is already uploaded, since nothing here touches the other
+    slots or the visit's own stage/fields."""
+    locksmith = _locksmith_for_request(request)
+    if locksmith is None:
+        return JsonResponse({"error": "Not authorized."}, status=403)
+    if kind not in JobVisitPhoto.Kind.values:
+        return JsonResponse({"error": "Unknown photo type."}, status=400)
+
+    visit = JobVisit.objects.filter(locksmith=locksmith, order_no=order_no).first()
+    if visit is None:
+        return JsonResponse({"error": "Start this job before adding photos."}, status=404)
+
+    if visit.photos.filter(kind=kind).count() >= MAX_PHOTOS_PER_KIND:
+        return JsonResponse({"error": f"Only {MAX_PHOTOS_PER_KIND} photos allowed here."}, status=400)
+
+    f = request.FILES.get("photo")
+    if f is None:
+        return JsonResponse({"error": "No photo received."}, status=400)
+
+    url, error = _upload_one_visit_photo(visit, kind, f)
+    if error:
+        return JsonResponse({"error": error}, status=400)
+    return JsonResponse({"url": url})
 
 
 def _avg_duration_minutes(queryset):
@@ -1169,52 +1208,43 @@ def job_arrived(request, order_no):
 
     if request.method == "POST":
         errors = []
-        slot_files = {}
         for kind, required in slot_prompts:
-            files = request.FILES.getlist(f"photo_{kind}")
-            if required and not files:
+            if required and not visit.photos.filter(kind=kind).exists():
                 errors.append(f"Add at least one photo: {JobVisitPhoto.Kind(kind).label}.")
-            slot_files[kind] = files
 
         if errors:
             for error in errors:
                 messages.error(request, error)
         else:
             note_parts = [f"'{locksmith.van_soter_display_name}' has arrived on site."]
-            any_uploaded = False
-            for kind, files in slot_files.items():
-                if not files:
-                    continue
-                urls = _save_visit_photos(request, visit, report_id, kind, kind, files)
+            for kind, required in slot_prompts:
+                urls = _visit_photo_urls(visit, kind)
                 if urls:
-                    any_uploaded = True
                     kind_label = JobVisitPhoto.Kind(kind).label
                     note_parts.append(f"{kind_label}: {_photo_links_html(kind_label, urls)}")
 
-            if not any_uploaded:
-                # Every attached file failed image/size validation (see
-                # _save_visit_photos) — nothing to advance the stage for.
-                messages.error(request, "Add at least one before-job photo to continue.")
-            else:
-                latitude, longitude = _parse_coords(
-                    request.POST.get("arrival_latitude", ""), request.POST.get("arrival_longitude", "")
-                )
-                visit.arrival_latitude = latitude
-                visit.arrival_longitude = longitude
-                visit.stage = JobVisit.Stage.ARRIVED
-                visit.arrived_at = timezone.now()
-                visit.save(update_fields=["arrival_latitude", "arrival_longitude", "stage", "arrived_at"])
-                maps_link = _maps_link(latitude, longitude)
-                if maps_link:
-                    note_parts.append(f"Location: {maps_link}")
-                _write_handl_note(locksmith, report_id, " ".join(note_parts))
-                if selected_date == timezone.localdate():
-                    _update_optimo_status(order_no, "servicing", start_time=visit.arrived_at)
-                messages.success(request, "Arrival photos saved.")
-                return redirect(overview_url)
+            latitude, longitude = _parse_coords(
+                request.POST.get("arrival_latitude", ""), request.POST.get("arrival_longitude", "")
+            )
+            visit.arrival_latitude = latitude
+            visit.arrival_longitude = longitude
+            visit.stage = JobVisit.Stage.ARRIVED
+            visit.arrived_at = timezone.now()
+            visit.save(update_fields=["arrival_latitude", "arrival_longitude", "stage", "arrived_at"])
+            maps_link = _maps_link(latitude, longitude)
+            if maps_link:
+                note_parts.append(f"Location: {maps_link}")
+            _write_handl_note(locksmith, report_id, " ".join(note_parts))
+            if selected_date == timezone.localdate():
+                _update_optimo_status(order_no, "servicing", start_time=visit.arrived_at)
+            messages.success(request, "Arrival photos saved.")
+            return redirect(overview_url)
 
     photo_slots = [
-        {"kind": kind, "label": JobVisitPhoto.Kind(kind).label, "required": required}
+        {
+            "kind": kind, "label": JobVisitPhoto.Kind(kind).label, "required": required,
+            "existing_urls": _visit_photo_urls(visit, kind),
+        }
         for kind, required in slot_prompts
     ]
 
@@ -1274,12 +1304,9 @@ def job_access_method(request, order_no):
             errors.append("The customer needs to sign the disclaimer before continuing.")
 
         slot_pairs = _access_method_photo_slots(access_method)
-        slot_files = {}
         for kind, required in slot_pairs:
-            files = request.FILES.getlist(f"photo_{kind}")
-            if required and not files:
+            if required and not visit.photos.filter(kind=kind).exists():
                 errors.append(f"Add at least one photo: {JobVisitPhoto.Kind(kind).label}.")
-            slot_files[kind] = files
 
         if errors:
             for error in errors:
@@ -1322,10 +1349,8 @@ def job_access_method(request, order_no):
                     f"{_photo_links_html(JobVisitPhoto.Kind.DISCLAIMER_SIGNATURE.label, [signature_url])}"
                 )
 
-            for kind, files in slot_files.items():
-                if not files:
-                    continue
-                urls = _save_visit_photos(request, visit, report_id, kind, kind, files)
+            for kind, required in slot_pairs:
+                urls = _visit_photo_urls(visit, kind)
                 if urls:
                     kind_label = JobVisitPhoto.Kind(kind).label
                     note_parts.append(f"{kind_label}: {_photo_links_html(kind_label, urls)}")
@@ -1350,6 +1375,7 @@ def job_access_method(request, order_no):
             "back_url": overview_url,
             "is_preview": _is_preview(request),
             "disclaimer_text": DISCLAIMER_TEXT,
+            "door_frame_photo_urls": _visit_photo_urls(visit, JobVisitPhoto.Kind.DOOR_FRAME),
         },
     )
 
@@ -1448,12 +1474,9 @@ def job_complete(request, order_no):
                     errors.append("Choose a reattend option.")
 
         slot_pairs = _after_photo_slots(loss_label)
-        slot_files = {}
         for kind, required in slot_pairs:
-            files = request.FILES.getlist(f"photo_{kind}")
-            if required and not files:
+            if required and not visit.photos.filter(kind=kind).exists():
                 errors.append(f"Add at least one photo: {JobVisitPhoto.Kind(kind).label}.")
-            slot_files[kind] = files
 
         if errors:
             for error in errors:
@@ -1464,10 +1487,8 @@ def job_complete(request, order_no):
                 f"{JobVisit.Outcome(outcome).label}."
             ]
 
-            for kind, files in slot_files.items():
-                if not files:
-                    continue
-                urls = _save_visit_photos(request, visit, report_id, kind, kind, files)
+            for kind, required in slot_pairs:
+                urls = _visit_photo_urls(visit, kind)
                 if urls:
                     kind_label = JobVisitPhoto.Kind(kind).label
                     note_parts.append(f"{kind_label}: {_photo_links_html(kind_label, urls)}")
@@ -1551,7 +1572,10 @@ def job_complete(request, order_no):
             return redirect(overview_url)
 
     photo_slots = [
-        {"kind": kind, "label": JobVisitPhoto.Kind(kind).label, "required": required}
+        {
+            "kind": kind, "label": JobVisitPhoto.Kind(kind).label, "required": required,
+            "existing_urls": _visit_photo_urls(visit, kind),
+        }
         for kind, required in _after_photo_slots(loss_label)
     ]
     failure_categories = [

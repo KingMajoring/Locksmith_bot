@@ -2073,6 +2073,18 @@ class JobVisitWorkflowTests(TestCase):
     def _visit(self):
         return JobVisit.objects.get(locksmith=self.locksmith, order_no=self.order_no)
 
+    def _add_photo(self, kind, order_no=None, url=None):
+        """Photos now upload via job_photo_upload_one as soon as they're
+        taken, immediately becoming a JobVisitPhoto row — not attached
+        to the stepper's own final submit (see that view's docstring).
+        Simulates that already-happened upload directly, the way tests
+        for job_on_route/job_parts_continue etc. simulate an
+        already-reached stage rather than re-driving the whole flow."""
+        visit = JobVisit.objects.get(locksmith=self.locksmith, order_no=order_no or self.order_no)
+        return JobVisitPhoto.objects.create(
+            visit=visit, kind=kind, url=url or f"https://example.blob.core.windows.net/job-photos/{kind}.jpg",
+        )
+
     # --- overview -----------------------------------------------------
 
     def test_overview_creates_visit_and_shows_on_route_action(self):
@@ -2393,8 +2405,9 @@ class JobVisitWorkflowTests(TestCase):
             locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
             stage=JobVisit.Stage.ON_ROUTE, on_route_at=timezone.now(),
         )
+        self._add_photo(JobVisitPhoto.Kind.BEFORE)
         url = reverse("locksmith_portal:job_arrived", args=[self.order_no])
-        response = self.client.post(url, {"photo_before": [_fake_photo()]})
+        response = self.client.post(url, {})
 
         visit = self._visit()
         self.assertEqual(visit.stage, JobVisit.Stage.ARRIVED)
@@ -2429,8 +2442,9 @@ class JobVisitWorkflowTests(TestCase):
             locksmith=self.locksmith, order_no=past_order_no, report_id="555555",
             stage=JobVisit.Stage.ON_ROUTE, on_route_at=timezone.now(),
         )
+        self._add_photo(JobVisitPhoto.Kind.BEFORE, order_no=past_order_no)
         url = f"{reverse('locksmith_portal:job_arrived', args=[past_order_no])}?date={yesterday.isoformat()}"
-        response = self.client.post(url, {"photo_before": [_fake_photo()]})
+        response = self.client.post(url, {})
 
         visit = JobVisit.objects.get(locksmith=self.locksmith, order_no=past_order_no)
         self.assertEqual(visit.stage, JobVisit.Stage.ARRIVED)
@@ -2446,9 +2460,9 @@ class JobVisitWorkflowTests(TestCase):
             locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
             stage=JobVisit.Stage.ON_ROUTE, on_route_at=timezone.now(),
         )
+        self._add_photo(JobVisitPhoto.Kind.BEFORE)
         url = reverse("locksmith_portal:job_arrived", args=[self.order_no])
         self.client.post(url, {
-            "photo_before": [_fake_photo()],
             "arrival_latitude": "51.5072", "arrival_longitude": "-0.1276",
         })
         visit = self._visit()
@@ -2462,8 +2476,9 @@ class JobVisitWorkflowTests(TestCase):
             locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
             stage=JobVisit.Stage.ON_ROUTE, on_route_at=timezone.now(),
         )
+        self._add_photo(JobVisitPhoto.Kind.BEFORE)
         url = reverse("locksmith_portal:job_arrived", args=[self.order_no])
-        response = self.client.post(url, {"photo_before": [_fake_photo()]})
+        response = self.client.post(url, {})
         self.assertEqual(response.status_code, 302)
         visit = self._visit()
         self.assertIsNone(visit.arrival_latitude)
@@ -2471,17 +2486,20 @@ class JobVisitWorkflowTests(TestCase):
         note_text = self.mock_handl.add_report_note.call_args[0][1]
         self.assertNotIn("View location", note_text)
 
-    def test_arrived_rejects_non_image_file_and_does_not_advance(self):
+    def test_arrived_missing_required_photo_is_rejected(self):
+        # Photos now upload immediately via job_photo_upload_one (see
+        # that view and its own tests for file-type/size rejection) —
+        # this form submit itself just needs at least one already saved
+        # for each required slot.
         JobVisit.objects.create(
             locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
             stage=JobVisit.Stage.ON_ROUTE, on_route_at=timezone.now(),
         )
         url = reverse("locksmith_portal:job_arrived", args=[self.order_no])
-        bad_file = SimpleUploadedFile("notes.txt", b"hello", content_type="text/plain")
-        response = self.client.post(url, {"photo_before": [bad_file]})
+        response = self.client.post(url, {})
 
         self.assertEqual(self._visit().stage, JobVisit.Stage.ON_ROUTE)
-        self.assertContains(response, "isn&#x27;t an image")
+        self.assertContains(response, "Add at least one photo: Before")
         self.mock_handl.add_report_note.assert_not_called()
 
     # --- parts continue ---------------------------------------------------
@@ -2547,10 +2565,10 @@ class JobVisitWorkflowTests(TestCase):
             locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
             stage=JobVisit.Stage.ARRIVED, arrived_at=timezone.now(),
         )
+        self._add_photo(JobVisitPhoto.Kind.AFTER)
+        self._add_photo(JobVisitPhoto.Kind.MILEAGE)
         url = reverse("locksmith_portal:job_complete", args=[self.order_no])
         response = self.client.post(url, {
-            "photo_after": [_fake_photo(name="after.jpg")],
-            "photo_mileage": [_fake_photo(name="mileage.jpg")],
             "outcome": "completed", "completion_signature": "data:image/png;base64,aGVsbG8=",
         })
         self.assertRedirects(
@@ -2579,12 +2597,12 @@ class JobVisitWorkflowTests(TestCase):
             locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
             stage=JobVisit.Stage.PARTS_DONE, parts_done_at=timezone.now(),
         )
+        self._add_photo(JobVisitPhoto.Kind.AFTER)
+        self._add_photo(JobVisitPhoto.Kind.MILEAGE)
         url = reverse("locksmith_portal:job_complete", args=[self.order_no])
         response = self.client.post(
             url,
             {
-                "photo_after": [_fake_photo(name="after.jpg")],
-                "photo_mileage": [_fake_photo(name="mileage.jpg")],
                 "notes": "Left a spare key.",
                 "outcome": "completed", "completion_signature": "data:image/png;base64,aGVsbG8=",
             },
@@ -2630,13 +2648,13 @@ class JobVisitWorkflowTests(TestCase):
             locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
             part_code="TK-100", part_name="Transponder key blank", quantity=1,
         )
+        self._add_photo(JobVisitPhoto.Kind.AFTER)
+        self._add_photo(JobVisitPhoto.Kind.MILEAGE)
 
         url = reverse("locksmith_portal:job_complete", args=[self.order_no])
         response = self.client.post(
             url,
             {
-                "photo_after": [_fake_photo(name="after.jpg")],
-                "photo_mileage": [_fake_photo(name="mileage.jpg")],
                 "notes": "",
                 "outcome": "completed", "completion_signature": "data:image/png;base64,aGVsbG8=",
             },
@@ -2668,12 +2686,12 @@ class JobVisitWorkflowTests(TestCase):
             locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
             stage=JobVisit.Stage.PARTS_DONE, parts_done_at=timezone.now(),
         )
+        self._add_photo(JobVisitPhoto.Kind.AFTER)
+        self._add_photo(JobVisitPhoto.Kind.MILEAGE)
         url = reverse("locksmith_portal:job_complete", args=[self.order_no])
         self.client.post(
             url,
             {
-                "photo_after": [_fake_photo(name="after.jpg")],
-                "photo_mileage": [_fake_photo(name="mileage.jpg")],
                 "notes": "",
                 "outcome": "completed", "completion_signature": "data:image/png;base64,aGVsbG8=",
             },
@@ -2693,12 +2711,12 @@ class JobVisitWorkflowTests(TestCase):
             locksmith=self.locksmith, order_no=past_order_no, report_id="555555",
             stage=JobVisit.Stage.PARTS_DONE, parts_done_at=timezone.now(),
         )
+        self._add_photo(JobVisitPhoto.Kind.AFTER, order_no=past_order_no)
+        self._add_photo(JobVisitPhoto.Kind.MILEAGE, order_no=past_order_no)
         url = f"{reverse('locksmith_portal:job_complete', args=[past_order_no])}?date={yesterday.isoformat()}"
         response = self.client.post(
             url,
             {
-                "photo_after": [_fake_photo(name="after.jpg")],
-                "photo_mileage": [_fake_photo(name="mileage.jpg")],
                 "notes": "",
                 "outcome": "completed", "completion_signature": "data:image/png;base64,aGVsbG8=",
             },
@@ -2735,12 +2753,12 @@ class JobVisitWorkflowTests(TestCase):
             locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
             stage=JobVisit.Stage.PARTS_DONE, parts_done_at=timezone.now(),
         )
+        self._add_photo(JobVisitPhoto.Kind.AFTER)
+        self._add_photo(JobVisitPhoto.Kind.MILEAGE)
         url = reverse("locksmith_portal:job_complete", args=[self.order_no])
         response = self.client.post(
             url,
             {
-                "photo_after": [_fake_photo()],
-                "photo_mileage": [_fake_photo(name="mileage.jpg")],
                 "outcome": "completed",
                 "completion_signature": "data:image/png;base64,aGVsbG8=",
                 "further_work_required": "1",
@@ -2821,10 +2839,10 @@ class JobVisitWorkflowTests(TestCase):
             locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
             stage=JobVisit.Stage.PARTS_DONE, parts_done_at=timezone.now(),
         )
+        self._add_photo(JobVisitPhoto.Kind.AFTER)
+        self._add_photo(JobVisitPhoto.Kind.MILEAGE)
         url = reverse("locksmith_portal:job_complete", args=[self.order_no])
         response = self.client.post(url, {
-            "photo_after": [_fake_photo()],
-            "photo_mileage": [_fake_photo(name="mileage.jpg")],
             "outcome": "completed",
             "customer_not_present": "1", "customer_not_present_reason": "Had to leave for work",
         })
@@ -2845,10 +2863,10 @@ class JobVisitWorkflowTests(TestCase):
             locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
             stage=JobVisit.Stage.PARTS_DONE, parts_done_at=timezone.now(),
         )
+        self._add_photo(JobVisitPhoto.Kind.AFTER)
+        self._add_photo(JobVisitPhoto.Kind.MILEAGE)
         url = reverse("locksmith_portal:job_complete", args=[self.order_no])
         self.client.post(url, {
-            "photo_after": [_fake_photo()],
-            "photo_mileage": [_fake_photo(name="mileage.jpg")],
             "outcome": "failed",
             "failure_category": self.category_wrong_parts.pk, "failure_sku_needed": "TK-100",
         })
@@ -2864,12 +2882,12 @@ class JobVisitWorkflowTests(TestCase):
             locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
             stage=JobVisit.Stage.PARTS_DONE, parts_done_at=timezone.now(),
         )
+        self._add_photo(JobVisitPhoto.Kind.AFTER)
+        self._add_photo(JobVisitPhoto.Kind.MILEAGE)
         url = reverse("locksmith_portal:job_complete", args=[self.order_no])
         self.client.post(
             url,
             {
-                "photo_after": [_fake_photo()],
-                "photo_mileage": [_fake_photo(name="mileage.jpg")],
                 "notes": "<script>alert(1)</script>",
                 "outcome": "completed", "completion_signature": "data:image/png;base64,aGVsbG8=",
             },
@@ -2883,10 +2901,10 @@ class JobVisitWorkflowTests(TestCase):
             locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
             stage=JobVisit.Stage.PARTS_DONE, parts_done_at=timezone.now(),
         )
+        self._add_photo(JobVisitPhoto.Kind.AFTER)
+        self._add_photo(JobVisitPhoto.Kind.MILEAGE)
         url = reverse("locksmith_portal:job_complete", args=[self.order_no])
         self.client.post(url, {
-            "photo_after": [_fake_photo()],
-            "photo_mileage": [_fake_photo(name="mileage.jpg")],
             "outcome": "failed",
             "failure_category": self.category_wrong_parts.pk, "failure_sku_needed": "TK-100",
         })
@@ -3037,11 +3055,11 @@ class JobVisitWorkflowTests(TestCase):
     def test_gain_access_airbag_success_stores_signature_and_notes_handl(self):
         self._set_loss_type("LOCKED IN PROPERTY")
         self._arrived_visit()
+        self._add_photo(JobVisitPhoto.Kind.DOOR_FRAME)
         url = reverse("locksmith_portal:job_access_method", args=[self.order_no])
         response = self.client.post(url, {
             "access_method": "airbag",
             "disclaimer_signature": "data:image/png;base64,aGVsbG8=",
-            "photo_door_frame": [_fake_photo()],
         })
         visit = self._visit()
         self.assertEqual(visit.stage, JobVisit.Stage.ARRIVED)
@@ -3115,11 +3133,10 @@ class JobVisitWorkflowTests(TestCase):
             locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
             stage=JobVisit.Stage.ON_ROUTE, on_route_at=timezone.now(),
         )
+        self._add_photo(JobVisitPhoto.Kind.FRONT_OF_CAR)
+        self._add_photo(JobVisitPhoto.Kind.DOOR_LOCK)
         url = reverse("locksmith_portal:job_arrived", args=[self.order_no])
-        response = self.client.post(url, {
-            "photo_front_of_car": [_fake_photo(name="a.jpg")],
-            "photo_door_lock": [_fake_photo(name="b.jpg")],
-        })
+        response = self.client.post(url, {})
         self.assertRedirects(
             response,
             f"{reverse('locksmith_portal:job_overview', args=[self.order_no])}?date={self.today.isoformat()}",
@@ -3127,18 +3144,19 @@ class JobVisitWorkflowTests(TestCase):
         self.assertEqual(self._visit().stage, JobVisit.Stage.ARRIVED)
 
     def test_arrived_caps_photos_per_slot_at_three(self):
+        # The 3-per-slot cap is enforced by job_photo_upload_one as each
+        # photo is uploaded (see JobPhotoUploadOneTests) — this just
+        # confirms job_arrived's own required-photo check is happy with
+        # 3 already-uploaded photos regardless of how many more were
+        # attempted and rejected along the way.
         JobVisit.objects.create(
             locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
             stage=JobVisit.Stage.ON_ROUTE, on_route_at=timezone.now(),
         )
+        for name in ("a.jpg", "b.jpg", "c.jpg"):
+            self._add_photo(JobVisitPhoto.Kind.BEFORE, url=f"https://example.blob.core.windows.net/job-photos/{name}")
         url = reverse("locksmith_portal:job_arrived", args=[self.order_no])
-        response = self.client.post(url, {
-            "photo_before": [
-                _fake_photo(name="a.jpg"), _fake_photo(name="b.jpg"),
-                _fake_photo(name="c.jpg"), _fake_photo(name="d.jpg"),
-            ],
-        }, follow=True)
-        self.assertContains(response, "Only the first 3 photos")
+        response = self.client.post(url, {})
         visit = self._visit()
         self.assertEqual(visit.stage, JobVisit.Stage.ARRIVED)
         self.assertEqual(visit.photos.filter(kind=JobVisitPhoto.Kind.BEFORE).count(), 3)
@@ -3148,10 +3166,10 @@ class JobVisitWorkflowTests(TestCase):
             locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
             stage=JobVisit.Stage.ON_ROUTE, on_route_at=timezone.now(),
         )
+        self._add_photo(JobVisitPhoto.Kind.BEFORE, url="https://example.blob.core.windows.net/job-photos/a.jpg")
+        self._add_photo(JobVisitPhoto.Kind.BEFORE, url="https://example.blob.core.windows.net/job-photos/b.jpg")
         url = reverse("locksmith_portal:job_arrived", args=[self.order_no])
-        self.client.post(url, {
-            "photo_before": [_fake_photo(name="a.jpg"), _fake_photo(name="b.jpg")],
-        })
+        self.client.post(url, {})
         note_text = self.mock_handl.add_report_note.call_args[0][1]
         before_photos = list(self._visit().photos.filter(kind=JobVisitPhoto.Kind.BEFORE).order_by("id"))
         self.assertIn(f'<a href="{before_photos[0].url}" target="_blank">Before 1</a>', note_text)
@@ -3205,9 +3223,9 @@ class JobVisitWorkflowTests(TestCase):
     def test_gain_access_completion_key_in_hand_photo_is_optional(self):
         self._set_loss_type("LOCKED IN PROPERTY")
         self._parts_done_visit(access_method=JobVisit.AccessMethod.PICKED)
+        self._add_photo(JobVisitPhoto.Kind.DOOR_OPEN)
         url = reverse("locksmith_portal:job_complete", args=[self.order_no])
         response = self.client.post(url, {
-            "photo_door_open": [_fake_photo(name="a.jpg")],
             "outcome": "completed", "completion_signature": "data:image/png;base64,aGVsbG8=",
         })
         self.assertRedirects(
@@ -3247,8 +3265,9 @@ class JobVisitWorkflowTests(TestCase):
             locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
             stage=JobVisit.Stage.ON_ROUTE, on_route_at=timezone.now(),
         )
+        self._add_photo(JobVisitPhoto.Kind.FRONT_OF_CAR)
         url = reverse("locksmith_portal:job_arrived", args=[self.order_no])
-        response = self.client.post(url, {"photo_front_of_car": [_fake_photo(name="a.jpg")]})
+        response = self.client.post(url, {})
         self.assertRedirects(
             response,
             f"{reverse('locksmith_portal:job_overview', args=[self.order_no])}?date={self.today.isoformat()}",
@@ -3308,13 +3327,13 @@ class JobVisitWorkflowTests(TestCase):
         # key-related job the way the others are.
         self._set_loss_type("LOST")
         self._parts_done_visit()
+        self._add_photo(JobVisitPhoto.Kind.BLADE_IN_DOOR)
+        self._add_photo(JobVisitPhoto.Kind.BLADE_IN_IGNITION)
+        self._add_photo(JobVisitPhoto.Kind.KEYS_SUPPLIED)
+        self._add_photo(JobVisitPhoto.Kind.MILEAGE)
+        # no ignition_on
         url = reverse("locksmith_portal:job_complete", args=[self.order_no])
         response = self.client.post(url, {
-            "photo_blade_in_door": [_fake_photo(name="a.jpg")],
-            "photo_blade_in_ignition": [_fake_photo(name="b.jpg")],
-            "photo_keys_supplied": [_fake_photo(name="c.jpg")],
-            "photo_mileage": [_fake_photo(name="m.jpg")],
-            # no photo_ignition_on
             "outcome": "completed", "completion_signature": "data:image/png;base64,aGVsbG8=",
         })
         self.assertRedirects(
@@ -3326,13 +3345,13 @@ class JobVisitWorkflowTests(TestCase):
     def test_akl_success_uploads_all_named_slots(self):
         self._set_loss_type("LOST")
         self._parts_done_visit()
+        self._add_photo(JobVisitPhoto.Kind.BLADE_IN_DOOR)
+        self._add_photo(JobVisitPhoto.Kind.BLADE_IN_IGNITION)
+        self._add_photo(JobVisitPhoto.Kind.IGNITION_ON)
+        self._add_photo(JobVisitPhoto.Kind.KEYS_SUPPLIED)
+        self._add_photo(JobVisitPhoto.Kind.MILEAGE)
         url = reverse("locksmith_portal:job_complete", args=[self.order_no])
         response = self.client.post(url, {
-            "photo_blade_in_door": [_fake_photo(name="a.jpg")],
-            "photo_blade_in_ignition": [_fake_photo(name="b.jpg")],
-            "photo_ignition_on": [_fake_photo(name="c.jpg")],
-            "photo_keys_supplied": [_fake_photo(name="d.jpg")],
-            "photo_mileage": [_fake_photo(name="m.jpg")],
             "outcome": "completed", "completion_signature": "data:image/png;base64,aGVsbG8=",
         })
         self.assertRedirects(
@@ -3371,14 +3390,14 @@ class JobVisitWorkflowTests(TestCase):
     def test_spare_key_success_uploads_all_named_slots(self):
         self._set_loss_type("Spare Key")
         self._parts_done_visit()
+        self._add_photo(JobVisitPhoto.Kind.BLADE_IN_DOOR)
+        self._add_photo(JobVisitPhoto.Kind.BLADE_IN_IGNITION)
+        self._add_photo(JobVisitPhoto.Kind.KEYS_SUPPLIED)
+        self._add_photo(JobVisitPhoto.Kind.CLIENT_KEY)
+        self._add_photo(JobVisitPhoto.Kind.IGNITION_ON)
+        self._add_photo(JobVisitPhoto.Kind.MILEAGE)
         url = reverse("locksmith_portal:job_complete", args=[self.order_no])
         response = self.client.post(url, {
-            "photo_blade_in_door": [_fake_photo(name="a.jpg")],
-            "photo_blade_in_ignition": [_fake_photo(name="b.jpg")],
-            "photo_keys_supplied": [_fake_photo(name="c.jpg")],
-            "photo_client_key": [_fake_photo(name="d.jpg")],
-            "photo_ignition_on": [_fake_photo(name="e.jpg")],
-            "photo_mileage": [_fake_photo(name="m.jpg")],
             "outcome": "completed", "completion_signature": "data:image/png;base64,aGVsbG8=",
         })
         self.assertRedirects(
@@ -3421,10 +3440,10 @@ class JobVisitWorkflowTests(TestCase):
 
     def test_failed_sku_category_success_records_sku_and_notes_handl(self):
         self._parts_done_visit()
+        self._add_photo(JobVisitPhoto.Kind.AFTER)
+        self._add_photo(JobVisitPhoto.Kind.MILEAGE)
         url = reverse("locksmith_portal:job_complete", args=[self.order_no])
         response = self.client.post(url, {
-            "photo_after": [_fake_photo()],
-            "photo_mileage": [_fake_photo(name="mileage.jpg")],
             "outcome": "failed",
             "failure_category": self.category_wrong_parts.pk, "failure_sku_needed": "TK-100",
         })
@@ -3449,10 +3468,10 @@ class JobVisitWorkflowTests(TestCase):
 
     def test_failed_reattend_category_success_records_reattend_action(self):
         self._parts_done_visit()
+        self._add_photo(JobVisitPhoto.Kind.AFTER)
+        self._add_photo(JobVisitPhoto.Kind.MILEAGE)
         url = reverse("locksmith_portal:job_complete", args=[self.order_no])
         response = self.client.post(url, {
-            "photo_after": [_fake_photo()],
-            "photo_mileage": [_fake_photo(name="mileage.jpg")],
             "outcome": "failed",
             "failure_category": self.category_programmer_issue.pk,
             "failure_reattend_action": "different_locksmith",
@@ -3465,10 +3484,10 @@ class JobVisitWorkflowTests(TestCase):
 
     def test_failed_notes_only_category_needs_no_sub_field(self):
         self._parts_done_visit()
+        self._add_photo(JobVisitPhoto.Kind.AFTER)
+        self._add_photo(JobVisitPhoto.Kind.MILEAGE)
         url = reverse("locksmith_portal:job_complete", args=[self.order_no])
         response = self.client.post(url, {
-            "photo_after": [_fake_photo()],
-            "photo_mileage": [_fake_photo(name="mileage.jpg")],
             "outcome": "failed",
             "failure_category": self.category_notes_only.pk,
         })
@@ -3543,6 +3562,101 @@ class JobVisitWorkflowTests(TestCase):
         self.client.get(reverse("locksmith_portal:job_overview", args=[self.order_no]))
         visit = self._visit()
         self.assertEqual(visit.reg, "")
+
+
+class JobPhotoUploadOneTests(TestCase):
+    """job_photo_upload_one — photos upload immediately, one at a time,
+    as soon as they're taken/picked (see base.html's JS and this view's
+    own docstring), rather than travelling with the stepper's own final
+    submit. See JobVisitWorkflowTests for the stepper's own side of
+    this — required-photo checks now read visit.photos, not
+    request.FILES."""
+
+    def setUp(self):
+        self.locksmith, self.user = _make_locksmith_user()
+        self.client.force_login(self.user)
+        self.order_no = "496390_2026-09-15"
+        self.visit = JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            stage=JobVisit.Stage.ARRIVED, arrived_at=timezone.now(),
+        )
+        self.url = reverse("locksmith_portal:job_photo_upload_one", args=[self.order_no, "before"])
+
+        self.storage_patch = patch("apps.locksmith_portal.views.get_photo_storage")
+        mock_get_storage = self.storage_patch.start()
+        self.addCleanup(self.storage_patch.stop)
+        self.mock_storage = MagicMock()
+        self.mock_storage.upload.side_effect = (
+            lambda **kwargs: f"https://example.blob.core.windows.net/job-photos/{kwargs['filename']}"
+        )
+        mock_get_storage.return_value = self.mock_storage
+
+    def test_upload_success_creates_photo_and_returns_url(self):
+        response = self.client.post(self.url, {"photo": _fake_photo()})
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertIn("url", data)
+        photo = self.visit.photos.get()
+        self.assertEqual(photo.kind, JobVisitPhoto.Kind.BEFORE)
+        self.assertEqual(photo.url, data["url"])
+
+    def test_rejects_non_image_file(self):
+        bad_file = SimpleUploadedFile("notes.txt", b"hello", content_type="text/plain")
+        response = self.client.post(self.url, {"photo": bad_file})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("isn't an image", response.json()["error"])
+        self.assertEqual(self.visit.photos.count(), 0)
+
+    def test_rejects_oversized_file(self):
+        from apps.locksmith_portal.views import MAX_PHOTO_BYTES
+        big = SimpleUploadedFile("big.jpg", b"x" * (MAX_PHOTO_BYTES + 1), content_type="image/jpeg")
+        response = self.client.post(self.url, {"photo": big})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("too large", response.json()["error"])
+        self.assertEqual(self.visit.photos.count(), 0)
+
+    def test_caps_at_three_photos_per_slot(self):
+        for _ in range(3):
+            response = self.client.post(self.url, {"photo": _fake_photo()})
+            self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.visit.photos.count(), 3)
+
+        response = self.client.post(self.url, {"photo": _fake_photo()})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Only 3 photos", response.json()["error"])
+        self.assertEqual(self.visit.photos.count(), 3)
+
+    def test_unknown_kind_is_rejected(self):
+        url = reverse("locksmith_portal:job_photo_upload_one", args=[self.order_no, "not_a_real_kind"])
+        response = self.client.post(url, {"photo": _fake_photo()})
+        self.assertEqual(response.status_code, 400)
+
+    def test_no_file_is_rejected(self):
+        response = self.client.post(self.url, {})
+        self.assertEqual(response.status_code, 400)
+
+    def test_missing_visit_returns_404(self):
+        url = reverse(
+            "locksmith_portal:job_photo_upload_one", args=["999999_2026-09-15", "before"]
+        )
+        response = self.client.post(url, {"photo": _fake_photo()})
+        self.assertEqual(response.status_code, 404)
+
+    def test_cannot_upload_to_another_locksmiths_job(self):
+        _other_locksmith, other_user = _make_locksmith_user(email="other@wgtk.co.uk")
+        self.client.force_login(other_user)
+        response = self.client.post(self.url, {"photo": _fake_photo()})
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(self.visit.photos.count(), 0)
+
+    def test_login_required(self):
+        self.client.logout()
+        response = self.client.post(self.url, {"photo": _fake_photo()})
+        self.assertEqual(response.status_code, 302)
+
+    def test_get_not_allowed(self):
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 405)
 
 
 class DecodeDataUrlTests(TestCase):

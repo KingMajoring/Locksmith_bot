@@ -27,181 +27,22 @@
   </header>
   <script>
     (function () {
-      // A save can take a while (photo uploads over a weak signal, plus
-      // the Handl/Optimo write-back) with nothing on screen to show it's
-      // working — that reads as "did nothing", inviting a repeat tap
-      // that re-submits the same job. Disable every submit button in the
-      // form and swap its label the moment a submission actually goes
-      // ahead. Listening on document (not each form) means this covers
-      // every form site-wide with one handler; it still runs after a
-      // page's own submit listener since bubbling reaches document last,
-      // so e.defaultPrevented correctly reflects that page's own
-      // validation blocking the submit.
-      document.addEventListener('submit', function (e) {
-        if (e.defaultPrevented) return;
-        var form = e.target;
-        if (!(form instanceof HTMLFormElement)) return;
-        form.querySelectorAll('button[type=submit]').forEach(function (button) {
-          button.dataset.originalLabel = button.textContent;
-          button.disabled = true;
-          button.textContent = 'Saving…';
-        });
-      });
-
-      // bfcache: navigating back to this page can restore the DOM
-      // exactly as it was mid-submit (button still disabled/"Saving…")
-      // even though that submission is long gone — put every such
-      // button back the way it loaded.
-      window.addEventListener('pageshow', function (e) {
-        if (!e.persisted) return;
-        document.querySelectorAll('button[type=submit][disabled]').forEach(function (button) {
-          button.disabled = false;
-          if (button.dataset.originalLabel) {
-            button.textContent = button.dataset.originalLabel;
-          }
-        });
-      });
-    })();
-
-    (function () {
-      // Twin "Take photo"/"Gallery" buttons (see _photo_input.html) both
-      // drive the same underlying hidden file input — "Take photo" sets
-      // capture=environment first so the OS opens the camera directly
-      // instead of the file/gallery chooser (removing `multiple` too:
-      // camera capture is inherently one shot at a time, and Chrome/
-      // Android's handling of multiple+capture together is unreliable).
-      // Reported live: locksmiths picking old, large gallery photos when
-      // they meant to photograph the job fresh — a clear "Take photo"
-      // option steers them toward a fresh, already-camera-sized shot
-      // instead, on top of the compression below.
-      // Delegated on document, not bound per-button at load time: this
-      // script runs before <main> (the page's own content block, where
-      // every photo-source-btn actually lives) has been parsed, so a
-      // one-time querySelectorAll().forEach() here would find zero
-      // buttons and silently attach nothing. Confirmed live: both
-      // buttons rendered but neither opened a picker on tap.
-      document.addEventListener('click', function (e) {
-        var button = e.target.closest('.photo-source-btn');
-        if (!button) return;
-        var input = document.getElementById(button.dataset.target);
-        if (!input) return;
-        if (button.dataset.capture) {
-          input.setAttribute('capture', button.dataset.capture);
-          input.removeAttribute('multiple');
-        } else {
-          input.removeAttribute('capture');
-          input.setAttribute('multiple', 'multiple');
-        }
-        input.click();
-      });
-
-      // A native file input's .files is REPLACED, not appended to, on
-      // every picker use — so each "Take photo" tap was silently
-      // wiping out whatever was already selected for that slot instead
-      // of adding to it (reported live: locksmiths could only ever end
-      // up with the single most recent photo). MAX_PHOTOS below mirrors
-      // the server's own MAX_PHOTOS_PER_KIND cap.
-      //
-      // photoStore holds the running set per input id, independent of
-      // whatever the OS picker just handed back this time — the only
-      // way to make the input "remember" earlier captures is to
-      // rebuild its FileList (via DataTransfer) as store + new each
-      // time. Registered here, ahead of the compression block below,
-      // so compression always compresses the full accumulated set, not
-      // just this event's new picks.
-      var MAX_PHOTOS = 3;
-      var photoStore = {};
-
-      // Same capability check as the compression block below (kept
-      // separate/duplicated rather than shared — reassigning a file
-      // input's .files isn't reliable on every browser, and if it
-      // silently doesn't stick here, falling back to "just this
-      // event's picks" is the same, already-working behaviour rather
-      // than a new failure mode).
-      var canReassignPhotoFiles = (function () {
-        try {
-          var testInput = document.createElement('input');
-          testInput.type = 'file';
-          var dt = new DataTransfer();
-          dt.items.add(new File(['x'], 'test.txt', { type: 'text/plain' }));
-          testInput.files = dt.files;
-          return testInput.files.length === 1;
-        } catch (err) {
-          return false;
-        }
-      })();
-
-      document.addEventListener('change', function (e) {
-        var input = e.target;
-        if (!input || input.tagName !== 'INPUT' || input.type !== 'file') return;
-        if (!input.id || input.id.indexOf('photo-') !== 0) return;
-        if (input.files.length === 0) return;
-
-        if (canReassignPhotoFiles) {
-          var previous = photoStore[input.id] || [];
-          var combined = previous.concat(Array.prototype.slice.call(input.files));
-          if (combined.length > MAX_PHOTOS) {
-            alert('Only ' + MAX_PHOTOS + ' photos allowed here — the extra one(s) weren\'t added.');
-            combined = combined.slice(0, MAX_PHOTOS);
-          }
-          photoStore[input.id] = combined;
-
-          var dataTransfer = new DataTransfer();
-          combined.forEach(function (f) { dataTransfer.items.add(f); });
-          if (dataTransfer.files.length === combined.length) {
-            input.files = dataTransfer.files;
-          } else {
-            photoStore[input.id] = Array.prototype.slice.call(input.files);
-          }
-        }
-
-        // The file input itself is visually hidden (see
-        // _photo_input.html) — this is the only visible sign of what's
-        // actually selected.
-        var summary = document.querySelector('[data-summary-for="' + input.id + '"]');
-        if (!summary) return;
-        var count = input.files.length;
-        summary.textContent = count ? (count + ' photo' + (count === 1 ? '' : 's') + ' selected') : '';
-      });
-    })();
-
-    (function () {
-      // Photos come straight off a phone camera — often several MB
-      // apiece — and get uploaded one field at a time over whatever
-      // signal the locksmith has on site. Reported live: an upload
-      // stalling completely on a weak connection, the browser's own
-      // progress bar stuck partway and never finishing. Re-encoding to a
-      // smaller JPEG in the browser before it's ever sent typically
-      // cuts that payload by 5-10x — the difference between a slow
-      // upload and one that never completes. Falls back to the original
-      // file untouched on any failure (can't decode, DataTransfer
-      // unsupported, compression didn't actually shrink it), so this
-      // can only make an upload smaller, never block one.
+      // Each photo uploads immediately via fetch, one at a time, the
+      // moment it's taken/picked — not held until the surrounding
+      // form's own final submit. Reported live: a completion submit
+      // carrying 5-8 photos at once (one big multipart request) was the
+      // real cause of slow/stuck submits on a weak signal — the same
+      // failure the gunicorn-timeout fix elsewhere papered over rather
+      // than solved. Uploading one small, pre-compressed photo at a
+      // time keeps the final submit tiny (just notes/signature/
+      // outcome) regardless of how many photos were taken, surfaces a
+      // failed upload immediately rather than after the whole form is
+      // filled in, and — since uploads are chained, not parallel — never
+      // asks a weak connection to carry more than one photo at once.
       var MAX_DIMENSION = 1600;
       var JPEG_QUALITY = 0.72;
       var SKIP_BELOW_BYTES = 300 * 1024;
-
-      // Reassigning a file input's .files via DataTransfer is not
-      // reliable everywhere — some browsers (notably some iOS Safari
-      // versions) silently leave the input empty instead of throwing.
-      // An empty *required* photo field then blocks native form
-      // validation with no visible error, which reads as the whole
-      // page "just hanging" on submit. Tested once up front on a
-      // detached input; if it doesn't verifiably work, skip
-      // compression entirely for this whole page load rather than risk
-      // wiping out a locksmith's photo selection.
-      var canReassignFiles = (function () {
-        try {
-          var testInput = document.createElement('input');
-          testInput.type = 'file';
-          var dt = new DataTransfer();
-          dt.items.add(new File(['x'], 'test.txt', { type: 'text/plain' }));
-          testInput.files = dt.files;
-          return testInput.files.length === 1;
-        } catch (err) {
-          return false;
-        }
-      })();
+      var MAX_PHOTOS = 3;
 
       function compressImage(file) {
         return new Promise(function (resolve) {
@@ -235,11 +76,16 @@
         });
       }
 
-      // Submitting mid-compression would send the original, uncompressed
-      // files — block the submit button(s) in that input's form for as
-      // long as any of its photos are still being processed. A counter
-      // (not a flag) copes with several file inputs on the same form
-      // finishing at different times.
+      function csrfToken() {
+        return document.cookie.replace(/(?:(?:^|.*;\s*)csrftoken\s*\=\s*([^;]*).*$)|^.*$/, '$1');
+      }
+
+      // A slow upload (or several, one after another) would leave the
+      // final "Save"/"Continue" submit free to fire mid-upload — block
+      // it for as long as any photo for that form is still uploading. A
+      // counter, not a flag, copes with more than one slot uploading at
+      // once (e.g. an in-flight upload from a slot the locksmith already
+      // moved on from).
       function setFormBusy(form, busy) {
         if (!form) return;
         var count = Math.max((parseInt(form.dataset.photoProcessing, 10) || 0) + (busy ? 1 : -1), 0);
@@ -249,30 +95,183 @@
         });
       }
 
+      function thumbsFor(input) {
+        return document.querySelector('[data-thumbs-for="' + input.id + '"]');
+      }
+      function summaryFor(input) {
+        return document.querySelector('[data-summary-for="' + input.id + '"]');
+      }
+      function currentCount(input) {
+        var thumbs = thumbsFor(input);
+        return thumbs ? thumbs.children.length : 0;
+      }
+      function addThumb(input, url) {
+        var thumbs = thumbsFor(input);
+        if (!thumbs) return;
+        var a = document.createElement('a');
+        a.href = url;
+        a.target = '_blank';
+        a.className = 'photo-thumb';
+        var img = document.createElement('img');
+        img.src = url;
+        img.loading = 'lazy';
+        a.appendChild(img);
+        thumbs.appendChild(a);
+      }
+      function updateSummary(input, statusText) {
+        var summary = summaryFor(input);
+        if (!summary) return;
+        if (statusText) {
+          summary.textContent = statusText;
+          return;
+        }
+        var count = currentCount(input);
+        summary.textContent = count ? (count + ' photo' + (count === 1 ? '' : 's') + ' uploaded') : '';
+      }
+
+      function uploadOne(input, file) {
+        var form = input.form;
+        setFormBusy(form, true);
+        updateSummary(input, 'Uploading…');
+        return compressImage(file).then(function (compressed) {
+          var body = new FormData();
+          body.append('photo', compressed, compressed.name);
+          return fetch(input.dataset.uploadUrl, {
+            method: 'POST',
+            headers: { 'X-CSRFToken': csrfToken() },
+            body: body,
+          });
+        }).then(function (response) {
+          return response.json().catch(function () { return {}; }).then(function (data) {
+            if (!response.ok) throw new Error(data.error || 'That photo failed to upload.');
+            return data;
+          });
+        }).then(function (data) {
+          addThumb(input, data.url);
+        }).catch(function (err) {
+          alert((err && err.message) || 'That photo failed to upload — please try again.');
+        }).finally(function () {
+          updateSummary(input);
+          setFormBusy(form, false);
+        });
+      }
+
+      // Twin "Take photo"/"Gallery" buttons (see _photo_input.html) both
+      // drive the same underlying file input — "Take photo" sets
+      // capture=environment first so the OS opens the camera directly
+      // instead of the file/gallery chooser (removing `multiple` too:
+      // camera capture is inherently one shot at a time, and Chrome/
+      // Android's handling of multiple+capture together is unreliable).
+      // Delegated on document, not bound per-button at load time: this
+      // script runs before <main> (the page's own content block, where
+      // every photo-source-btn actually lives) has been parsed, so a
+      // one-time querySelectorAll().forEach() here would find zero
+      // buttons and silently attach nothing. Confirmed live: both
+      // buttons rendered but neither opened a picker on tap.
+      document.addEventListener('click', function (e) {
+        var button = e.target.closest('.photo-source-btn');
+        if (!button) return;
+        var input = document.getElementById(button.dataset.target);
+        if (!input) return;
+        if (button.dataset.capture) {
+          input.setAttribute('capture', button.dataset.capture);
+          input.removeAttribute('multiple');
+        } else {
+          input.removeAttribute('capture');
+          input.setAttribute('multiple', 'multiple');
+        }
+        input.click();
+      });
+
       document.addEventListener('change', function (e) {
         var input = e.target;
         if (!input || input.tagName !== 'INPUT' || input.type !== 'file') return;
-        if (!canReassignFiles) return;
-        if (!input.accept || input.accept.indexOf('image') === -1) return;
-        if (input.files.length === 0) return;
-
+        if (!input.classList.contains('photo-file-input')) return;
         var files = Array.prototype.slice.call(input.files);
-        var form = input.form;
-        setFormBusy(form, true);
-        // The .finally() is the important part: whatever goes wrong
-        // inside (a browser quirk the upfront test didn't catch, a
-        // decode failure, anything) must never leave a submit button
-        // stuck disabled forever.
-        Promise.all(files.map(compressImage))
-          .then(function (compressed) {
-            var dataTransfer = new DataTransfer();
-            compressed.forEach(function (f) { dataTransfer.items.add(f); });
-            if (dataTransfer.files.length === compressed.length) {
-              input.files = dataTransfer.files;
-            }
-          })
-          .catch(function () {})
-          .finally(function () { setFormBusy(form, false); });
+        // Cleared immediately rather than left holding the picked
+        // files — nothing about this input travels with the
+        // surrounding form any more, and clearing it is what makes
+        // the browser fire a fresh 'change' event next time, even if
+        // the exact same photo is picked again.
+        input.value = '';
+        if (files.length === 0) return;
+
+        var room = MAX_PHOTOS - currentCount(input);
+        if (room <= 0) {
+          alert('Only ' + MAX_PHOTOS + ' photos allowed here.');
+          return;
+        }
+        if (files.length > room) {
+          alert('Only ' + room + ' more photo(s) fit here — the rest weren\'t added.');
+          files = files.slice(0, room);
+        }
+
+        // Chained, not parallel — one photo travels at a time.
+        var chain = Promise.resolve();
+        files.forEach(function (file) {
+          chain = chain.then(function () { return uploadOne(input, file); });
+        });
+      });
+
+      // Required-slot check, registered before the "disable submit
+      // buttons" listener below so that when this blocks a submission,
+      // that listener's own e.defaultPrevented check (same event,
+      // document-level, so listener order here is registration order)
+      // already sees it and skips disabling the buttons over a
+      // submission that never actually went ahead.
+      document.addEventListener('submit', function (e) {
+        if (e.defaultPrevented) return;
+        var form = e.target;
+        if (!(form instanceof HTMLFormElement)) return;
+        var missingLabels = [];
+        form.querySelectorAll('.photo-file-input[data-required="1"]').forEach(function (input) {
+          if (currentCount(input) === 0) missingLabels.push(input.dataset.label || 'a photo');
+        });
+        if (missingLabels.length) {
+          e.preventDefault();
+          alert('Add at least one photo: ' + missingLabels.join(', ') + '.');
+        }
+      });
+    })();
+
+    (function () {
+      // A save can take a while (the Handl/Optimo write-back, mainly —
+      // photo uploads themselves no longer travel with this submit, see
+      // above) with nothing on screen to show it's working — that reads
+      // as "did nothing", inviting a repeat tap that re-submits the same
+      // job. Disable every submit button in the form and swap its label
+      // the moment a submission actually goes ahead. Listening on
+      // document (not each form) means this covers every form site-wide
+      // with one handler; it still runs after a page's own submit
+      // listener (form-level listeners fire first regardless of script
+      // order, since the event bubbles from the form up to document) and
+      // after the required-photo check above (same document-level node,
+      // so this is purely registration order — see that listener's own
+      // comment), so e.defaultPrevented correctly reflects either one
+      // blocking the submit.
+      document.addEventListener('submit', function (e) {
+        if (e.defaultPrevented) return;
+        var form = e.target;
+        if (!(form instanceof HTMLFormElement)) return;
+        form.querySelectorAll('button[type=submit]').forEach(function (button) {
+          button.dataset.originalLabel = button.textContent;
+          button.disabled = true;
+          button.textContent = 'Saving…';
+        });
+      });
+
+      // bfcache: navigating back to this page can restore the DOM
+      // exactly as it was mid-submit (button still disabled/"Saving…")
+      // even though that submission is long gone — put every such
+      // button back the way it loaded.
+      window.addEventListener('pageshow', function (e) {
+        if (!e.persisted) return;
+        document.querySelectorAll('button[type=submit][disabled]').forEach(function (button) {
+          button.disabled = false;
+          if (button.dataset.originalLabel) {
+            button.textContent = button.dataset.originalLabel;
+          }
+        });
       });
     })();
 
