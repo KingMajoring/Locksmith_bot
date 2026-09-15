@@ -3001,6 +3001,21 @@ class JobVisitWorkflowTests(TestCase):
         note_text = self.mock_handl.add_report_note.call_args[0][1]
         self.assertIn("dealer-supplied, already-cut key", note_text)
 
+    def test_gain_access_already_open_success_notes_handl(self):
+        self._set_loss_type("LOCKED IN PROPERTY")
+        self._arrived_visit()
+        url = reverse("locksmith_portal:job_access_method", args=[self.order_no])
+        response = self.client.post(url, {"access_method": "already_open"})
+        visit = self._visit()
+        self.assertEqual(visit.stage, JobVisit.Stage.ARRIVED)
+        self.assertEqual(visit.access_method, JobVisit.AccessMethod.ALREADY_OPEN)
+        self.assertRedirects(
+            response,
+            f"{reverse('locksmith_portal:job_overview', args=[self.order_no])}?date={self.today.isoformat()}",
+        )
+        note_text = self.mock_handl.add_report_note.call_args[0][1]
+        self.assertIn("no entry needed", note_text)
+
     def test_gain_access_airbag_requires_signature(self):
         self._set_loss_type("LOCKED IN PROPERTY")
         self._arrived_visit()
@@ -3275,12 +3290,33 @@ class JobVisitWorkflowTests(TestCase):
         response = self.client.post(url, {
             "photo_blade_in_door": [_fake_photo(name="a.jpg")],
             "photo_blade_in_ignition": [_fake_photo(name="b.jpg")],
-            "photo_keys_supplied": [_fake_photo(name="c.jpg")],
-            # missing photo_ignition_on
+            "photo_ignition_on": [_fake_photo(name="c.jpg")],
+            # missing photo_keys_supplied
             "outcome": "completed",
         })
-        self.assertContains(response, "Add at least one photo: Ignition on")
+        self.assertContains(response, "Add at least one photo: Keys supplied")
         self.assertEqual(self._visit().stage, JobVisit.Stage.PARTS_DONE)
+
+    def test_akl_ignition_on_photo_is_optional(self):
+        # A proxy/keyless-start vehicle's key is never physically turned
+        # in an ignition barrel, so this can't be required across every
+        # key-related job the way the others are.
+        self._set_loss_type("LOST")
+        self._parts_done_visit()
+        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        response = self.client.post(url, {
+            "photo_blade_in_door": [_fake_photo(name="a.jpg")],
+            "photo_blade_in_ignition": [_fake_photo(name="b.jpg")],
+            "photo_keys_supplied": [_fake_photo(name="c.jpg")],
+            "photo_mileage": [_fake_photo(name="m.jpg")],
+            # no photo_ignition_on
+            "outcome": "completed", "completion_signature": "data:image/png;base64,aGVsbG8=",
+        })
+        self.assertRedirects(
+            response,
+            f"{reverse('locksmith_portal:job_overview', args=[self.order_no])}?date={self.today.isoformat()}",
+        )
+        self.assertEqual(self._visit().photos.filter(kind=JobVisitPhoto.Kind.IGNITION_ON).count(), 0)
 
     def test_akl_success_uploads_all_named_slots(self):
         self._set_loss_type("LOST")

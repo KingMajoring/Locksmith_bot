@@ -767,3 +767,11 @@ textarea { width: 100%; padding: 0.6rem 0.7rem; font-size: 1rem; font-family: va
 
 /* Portal buttons go full-width — easier to hit on a phone. */
 .portal-main .btn, .portal-main .btn-secondary { width: 100%; padding: 0.85rem; font-size: 1rem; }
+
+.photo-source-buttons { display: flex; gap: 0.5rem; margin-bottom: 0.35rem; }
+/* Extra class + element beats .portal-main .btn-secondary above at
+   equal specificity regardless of source order (see the same fix on
+   .job-search-form button.btn) — these two sit side by side, not
+   stacked full-width. */
+.photo-source-buttons button.btn-secondary { width: auto; flex: 1; padding: 0.55rem 0.5rem; font-size: 0.85rem; }
+.photo-input-summary { margin: 0.3rem 0 0; }

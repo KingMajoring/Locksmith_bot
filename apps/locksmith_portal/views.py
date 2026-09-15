@@ -117,7 +117,11 @@ _ARRIVAL_PHOTO_SLOTS_BY_SERVICE = {
 _KEY_RELATED_AFTER_PHOTO_SLOTS = [
     (JobVisitPhoto.Kind.BLADE_IN_DOOR, True),
     (JobVisitPhoto.Kind.BLADE_IN_IGNITION, True),
-    (JobVisitPhoto.Kind.IGNITION_ON, True),
+    # Optional, not required: a proxy/keyless-start vehicle's key is
+    # never physically turned in an ignition barrel at all — there's
+    # nothing to photograph there, so this can't be a hard requirement
+    # across every key-related job the way the others are.
+    (JobVisitPhoto.Kind.IGNITION_ON, False),
     (JobVisitPhoto.Kind.KEYS_SUPPLIED, True),
 ]
 
@@ -1251,6 +1255,7 @@ def job_access_method(request, order_no):
         if access_method not in (
             JobVisit.AccessMethod.PICKED, JobVisit.AccessMethod.AIRBAG,
             JobVisit.AccessMethod.KEY_CODE, JobVisit.AccessMethod.DEALER_KEY,
+            JobVisit.AccessMethod.ALREADY_OPEN,
         ):
             errors.append("Choose how you gained access.")
         elif access_method == JobVisit.AccessMethod.PICKED and not pick_used:
@@ -1285,6 +1290,11 @@ def job_access_method(request, order_no):
                 note_parts.append(
                     f"'{locksmith.van_soter_display_name}' gained access using a "
                     "dealer-supplied, already-cut key."
+                )
+            elif access_method == JobVisit.AccessMethod.ALREADY_OPEN:
+                note_parts.append(
+                    f"'{locksmith.van_soter_display_name}': no entry needed — the vehicle "
+                    "was already open and the customer had a working key."
                 )
             else:
                 content_type, signature_bytes = _decode_data_url(signature_data_url)

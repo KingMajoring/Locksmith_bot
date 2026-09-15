@@ -1,0 +1,15 @@
+{% comment %}
+Camera-or-gallery photo picker for one named slot — used by job_complete,
+job_photo_upload and job_access_method. Args: kind (e.g. "front_of_car"),
+required (bool). Both buttons drive the SAME hidden file input (so the
+existing per-page "max 3" script, the site-wide compression script in
+base.html, and required-field validation all keep working unchanged) —
+"Take photo" just sets capture=environment on it first so the OS opens
+the camera directly instead of the file/gallery chooser.
+{% endcomment %}
+<div class="photo-source-buttons">
+  <button type="button" class="btn-secondary photo-source-btn" data-target="photo-{{ kind }}" data-capture="environment">📷 Take photo</button>
+  <button type="button" class="btn-secondary photo-source-btn" data-target="photo-{{ kind }}">🖼️ Gallery</button>
+</div>
+<input type="file" id="photo-{{ kind }}" name="photo_{{ kind }}" accept="image/*" multiple {% if required %}required{% endif %} hidden>
+<p class="sub photo-input-summary" data-summary-for="photo-{{ kind }}"></p>

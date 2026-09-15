@@ -13,6 +13,7 @@
       <label><input type="radio" name="access_method" value="airbag" class="access-method-input"> Airbag</label>
       <label><input type="radio" name="access_method" value="key_code" class="access-method-input"> Key code supplied</label>
       <label><input type="radio" name="access_method" value="dealer_key" class="access-method-input"> Dealer-supplied key (pre-cut)</label>
+      <label><input type="radio" name="access_method" value="already_open" class="access-method-input"> Vehicle already open — customer had a working key</label>
     </div>
   </div>
 
@@ -29,7 +30,7 @@
     <input type="hidden" name="disclaimer_signature" id="disclaimer_signature">
 
     <label>Photos of the door frame <span class="sub">(up to 3 photos)</span></label>
-    <input type="file" name="photo_door_frame" accept="image/*" multiple>
+    {% include "locksmith_portal/_photo_input.html" with kind="door_frame" required=False %}
   </div>
 
   <p style="margin-top:1rem;"><button class="btn" type="submit">Continue</button></p>

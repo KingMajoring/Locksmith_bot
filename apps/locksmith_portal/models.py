@@ -197,6 +197,11 @@ class JobVisit(models.Model):
         AIRBAG = "airbag", "Airbag"
         KEY_CODE = "key_code", "Key code supplied"
         DEALER_KEY = "dealer_key", "Dealer-supplied key (pre-cut)"
+        # No entry needed at all — the vehicle was already open/unlocked
+        # and the customer had their own working key blade on them
+        # (e.g. a proxy/keyless-start car, or a snapped key where the
+        # blade half still works), so there was nothing to pick or force.
+        ALREADY_OPEN = "already_open", "Vehicle already open — customer had a working key"
 
     class FailureReason(models.TextChoices):
         WRONG_PARTS = "wrong_parts", "Wrong parts"

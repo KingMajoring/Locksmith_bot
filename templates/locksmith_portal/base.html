@@ -64,6 +64,44 @@
     })();
 
     (function () {
+      // Twin "Take photo"/"Gallery" buttons (see _photo_input.html) both
+      // drive the same underlying hidden file input — "Take photo" sets
+      // capture=environment first so the OS opens the camera directly
+      // instead of the file/gallery chooser (removing `multiple` too:
+      // camera capture is inherently one shot at a time, and Chrome/
+      // Android's handling of multiple+capture together is unreliable).
+      // Reported live: locksmiths picking old, large gallery photos when
+      // they meant to photograph the job fresh — a clear "Take photo"
+      // option steers them toward a fresh, already-camera-sized shot
+      // instead, on top of the compression below.
+      document.querySelectorAll('.photo-source-btn').forEach(function (button) {
+        button.addEventListener('click', function () {
+          var input = document.getElementById(button.dataset.target);
+          if (!input) return;
+          if (button.dataset.capture) {
+            input.setAttribute('capture', button.dataset.capture);
+            input.removeAttribute('multiple');
+          } else {
+            input.removeAttribute('capture');
+            input.setAttribute('multiple', 'multiple');
+          }
+          input.click();
+        });
+      });
+
+      // The file input itself is hidden (see _photo_input.html) — this
+      // is the only visible sign of what's actually selected.
+      document.addEventListener('change', function (e) {
+        var input = e.target;
+        if (!input || input.tagName !== 'INPUT' || input.type !== 'file') return;
+        var summary = document.querySelector('[data-summary-for="' + input.id + '"]');
+        if (!summary) return;
+        var count = input.files.length;
+        summary.textContent = count ? (count + ' photo' + (count === 1 ? '' : 's') + ' selected') : '';
+      });
+    })();
+
+    (function () {
       // Photos come straight off a phone camera — often several MB
       // apiece — and get uploaded one field at a time over whatever
       // signal the locksmith has on site. Reported live: an upload
