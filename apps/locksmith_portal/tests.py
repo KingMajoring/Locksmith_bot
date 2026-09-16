@@ -2016,6 +2016,12 @@ class JobVisitWorkflowTests(TestCase):
 
     def setUp(self):
         self.locksmith, self.user = _make_locksmith_user(soter_ids=("885",), driver_serials=("011",))
+        # Set explicitly (not left at its None default) so Handl-write
+        # tests exercise the real "attribute to the locksmith" path
+        # rather than incidentally falling back to
+        # settings.HANDL_PORTAL_CREATED_BY_USER_ID.
+        self.locksmith.soter_user_id = 517
+        self.locksmith.save(update_fields=["soter_user_id"])
         self.client.force_login(self.user)
         self.today = timezone.localdate()
         self.order_no = f"496390_{self.today.isoformat()}"
@@ -2672,7 +2678,9 @@ class JobVisitWorkflowTests(TestCase):
         self.assertIn("Left a spare key.", note_text)
         self.assertIn("happy with the job", note_text)
         self.assertIn(f'<a href="{visit.photos.get(kind=JobVisitPhoto.Kind.AFTER).url}" target="_blank">', note_text)
-        self.mock_handl.add_job_diary.assert_called_once_with("496390", "Inv and close")
+        self.mock_handl.add_job_diary.assert_called_once_with(
+            "496390", "Inv and close", entered_by_user_id=517
+        )
         self.mock_optimo.update_completion_status.assert_called_once_with(
             self.order_no, "success", start_time=visit.arrived_at, end_time=visit.completed_at
         )
@@ -3507,6 +3515,7 @@ class JobVisitWorkflowTests(TestCase):
         self.mock_handl.add_job_diary.assert_called_once_with(
             "496390",
             "Failure reason: Incorrect parts - ordered by WGTK (SKU / part needed: TK-100).",
+            entered_by_user_id=517,
         )
 
     def test_failed_reattend_category_requires_reattend_choice(self):
@@ -3534,7 +3543,8 @@ class JobVisitWorkflowTests(TestCase):
         note_text = self.mock_handl.add_report_note.call_args[0][1]
         self.assertIn("programmer issue (Reattend with a different locksmith)", note_text)
         self.mock_handl.add_job_diary.assert_called_once_with(
-            "496390", "Failure reason: programmer issue (Reattend with a different locksmith)."
+            "496390", "Failure reason: programmer issue (Reattend with a different locksmith).",
+            entered_by_user_id=517,
         )
 
     def test_failed_notes_only_category_needs_no_sub_field(self):
@@ -3553,7 +3563,9 @@ class JobVisitWorkflowTests(TestCase):
         self.assertEqual(self._visit().failure_category, self.category_notes_only)
         note_text = self.mock_handl.add_report_note.call_args[0][1]
         self.assertIn("Failure reason: Vehicle Issues.", note_text)
-        self.mock_handl.add_job_diary.assert_called_once_with("496390", "Failure reason: Vehicle Issues.")
+        self.mock_handl.add_job_diary.assert_called_once_with(
+            "496390", "Failure reason: Vehicle Issues.", entered_by_user_id=517
+        )
 
     def test_failed_diary_text_is_not_html_escaped_unlike_the_note(self):
         self._parts_done_visit()
@@ -3571,7 +3583,8 @@ class JobVisitWorkflowTests(TestCase):
         note_text = self.mock_handl.add_report_note.call_args[0][1]
         self.assertIn("A&amp;B", note_text)
         self.mock_handl.add_job_diary.assert_called_once_with(
-            "496390", "Failure reason: Incorrect parts - ordered by WGTK (SKU / part needed: A&B)."
+            "496390", "Failure reason: Incorrect parts - ordered by WGTK (SKU / part needed: A&B).",
+            entered_by_user_id=517,
         )
 
     def test_failed_hidden_category_id_is_rejected(self):

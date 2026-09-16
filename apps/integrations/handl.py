@@ -308,7 +308,7 @@ class HandlClient(ABC):
         WRITES to Handl — same write-capable connection as record_disposal."""
 
     @abstractmethod
-    def add_job_diary(self, report_id: str, description: str) -> None:
+    def add_job_diary(self, report_id: str, description: str, *, entered_by_user_id: int) -> None:
         """Raises a Policy_Diary call-to-action against this report —
         Handl's own follow-up/reminder queue, distinct from the plain
         Policy_History note add_report_note writes (that note stays
@@ -318,11 +318,15 @@ class HandlClient(ABC):
         item to action for every finished job: "Inv and close" on a
         completed job, the failure detail on a failed one — confirmed
         against a real Handl-side insert, this app always raises it
-        with the same fixed Code/StatusID=7/Days=0/EnteredBy (the
-        portal's own Handl user id, not the locksmith's — see
-        HANDL_PORTAL_CREATED_BY_USER_ID) and dueDate of today, so none
-        of those are parameters here. WRITES to Handl — same
-        write-capable connection as record_disposal."""
+        with the same fixed Code/StatusID=7/Days=0/dueDate of today, so
+        only entered_by_user_id and description vary per call — same
+        actioned_by (the locksmith's own Handl user id, falling back to
+        HANDL_PORTAL_CREATED_BY_USER_ID) add_report_note already uses,
+        not a hardcoded id: EnteredBy likely has a foreign-key
+        constraint back to a real Handl user, so a hardcoded id that
+        isn't actually configured would silently fail every insert.
+        WRITES to Handl — same write-capable connection as
+        record_disposal."""
 
     @abstractmethod
     def set_locksmith_stock_quantity(
@@ -619,7 +623,7 @@ class MockHandlClient(HandlClient):
     def add_report_note(self, report_id: str, notes: str, *, actioned_by_user_id: int) -> None:
         pass
 
-    def add_job_diary(self, report_id: str, description: str) -> None:
+    def add_job_diary(self, report_id: str, description: str, *, entered_by_user_id: int) -> None:
         pass
 
     def set_locksmith_stock_quantity(
@@ -688,15 +692,15 @@ def _insert_policy_history_note(cursor, *, report_id: str, notes: str, actioned_
 _PORTAL_DIARY_CODE = "PortalJob"
 
 
-def _insert_policy_diary(cursor, *, report_id: str, description: str, when) -> None:
+def _insert_policy_diary(cursor, *, report_id: str, description: str, entered_by_user_id: int, when) -> None:
     """Raises a Policy_Diary call-to-action — Handl's own follow-up/
     reminder queue, distinct from the Policy_History note
     _insert_policy_history_note writes. StatusID=7/Active=1, Days=0 and
     a same-day dueDate are the same pattern an existing WGTK Handl
     automation already uses for an immediate follow-up; EnteredBy is
-    the portal's own fixed Handl user id (HANDL_PORTAL_CREATED_BY_USER_ID),
-    not the locksmith's — these diaries are raised for office to action,
-    not attributed to whoever happened to finish the job."""
+    passed in (the caller resolves it the same way add_report_note's
+    own actioned_by_user_id is) rather than a hardcoded id here — see
+    add_job_diary's own docstring for why a hardcoded id is unsafe."""
     cursor.execute(
         """
         INSERT INTO Policy_Diary
@@ -708,7 +712,7 @@ def _insert_policy_diary(cursor, *, report_id: str, description: str, when) -> N
             "report_id": report_id,
             "description": description,
             "code": _PORTAL_DIARY_CODE,
-            "entered_by": settings.HANDL_PORTAL_CREATED_BY_USER_ID,
+            "entered_by": entered_by_user_id,
             "now": when,
         },
     )
@@ -1574,10 +1578,13 @@ class SQLHandlClient(HandlClient):
             )
             conn.commit()
 
-    def add_job_diary(self, report_id: str, description: str) -> None:
+    def add_job_diary(self, report_id: str, description: str, *, entered_by_user_id: int) -> None:
         with self._write_connection() as conn:
             cursor = conn.cursor()
-            _insert_policy_diary(cursor, report_id=report_id, description=description, when=_handl_now())
+            _insert_policy_diary(
+                cursor, report_id=report_id, description=description,
+                entered_by_user_id=entered_by_user_id, when=_handl_now(),
+            )
             conn.commit()
 
     def set_locksmith_stock_quantity(

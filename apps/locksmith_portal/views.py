@@ -482,14 +482,21 @@ def _write_handl_note(locksmith, report_id, text):
         logger.exception("Failed to write Handl note for report %s", report_id)
 
 
-def _write_handl_diary(report_id, description):
+def _write_handl_diary(locksmith, report_id, description):
     """Best-effort, same rationale as _write_handl_note — raises a
     Policy_Diary call-to-action for office to action (see
     apps.integrations.handl.HandlClient.add_job_diary), alongside
     (never instead of) the plain note _write_handl_note already
-    writes."""
+    writes. Same actioned_by resolution as that note, not a hardcoded
+    id — confirmed live: EnteredBy is foreign-keyed to a real Handl
+    user, so a hardcoded id that isn't actually configured in this
+    environment (HANDL_PORTAL_CREATED_BY_USER_ID defaults to 0) made
+    every diary insert fail silently while the note went through fine
+    on the locksmith's own, always-valid soter_user_id."""
+    handl = get_handl_client()
+    actioned_by = locksmith.soter_user_id or settings.HANDL_PORTAL_CREATED_BY_USER_ID
     try:
-        get_handl_client().add_job_diary(report_id, description)
+        handl.add_job_diary(report_id, description, entered_by_user_id=actioned_by)
     except Exception:
         logger.exception("Failed to write Handl diary for report %s", report_id)
 
@@ -1591,7 +1598,7 @@ def job_complete(request, order_no):
 
             _write_handl_note(locksmith, report_id, " ".join(note_parts))
             _write_handl_diary(
-                report_id,
+                locksmith, report_id,
                 "Inv and close" if outcome == JobVisit.Outcome.COMPLETED else failure_diary_text,
             )
             _record_job_timing(locksmith, report_id, order_no, visit)
