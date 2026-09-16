@@ -482,6 +482,18 @@ def _write_handl_note(locksmith, report_id, text):
         logger.exception("Failed to write Handl note for report %s", report_id)
 
 
+def _write_handl_diary(report_id, description):
+    """Best-effort, same rationale as _write_handl_note — raises a
+    Policy_Diary call-to-action for office to action (see
+    apps.integrations.handl.HandlClient.add_job_diary), alongside
+    (never instead of) the plain note _write_handl_note already
+    writes."""
+    try:
+        get_handl_client().add_job_diary(report_id, description)
+    except Exception:
+        logger.exception("Failed to write Handl diary for report %s", report_id)
+
+
 def _format_duration(td):
     """"1h 05m" (or "42m" under an hour) — td is a datetime.timedelta."""
     total_minutes = max(int(td.total_seconds() // 60), 0)
@@ -1503,13 +1515,21 @@ def job_complete(request, order_no):
                     kind_label = JobVisitPhoto.Kind(kind).label
                     note_parts.append(f"{kind_label}: {_photo_links_html(kind_label, urls)}")
 
+            failure_diary_text = ""
             if failure_category is not None:
                 detail = ""
+                plain_detail = ""
                 if failure_category.name in _FAILURE_CATEGORIES_NEEDING_SKU:
                     detail = f" (SKU / part needed: {escape(failure_sku_needed)})"
+                    plain_detail = f" (SKU / part needed: {failure_sku_needed})"
                 elif failure_category.name in _FAILURE_CATEGORIES_NEEDING_REATTEND:
                     detail = f" ({JobVisit.ReattendAction(failure_reattend_action).label})"
+                    plain_detail = detail
                 note_parts.append(f"Failure reason: {escape(failure_category.name)}{detail}.")
+                # Plain text, not escape()'d like the note above — Policy_Diary's
+                # Description isn't rendered as HTML the way the Policy_History
+                # note is.
+                failure_diary_text = f"Failure reason: {failure_category.name}{plain_detail}."
 
             if outcome == JobVisit.Outcome.COMPLETED and customer_not_present:
                 note_parts.append(
@@ -1570,6 +1590,10 @@ def job_complete(request, order_no):
             ])
 
             _write_handl_note(locksmith, report_id, " ".join(note_parts))
+            _write_handl_diary(
+                report_id,
+                "Inv and close" if outcome == JobVisit.Outcome.COMPLETED else failure_diary_text,
+            )
             _record_job_timing(locksmith, report_id, order_no, visit)
             if selected_date == timezone.localdate():
                 _update_optimo_status(

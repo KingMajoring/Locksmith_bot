@@ -2672,6 +2672,7 @@ class JobVisitWorkflowTests(TestCase):
         self.assertIn("Left a spare key.", note_text)
         self.assertIn("happy with the job", note_text)
         self.assertIn(f'<a href="{visit.photos.get(kind=JobVisitPhoto.Kind.AFTER).url}" target="_blank">', note_text)
+        self.mock_handl.add_job_diary.assert_called_once_with("496390", "Inv and close")
         self.mock_optimo.update_completion_status.assert_called_once_with(
             self.order_no, "success", start_time=visit.arrived_at, end_time=visit.completed_at
         )
@@ -3503,6 +3504,10 @@ class JobVisitWorkflowTests(TestCase):
         )
         note_text = self.mock_handl.add_report_note.call_args[0][1]
         self.assertIn("Incorrect parts - ordered by WGTK (SKU / part needed: TK-100)", note_text)
+        self.mock_handl.add_job_diary.assert_called_once_with(
+            "496390",
+            "Failure reason: Incorrect parts - ordered by WGTK (SKU / part needed: TK-100).",
+        )
 
     def test_failed_reattend_category_requires_reattend_choice(self):
         self._parts_done_visit()
@@ -3528,6 +3533,9 @@ class JobVisitWorkflowTests(TestCase):
         self.assertEqual(visit.failure_reattend_action, JobVisit.ReattendAction.DIFFERENT_LOCKSMITH)
         note_text = self.mock_handl.add_report_note.call_args[0][1]
         self.assertIn("programmer issue (Reattend with a different locksmith)", note_text)
+        self.mock_handl.add_job_diary.assert_called_once_with(
+            "496390", "Failure reason: programmer issue (Reattend with a different locksmith)."
+        )
 
     def test_failed_notes_only_category_needs_no_sub_field(self):
         self._parts_done_visit()
@@ -3545,6 +3553,26 @@ class JobVisitWorkflowTests(TestCase):
         self.assertEqual(self._visit().failure_category, self.category_notes_only)
         note_text = self.mock_handl.add_report_note.call_args[0][1]
         self.assertIn("Failure reason: Vehicle Issues.", note_text)
+        self.mock_handl.add_job_diary.assert_called_once_with("496390", "Failure reason: Vehicle Issues.")
+
+    def test_failed_diary_text_is_not_html_escaped_unlike_the_note(self):
+        self._parts_done_visit()
+        self._add_photo(JobVisitPhoto.Kind.AFTER)
+        self._add_photo(JobVisitPhoto.Kind.MILEAGE)
+        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        response = self.client.post(url, {
+            "outcome": "failed",
+            "failure_category": self.category_wrong_parts.pk, "failure_sku_needed": "A&B",
+        })
+        self.assertRedirects(
+            response,
+            f"{reverse('locksmith_portal:job_overview', args=[self.order_no])}?date={self.today.isoformat()}",
+        )
+        note_text = self.mock_handl.add_report_note.call_args[0][1]
+        self.assertIn("A&amp;B", note_text)
+        self.mock_handl.add_job_diary.assert_called_once_with(
+            "496390", "Failure reason: Incorrect parts - ordered by WGTK (SKU / part needed: A&B)."
+        )
 
     def test_failed_hidden_category_id_is_rejected(self):
         self._parts_done_visit()

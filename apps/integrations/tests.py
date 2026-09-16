@@ -180,6 +180,9 @@ class MockHandlClientTests(TestCase):
     def test_add_report_note_does_not_raise(self):
         self.client.add_report_note("496390", "'Dean S' is on route.", actioned_by_user_id=522)
 
+    def test_add_job_diary_does_not_raise(self):
+        self.client.add_job_diary("496390", "Inv and close")
+
 
 def _fake_connection(rows):
     """A MagicMock usable as `with client._connection() as conn:`, with
@@ -1139,6 +1142,25 @@ class SQLHandlClientTests(TestCase):
         self.assertEqual(params["report_id"], "496390")
         self.assertEqual(params["notes"], "'Dean S' is on route.")
         self.assertEqual(params["actioned_by"], 517)
+        fake_conn.commit.assert_called_once()
+
+    def test_add_job_diary_inserts_and_commits(self):
+        fake_conn = MagicMock()
+        fake_conn.__enter__.return_value = fake_conn
+        fake_conn.__exit__.return_value = False
+        cursor = fake_conn.cursor.return_value
+
+        client = SQLHandlClient()
+        with patch.object(client, "_write_connection", return_value=fake_conn):
+            with override_settings(HANDL_PORTAL_CREATED_BY_USER_ID=1071):
+                client.add_job_diary("496390", "Inv and close")
+
+        query, params = cursor.execute.call_args[0]
+        self.assertIn("INSERT INTO Policy_Diary", query)
+        self.assertEqual(params["report_id"], "496390")
+        self.assertEqual(params["description"], "Inv and close")
+        self.assertEqual(params["code"], "PortalJob")
+        self.assertEqual(params["entered_by"], 1071)
         fake_conn.commit.assert_called_once()
 
     def _set_stock_quantity(self, client, quantity, part_code="TK-100"):

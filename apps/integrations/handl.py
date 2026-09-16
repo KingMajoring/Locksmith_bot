@@ -308,6 +308,23 @@ class HandlClient(ABC):
         WRITES to Handl — same write-capable connection as record_disposal."""
 
     @abstractmethod
+    def add_job_diary(self, report_id: str, description: str) -> None:
+        """Raises a Policy_Diary call-to-action against this report —
+        Handl's own follow-up/reminder queue, distinct from the plain
+        Policy_History note add_report_note writes (that note stays
+        exactly as it was; this is an addition, not a replacement).
+        Used by the locksmith portal's job-complete flow (see
+        apps.locksmith_portal.views.job_complete) so office has a diary
+        item to action for every finished job: "Inv and close" on a
+        completed job, the failure detail on a failed one — confirmed
+        against a real Handl-side insert, this app always raises it
+        with the same fixed Code/StatusID=7/Days=0/EnteredBy (the
+        portal's own Handl user id, not the locksmith's — see
+        HANDL_PORTAL_CREATED_BY_USER_ID) and dueDate of today, so none
+        of those are parameters here. WRITES to Handl — same
+        write-capable connection as record_disposal."""
+
+    @abstractmethod
     def set_locksmith_stock_quantity(
         self,
         soter_locksmith_ids: list[str],
@@ -602,6 +619,9 @@ class MockHandlClient(HandlClient):
     def add_report_note(self, report_id: str, notes: str, *, actioned_by_user_id: int) -> None:
         pass
 
+    def add_job_diary(self, report_id: str, description: str) -> None:
+        pass
+
     def set_locksmith_stock_quantity(
         self,
         soter_locksmith_ids: list[str],
@@ -659,6 +679,38 @@ def _insert_policy_history_note(cursor, *, report_id: str, notes: str, actioned_
             (%(report_id)s, 23, NULL, %(notes)s, %(actioned_by)s, %(now)s, 0)
         """,
         {"report_id": report_id, "notes": notes, "actioned_by": actioned_by_user_id, "now": when},
+    )
+
+
+# Code for every Policy_Diary row this app raises — there's exactly one
+# kind of diary the locksmith portal writes (see add_job_diary), so this
+# stays a single fixed value rather than a per-call parameter.
+_PORTAL_DIARY_CODE = "PortalJob"
+
+
+def _insert_policy_diary(cursor, *, report_id: str, description: str, when) -> None:
+    """Raises a Policy_Diary call-to-action — Handl's own follow-up/
+    reminder queue, distinct from the Policy_History note
+    _insert_policy_history_note writes. StatusID=7/Active=1, Days=0 and
+    a same-day dueDate are the same pattern an existing WGTK Handl
+    automation already uses for an immediate follow-up; EnteredBy is
+    the portal's own fixed Handl user id (HANDL_PORTAL_CREATED_BY_USER_ID),
+    not the locksmith's — these diaries are raised for office to action,
+    not attributed to whoever happened to finish the job."""
+    cursor.execute(
+        """
+        INSERT INTO Policy_Diary
+            (ReportID, Description, Code, StatusID, EnteredBy, EntryDate, Days, Active, dueDate)
+        VALUES
+            (%(report_id)s, %(description)s, %(code)s, 7, %(entered_by)s, %(now)s, 0, 1, CAST(%(now)s AS DATE))
+        """,
+        {
+            "report_id": report_id,
+            "description": description,
+            "code": _PORTAL_DIARY_CODE,
+            "entered_by": settings.HANDL_PORTAL_CREATED_BY_USER_ID,
+            "now": when,
+        },
     )
 
 
@@ -1520,6 +1572,12 @@ class SQLHandlClient(HandlClient):
                 cursor, report_id=report_id, notes=notes,
                 actioned_by_user_id=actioned_by_user_id, when=_handl_now(),
             )
+            conn.commit()
+
+    def add_job_diary(self, report_id: str, description: str) -> None:
+        with self._write_connection() as conn:
+            cursor = conn.cursor()
+            _insert_policy_diary(cursor, report_id=report_id, description=description, when=_handl_now())
             conn.commit()
 
     def set_locksmith_stock_quantity(
