@@ -82,7 +82,7 @@
 
   <div class="field-group failure-category-branch" data-need="sku" hidden>
     <label for="failure_sku_needed">SKU / part needed</label>
-    <input type="text" id="failure_sku_needed" name="failure_sku_needed" placeholder="Part SKU">
+    <input type="text" id="failure_sku_needed" name="failure_sku_needed" placeholder="Part SKU" data-faulty-skus="{{ faulty_part_skus }}">
   </div>
 
   <div class="field-group failure-category-branch" data-need="reattend" hidden>
@@ -175,6 +175,16 @@
           if (branch.dataset.need === 'sku') showBranch(branch, needsSku);
           if (branch.dataset.need === 'reattend') showBranch(branch, needsReattend);
         });
+        // A part already reported faulty on this visit (see job_detail)
+        // is almost always the same one causing a parts-related failure
+        // here — prefill it so the locksmith isn't typing the same SKU
+        // twice. Never overwrites something they've already typed in.
+        if (needsSku) {
+          var skuInput = document.getElementById('failure_sku_needed');
+          if (skuInput && !skuInput.value && skuInput.dataset.faultySkus) {
+            skuInput.value = skuInput.dataset.faultySkus;
+          }
+        }
       });
     });
   })();

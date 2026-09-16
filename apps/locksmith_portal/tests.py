@@ -2583,6 +2583,30 @@ class JobVisitWorkflowTests(TestCase):
         )
         self.assertEqual(self._visit().stage, JobVisit.Stage.DONE)
 
+    def test_complete_get_offers_faulty_part_skus_reported_this_visit(self):
+        self._parts_done_visit()
+        FaultyPartReport.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            part_code="TK-100", part_name="Transponder key", quantity=1,
+        )
+        FaultyPartReport.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            part_code="TK-200", part_name="Ignition barrel", quantity=1,
+        )
+        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        response = self.client.get(url)
+        self.assertContains(response, 'data-faulty-skus="TK-100, TK-200"')
+
+    def test_complete_get_offers_no_faulty_part_skus_for_a_different_job(self):
+        self._parts_done_visit()
+        FaultyPartReport.objects.create(
+            locksmith=self.locksmith, order_no="some-other-order", report_id="111111",
+            part_code="TK-100", part_name="Transponder key", quantity=1,
+        )
+        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        response = self.client.get(url)
+        self.assertContains(response, 'data-faulty-skus=""')
+
     def test_complete_from_arrived_succeeds_with_no_parts_recorded(self):
         JobVisit.objects.create(
             locksmith=self.locksmith, order_no=self.order_no, report_id="496390",

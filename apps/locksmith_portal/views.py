@@ -1432,6 +1432,15 @@ def job_complete(request, order_no):
 
     loss_label = _loss_label_for(report_id)
 
+    # Parts already reported faulty on this visit (see job_detail) — offered
+    # up to prefill the SKU field below if the locksmith fails the job for
+    # a parts-related reason, so they don't have to type the same part code
+    # twice.
+    faulty_part_skus = ", ".join(dict.fromkeys(
+        FaultyPartReport.objects.filter(locksmith=locksmith, order_no=order_no)
+        .order_by("created_at").values_list("part_code", flat=True)
+    ))
+
     if request.method == "POST":
         notes_text = request.POST.get("notes", "").strip()
         outcome = request.POST.get("outcome")
@@ -1602,6 +1611,7 @@ def job_complete(request, order_no):
             "loss_label": loss_label,
             "photo_slots": photo_slots,
             "failure_categories": failure_categories,
+            "faulty_part_skus": faulty_part_skus,
         },
     )
 
