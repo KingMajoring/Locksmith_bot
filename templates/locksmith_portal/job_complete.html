@@ -7,19 +7,21 @@
 <form method="post" action="{{ action_url }}" enctype="multipart/form-data" class="card" id="complete-form">
   {% csrf_token %}
 
-  {% for slot in photo_slots %}
-  <div class="field-group">
-    <label>{{ slot.label }}{% if not slot.required %} <span class="sub">(if applicable)</span>{% endif %} <span class="sub">(up to 3 photos)</span></label>
-    {% include "locksmith_portal/_photo_input.html" with kind=slot.kind required=slot.required label=slot.label existing_urls=slot.existing_urls %}
-  </div>
-  {% endfor %}
-
   <div class="field-group">
     <label>Outcome</label>
     <div class="outcome-choice">
       <label><input type="radio" name="outcome" value="completed" class="outcome-input" required> Completed</label>
       <label><input type="radio" name="outcome" value="failed" class="outcome-input"> Failed</label>
     </div>
+  </div>
+
+  <div class="completed-branch" hidden>
+    {% for slot in photo_slots %}
+    <div class="field-group">
+      <label>{{ slot.label }}{% if not slot.required %} <span class="sub">(if applicable)</span>{% endif %} <span class="sub">(up to 3 photos)</span></label>
+      {% include "locksmith_portal/_photo_input.html" with kind=slot.kind required=slot.required label=slot.label existing_urls=slot.existing_urls %}
+    </div>
+    {% endfor %}
   </div>
 
   <div class="field-group completed-branch" hidden>

@@ -1474,9 +1474,10 @@ def job_complete(request, order_no):
                     errors.append("Choose a reattend option.")
 
         slot_pairs = _after_photo_slots(loss_label)
-        for kind, required in slot_pairs:
-            if required and not visit.photos.filter(kind=kind).exists():
-                errors.append(f"Add at least one photo: {JobVisitPhoto.Kind(kind).label}.")
+        if outcome == JobVisit.Outcome.COMPLETED:
+            for kind, required in slot_pairs:
+                if required and not visit.photos.filter(kind=kind).exists():
+                    errors.append(f"Add at least one photo: {JobVisitPhoto.Kind(kind).label}.")
 
         if errors:
             for error in errors:

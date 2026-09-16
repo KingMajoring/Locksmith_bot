@@ -2547,7 +2547,7 @@ class JobVisitWorkflowTests(TestCase):
             f"{reverse('locksmith_portal:job_overview', args=[self.order_no])}?date={self.today.isoformat()}",
         )
 
-    def test_complete_requires_photo_and_outcome(self):
+    def test_complete_requires_outcome(self):
         JobVisit.objects.create(
             locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
             stage=JobVisit.Stage.PARTS_DONE, parts_done_at=timezone.now(),
@@ -2557,8 +2557,31 @@ class JobVisitWorkflowTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self._visit().stage, JobVisit.Stage.PARTS_DONE)
-        self.assertContains(response, "Add at least one photo")
         self.assertContains(response, "Choose Completed or Failed")
+
+    def test_complete_requires_photo_when_outcome_is_completed(self):
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            stage=JobVisit.Stage.PARTS_DONE, parts_done_at=timezone.now(),
+        )
+        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        response = self.client.post(url, {"notes": "all good", "outcome": "completed"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self._visit().stage, JobVisit.Stage.PARTS_DONE)
+        self.assertContains(response, "Add at least one photo")
+
+    def test_complete_failed_outcome_does_not_require_completion_photos(self):
+        self._parts_done_visit()
+        url = reverse("locksmith_portal:job_complete", args=[self.order_no])
+        response = self.client.post(url, {
+            "outcome": "failed", "failure_category": self.category_notes_only.pk,
+        })
+        self.assertRedirects(
+            response,
+            f"{reverse('locksmith_portal:job_overview', args=[self.order_no])}?date={self.today.isoformat()}",
+        )
+        self.assertEqual(self._visit().stage, JobVisit.Stage.DONE)
 
     def test_complete_from_arrived_succeeds_with_no_parts_recorded(self):
         JobVisit.objects.create(

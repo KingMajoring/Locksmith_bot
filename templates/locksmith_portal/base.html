@@ -225,6 +225,11 @@
         if (!(form instanceof HTMLFormElement)) return;
         var missingLabels = [];
         form.querySelectorAll('.photo-file-input[data-required="1"]').forEach(function (input) {
+          // Same hidden-required trap as elsewhere (e.g. job_complete.html)
+          // — a slot tucked inside a hidden branch (like the after-photos
+          // that only apply once "Completed" is chosen) isn't actually
+          // asked for right now, so it shouldn't block submission.
+          if (input.closest('[hidden]')) return;
           if (currentCount(input) === 0) missingLabels.push(input.dataset.label || 'a photo');
         });
         if (missingLabels.length) {
