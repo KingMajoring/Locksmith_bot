@@ -65,6 +65,38 @@ def _report_id_from_order_no(order_no: str) -> str | None:
     return match.group(1) if match else None
 
 
+def _carry_over_portal_failure_category(job: CompletedJob) -> bool:
+    """If a locksmith failed this job via the portal app (see
+    apps.locksmith_portal.views.job_complete), they already picked a
+    failure reason there — carry it straight across so office doesn't
+    have to redo the same categorization on this CompletedJob. Only
+    touches a row still uncategorized: never overwrites an office
+    decision, same spirit as failure_category being excluded from
+    pull_completed_jobs_for_date's own update_or_create defaults.
+    Returns True if it filled something in."""
+    # Deferred import: locksmith_portal already depends on job_completion
+    # (JobVisit.failure_category references job_completion.FailureCategory
+    # by app label, not a real import), so this stays local to avoid
+    # introducing the reverse dependency at module load time.
+    from apps.locksmith_portal.models import JobVisit
+
+    if job.status != CompletedJob.Status.FAILED or job.failure_category_id is not None:
+        return False
+    if job.locksmith_id is None:
+        return False
+
+    visit = JobVisit.objects.filter(
+        order_no=job.order_no, locksmith_id=job.locksmith_id,
+        outcome=JobVisit.Outcome.FAILED, failure_category__isnull=False,
+    ).first()
+    if visit is None:
+        return False
+
+    job.failure_category = visit.failure_category
+    job.save(update_fields=["failure_category"])
+    return True
+
+
 def pull_completed_jobs_for_date(for_date: date) -> PullSummary:
     optimo = get_optimo_client()
     handl = get_handl_client()
@@ -129,9 +161,10 @@ def pull_completed_jobs_for_date(for_date: date) -> PullSummary:
             "disposed_skus": ", ".join(disposed_skus.get(report_id, [])),
             "completion_note": completion.note,
         }
-        _obj, was_created = CompletedJob.objects.update_or_create(
+        obj, was_created = CompletedJob.objects.update_or_create(
             order_no=summary.order_no, defaults=defaults
         )
+        _carry_over_portal_failure_category(obj)
         if was_created:
             created += 1
         else:

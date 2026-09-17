@@ -232,6 +232,95 @@ class PullingTests(TestCase):
         job.refresh_from_db()
         self.assertEqual(job.failure_category, category)
 
+    def _pull_one_failed_job(self, order_no, for_date, driver_serial="011", report_id="2001"):
+        summaries = [
+            OptimoOrderSummary(
+                order_no=order_no, driver_serial=driver_serial,
+                distance_metres=100.0, travel_time_seconds=60,
+            )
+        ]
+        completions = {
+            order_no: OptimoCompletion(
+                order_no=order_no, status="failed",
+                start_time=datetime(2026, 9, 10, 9, 0, tzinfo=dt_timezone.utc),
+                end_time=datetime(2026, 9, 10, 9, 20, tzinfo=dt_timezone.utc),
+                note="",
+            )
+        }
+        job_details = {
+            report_id: JobDetails(
+                report_id=report_id, make="Ford", model="Focus", year="2020", reg="AB20 CDE",
+                vin=f"VIN{report_id}", service_type="Car", loss_type="Lockout",
+                supplied_service="Non-Destructive Entry", net_cost=None,
+            )
+        }
+        with patch(
+            "apps.job_completion.services.pulling.get_optimo_client",
+            return_value=FakeOptimoClient(summaries, completions),
+        ), patch(
+            "apps.job_completion.services.pulling.get_handl_client",
+            return_value=FakeHandlClient(job_details, {}),
+        ):
+            pull_completed_jobs_for_date(for_date)
+
+    def test_failure_category_carried_over_from_completed_portal_visit(self):
+        from apps.locksmith_portal.models import JobVisit
+
+        for_date = date(2026, 9, 10)
+        order_no = f"2001_{for_date.isoformat()}"
+        category = FailureCategory.objects.create(name="Wrong parts")
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=order_no, report_id="2001",
+            outcome=JobVisit.Outcome.FAILED, failure_category=category,
+            stage=JobVisit.Stage.DONE,
+        )
+
+        self._pull_one_failed_job(order_no, for_date)
+
+        job = CompletedJob.objects.get(order_no=order_no)
+        self.assertEqual(job.failure_category, category)
+
+    def test_failure_category_not_carried_over_when_office_already_categorized(self):
+        from apps.locksmith_portal.models import JobVisit
+
+        for_date = date(2026, 9, 10)
+        order_no = f"2001_{for_date.isoformat()}"
+        portal_category = FailureCategory.objects.create(name="Wrong parts")
+        office_category = FailureCategory.objects.create(name="Customer not present")
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=order_no, report_id="2001",
+            outcome=JobVisit.Outcome.FAILED, failure_category=portal_category,
+            stage=JobVisit.Stage.DONE,
+        )
+        CompletedJob.objects.create(
+            order_no=order_no, report_id="2001", job_date=for_date,
+            locksmith=self.locksmith, status=CompletedJob.Status.FAILED,
+            failure_category=office_category,
+        )
+
+        self._pull_one_failed_job(order_no, for_date)
+
+        job = CompletedJob.objects.get(order_no=order_no)
+        self.assertEqual(job.failure_category, office_category)
+
+    def test_failure_category_not_carried_over_for_a_different_locksmiths_visit(self):
+        from apps.locksmith_portal.models import JobVisit
+
+        for_date = date(2026, 9, 10)
+        order_no = f"2001_{for_date.isoformat()}"
+        other_locksmith = _make_locksmith("Someone Else", driver_serial="777")
+        category = FailureCategory.objects.create(name="Wrong parts")
+        JobVisit.objects.create(
+            locksmith=other_locksmith, order_no=order_no, report_id="2001",
+            outcome=JobVisit.Outcome.FAILED, failure_category=category,
+            stage=JobVisit.Stage.DONE,
+        )
+
+        self._pull_one_failed_job(order_no, for_date)
+
+        job = CompletedJob.objects.get(order_no=order_no)
+        self.assertIsNone(job.failure_category)
+
     def test_non_numeric_report_id_is_not_sent_to_handl_or_stored(self):
         """Regression test: confirmed live that not every Optimo order
         is a Handl claim — an ad-hoc/admin entry's orderNo was literally
