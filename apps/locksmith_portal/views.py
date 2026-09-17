@@ -1110,15 +1110,24 @@ def job_overview(request, order_no):
 _JOB_IN_PROGRESS_STAGES = (JobVisit.Stage.ARRIVED, JobVisit.Stage.PARTS_DONE)
 
 
-def _other_job_in_progress(locksmith, order_no):
+def _other_job_in_progress(locksmith, report_id):
     """This locksmith's other JobVisit, if any, that's arrived on site
     but not yet finished — used to block starting a second job before
     the first one's done (see job_on_route). Deliberately excludes
     ON_ROUTE: driving to a job doesn't block starting another, only
-    actually being on site at one does."""
+    actually being on site at one does.
+
+    Keyed on report_id, not order_no: order_no is Optimo's per-day
+    route-stop id ("<ReportID>_<date>", see
+    apps.job_completion.services.pulling), so the same Handl job gets a
+    new order_no every time it's rescheduled onto a different day. A
+    stale, never-finished visit from an earlier day must still count as
+    "this same job" when it reappears under today's order_no — otherwise
+    a locksmith reopening today's copy of that job gets told to finish
+    a job that, to them, is the one they're already looking at."""
     return (
         JobVisit.objects.filter(locksmith=locksmith, stage__in=_JOB_IN_PROGRESS_STAGES)
-        .exclude(order_no=order_no)
+        .exclude(report_id=report_id)
         .first()
     )
 
@@ -1143,7 +1152,7 @@ def job_on_route(request, order_no):
         locksmith.save(update_fields=["preferred_navigation_app"])
 
     if visit.stage == JobVisit.Stage.NOT_STARTED:
-        other = _other_job_in_progress(locksmith, order_no)
+        other = _other_job_in_progress(locksmith, report_id)
         if other is not None:
             messages.error(
                 request,

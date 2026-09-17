@@ -2419,6 +2419,22 @@ class JobVisitWorkflowTests(TestCase):
         other_visit = JobVisit.objects.get(locksmith=self.locksmith, order_no=other_order_no)
         self.assertEqual(other_visit.stage, JobVisit.Stage.ON_ROUTE)
 
+    def test_on_route_not_blocked_by_a_stale_visit_for_the_same_job_rescheduled(self):
+        """A job that was arrived-but-never-finished on an earlier day,
+        then rescheduled onto today under a new Optimo order_no (same
+        Handl report_id), must not read as "another job" and block
+        itself — see _other_job_in_progress."""
+        yesterday_order_no = f"496390_{(self.today - timedelta(days=1)).isoformat()}"
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=yesterday_order_no, report_id="496390",
+            stage=JobVisit.Stage.ARRIVED, arrived_at=timezone.now(),
+        )
+        url = reverse("locksmith_portal:job_on_route", args=[self.order_no])
+        self.client.post(url)
+
+        visit = self._visit()
+        self.assertEqual(visit.stage, JobVisit.Stage.ON_ROUTE)
+
     # --- cancel / couldn't attend -----------------------------------------
 
     def test_cancel_get_shows_reasons(self):
