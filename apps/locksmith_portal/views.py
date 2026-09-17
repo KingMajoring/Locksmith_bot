@@ -1107,6 +1107,22 @@ def job_overview(request, order_no):
     )
 
 
+_JOB_IN_PROGRESS_STAGES = (JobVisit.Stage.ARRIVED, JobVisit.Stage.PARTS_DONE)
+
+
+def _other_job_in_progress(locksmith, order_no):
+    """This locksmith's other JobVisit, if any, that's arrived on site
+    but not yet finished — used to block starting a second job before
+    the first one's done (see job_on_route). Deliberately excludes
+    ON_ROUTE: driving to a job doesn't block starting another, only
+    actually being on site at one does."""
+    return (
+        JobVisit.objects.filter(locksmith=locksmith, stage__in=_JOB_IN_PROGRESS_STAGES)
+        .exclude(order_no=order_no)
+        .first()
+    )
+
+
 @login_required
 @require_POST
 def job_on_route(request, order_no):
@@ -1115,6 +1131,7 @@ def job_on_route(request, order_no):
         return early
     locksmith, report_id, visit = ctx["locksmith"], ctx["report_id"], ctx["visit"]
     selected_date = ctx["selected_date"]
+    overview_url = f"{reverse('locksmith_portal:job_overview', args=[order_no])}?date={selected_date.isoformat()}"
 
     # First time this locksmith picks Maps or Waze on the "Mark on
     # route" step, remember it so they're not asked again on every
@@ -1126,6 +1143,14 @@ def job_on_route(request, order_no):
         locksmith.save(update_fields=["preferred_navigation_app"])
 
     if visit.stage == JobVisit.Stage.NOT_STARTED:
+        other = _other_job_in_progress(locksmith, order_no)
+        if other is not None:
+            messages.error(
+                request,
+                f"Finish job {other.report_id} before starting another one.",
+            )
+            return redirect(overview_url)
+
         visit.stage = JobVisit.Stage.ON_ROUTE
         visit.on_route_at = timezone.now()
         visit.save(update_fields=["stage", "on_route_at"])
@@ -1139,7 +1164,6 @@ def job_on_route(request, order_no):
         if selected_date == timezone.localdate():
             _update_optimo_status(order_no, "on_route")
 
-    overview_url = f"{reverse('locksmith_portal:job_overview', args=[order_no])}?date={ctx['selected_date'].isoformat()}"
     return redirect(overview_url)
 
 

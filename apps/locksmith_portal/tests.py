@@ -2302,6 +2302,74 @@ class JobVisitWorkflowTests(TestCase):
         self.locksmith.refresh_from_db()
         self.assertEqual(self.locksmith.preferred_navigation_app, "")
 
+    def _add_second_job(self, other_order_no):
+        self.mock_optimo.list_orders_for_date.return_value = [
+            OptimoOrderSummary(
+                order_no=self.order_no, driver_serial="011", distance_metres=0, travel_time_seconds=0
+            ),
+            OptimoOrderSummary(
+                order_no=other_order_no, driver_serial="011", distance_metres=0, travel_time_seconds=0
+            ),
+        ]
+
+    def test_on_route_blocked_while_another_job_is_arrived(self):
+        other_order_no = f"555555_{self.today.isoformat()}"
+        self._add_second_job(other_order_no)
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            stage=JobVisit.Stage.ARRIVED, arrived_at=timezone.now(),
+        )
+        url = reverse("locksmith_portal:job_on_route", args=[other_order_no])
+        response = self.client.post(url)
+
+        other_visit = JobVisit.objects.get(locksmith=self.locksmith, order_no=other_order_no)
+        self.assertEqual(other_visit.stage, JobVisit.Stage.NOT_STARTED)
+        self.assertRedirects(
+            response,
+            f"{reverse('locksmith_portal:job_overview', args=[other_order_no])}?date={self.today.isoformat()}",
+        )
+        self.mock_handl.add_report_note.assert_not_called()
+        self.mock_optimo.update_completion_status.assert_not_called()
+
+    def test_on_route_blocked_while_another_job_has_parts_done(self):
+        other_order_no = f"555555_{self.today.isoformat()}"
+        self._add_second_job(other_order_no)
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            stage=JobVisit.Stage.PARTS_DONE, arrived_at=timezone.now(), parts_done_at=timezone.now(),
+        )
+        url = reverse("locksmith_portal:job_on_route", args=[other_order_no])
+        self.client.post(url)
+
+        other_visit = JobVisit.objects.get(locksmith=self.locksmith, order_no=other_order_no)
+        self.assertEqual(other_visit.stage, JobVisit.Stage.NOT_STARTED)
+
+    def test_on_route_allowed_while_another_job_is_only_on_route(self):
+        other_order_no = f"555555_{self.today.isoformat()}"
+        self._add_second_job(other_order_no)
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            stage=JobVisit.Stage.ON_ROUTE, on_route_at=timezone.now(),
+        )
+        url = reverse("locksmith_portal:job_on_route", args=[other_order_no])
+        self.client.post(url)
+
+        other_visit = JobVisit.objects.get(locksmith=self.locksmith, order_no=other_order_no)
+        self.assertEqual(other_visit.stage, JobVisit.Stage.ON_ROUTE)
+
+    def test_on_route_allowed_once_the_other_job_is_done(self):
+        other_order_no = f"555555_{self.today.isoformat()}"
+        self._add_second_job(other_order_no)
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            stage=JobVisit.Stage.DONE, outcome=JobVisit.Outcome.COMPLETED, completed_at=timezone.now(),
+        )
+        url = reverse("locksmith_portal:job_on_route", args=[other_order_no])
+        self.client.post(url)
+
+        other_visit = JobVisit.objects.get(locksmith=self.locksmith, order_no=other_order_no)
+        self.assertEqual(other_visit.stage, JobVisit.Stage.ON_ROUTE)
+
     # --- cancel / couldn't attend -----------------------------------------
 
     def test_cancel_get_shows_reasons(self):
