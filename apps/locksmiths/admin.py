@@ -17,12 +17,17 @@ class OptimoDriverIdInline(admin.TabularInline):
     extra = 1
 
 
-@admin.action(description="Auto-assign stock check schedule (spread across Mon–Fri)")
+@admin.action(description="Enable daily stock checks")
 def assign_stock_check_schedule(modeladmin, request, queryset):
     # Deferred import: stock_accuracy depends on locksmiths, not the
     # other way round, so this stays a local import to avoid a cycle.
     from apps.stock_accuracy.models import StockCheckSchedule
 
+    # Stock checks go out daily to every enabled locksmith now, so weekday
+    # no longer means anything (see StockCheckSchedule's own docstring) —
+    # still set, purely because the field is required, not because it's
+    # read anywhere. This action's only real job now is creating the
+    # enabled=True row a locksmith needs to participate at all.
     counts = Counter(StockCheckSchedule.objects.values_list("weekday", flat=True))
     weekdays = [w for w, _ in StockCheckSchedule.Weekday.choices]
 
@@ -39,8 +44,8 @@ def assign_stock_check_schedule(modeladmin, request, queryset):
 
     modeladmin.message_user(
         request,
-        f"Created {created} schedule(s), spread across the week. "
-        f"{skipped} already had one and were left as-is.",
+        f"Enabled daily stock checks for {created} locksmith(s). "
+        f"{skipped} already had a schedule and were left as-is.",
     )
 
 

@@ -2,7 +2,7 @@
 {% block title %}Stock check — WGTK Locksmith Portal{% endblock %}
 {% block content %}
 <a class="back-link" href="{% url 'locksmith_portal:dashboard' %}">&larr; Back</a>
-<h1>Stock check — week of {{ weekly_check.week_starting }}</h1>
+<h1>Stock check — {{ weekly_check.week_starting }}</h1>
 <p>Count how many of each part you actually have on your van and enter it below.</p>
 <form method="post" class="card">
   {% csrf_token %}

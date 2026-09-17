@@ -226,7 +226,11 @@ MS_GRAPH_MAIL_SENDER = env("MS_GRAPH_MAIL_SENDER", default="")
 MS_GRAPH_MAIL_FROM = env("MS_GRAPH_MAIL_FROM", default="")
 
 # --- Stock Accuracy (Area 1) config defaults --------------------------------
-STOCK_CHECK_LINES_PER_WEEK = env.int("STOCK_CHECK_LINES_PER_WEEK", default=10)
+# Runs once a day now (see management.commands.send_weekly_stock_checks),
+# not once a week — STOCK_CHECK_LINES_PER_WEEK renamed accordingly. If this
+# was overridden in a deployment's own env config, that override needs
+# copying across to the new name — the old name is no longer read at all.
+STOCK_CHECK_LINES_PER_DAY = env.int("STOCK_CHECK_LINES_PER_DAY", default=20)
 STOCK_CHECK_POOL_SIZE = env.int("STOCK_CHECK_POOL_SIZE", default=30)
 STOCK_CHECK_USAGE_WINDOW_DAYS = env.int("STOCK_CHECK_USAGE_WINDOW_DAYS", default=90)
 STOCK_CHECK_NO_REPEAT_WEEKS = env.int("STOCK_CHECK_NO_REPEAT_WEEKS", default=4)

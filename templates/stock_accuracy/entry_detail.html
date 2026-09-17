@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Enter counts — {{ weekly_check.locksmith.name }}{% endblock %}
 {% block content %}
-<h1>{{ weekly_check.locksmith.name }} — week of {{ weekly_check.week_starting }}</h1>
+<h1>{{ weekly_check.locksmith.name }} — {{ weekly_check.week_starting }}</h1>
 
 {% if weekly_check.confirmed_at %}
   <div class="card">

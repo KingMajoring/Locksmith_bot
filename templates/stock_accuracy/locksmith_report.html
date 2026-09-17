@@ -14,7 +14,7 @@
   <h2>Flagged lines</h2>
   {% if flagged %}
   <table>
-    <tr><th>Week</th><th>Part code</th><th>Description</th><th>Expected</th><th>Actual</th><th>Variance</th><th>£ impact</th></tr>
+    <tr><th>Date</th><th>Part code</th><th>Description</th><th>Expected</th><th>Actual</th><th>Variance</th><th>£ impact</th></tr>
     {% for item in flagged %}
     <tr>
       <td>{{ item.weekly_check.week_starting }}</td>

@@ -7,7 +7,7 @@
   <h2>Latest stock check</h2>
   {% if latest_check %}
     <p>
-      Week of {{ latest_check.week_starting }} —
+      Stock check for {{ latest_check.week_starting }} —
       {% if latest_check.status == "completed" %}done, thanks{% else %}not yet completed{% endif %}
     </p>
     <a class="btn" href="{% url 'locksmith_portal:stock_check_entry' pk=latest_check.pk %}">

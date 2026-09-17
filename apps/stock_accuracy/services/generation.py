@@ -1,11 +1,17 @@
-"""Pick this week's 10 lines for a locksmith and create the WeeklyStockCheck.
+"""Pick today's 20 lines for a locksmith and create the WeeklyStockCheck
+(runs once a day now, not once a week — see management.commands.
+send_weekly_stock_checks; the model/function names are the one thing kept
+under their original, now-slightly-historical names, to avoid a much wider
+rename across admin/views/templates for no functional benefit).
 
 Selection rule: rank the locksmith's parts by usage over a trailing window
 (STOCK_CHECK_USAGE_WINDOW_DAYS) to build a fast-movers pool, exclude lines
 checked in the last STOCK_CHECK_NO_REPEAT_WEEKS weeks so coverage rotates
-across the pool, then randomly draw STOCK_CHECK_LINES_PER_WEEK from what's
+across the pool, then randomly draw STOCK_CHECK_LINES_PER_DAY from what's
 left. If exclusion leaves too few candidates, top up with the
-least-recently-checked excluded ones so a full check always goes out.
+least-recently-checked excluded ones (genuinely sorted by last-checked
+date, not just usage rank) so a full check always goes out and no part
+gets repeated before every other part in the pool has had a turn.
 """
 from __future__ import annotations
 
@@ -13,6 +19,7 @@ import random
 from datetime import date, timedelta
 
 from django.conf import settings
+from django.db.models import Max
 from django.utils import timezone
 
 from apps.integrations.handl import get_handl_client
@@ -29,6 +36,21 @@ def _recently_checked_part_codes(locksmith: Locksmith, weeks: int) -> set[str]:
             weekly_check__week_starting__gte=cutoff,
         ).values_list("part_code", flat=True)
     )
+
+
+def _last_checked_dates(locksmith: Locksmith) -> dict[str, date]:
+    """Most recent check date per part_code for this locksmith — lets the
+    no-repeat top-up below pick genuinely the longest-overdue parts first,
+    rather than always the same usage-rank order (which, at 20 lines a
+    day against a pool of STOCK_CHECK_POOL_SIZE, hits the top-up path
+    most days — this ordering is what actually makes "don't repeat a
+    part until every part in the pool has had a turn" true in practice)."""
+    rows = (
+        StockCheckItem.objects.filter(weekly_check__locksmith=locksmith)
+        .values("part_code")
+        .annotate(last_checked=Max("weekly_check__week_starting"))
+    )
+    return {row["part_code"]: row["last_checked"] for row in rows}
 
 
 def _choose_lines(locksmith: Locksmith, handl) -> tuple[list, dict]:
@@ -71,17 +93,19 @@ def _choose_lines(locksmith: Locksmith, handl) -> tuple[list, dict]:
     eligible = [u for u in pool if u.part_code not in recently_checked]
     excluded = [u for u in pool if u.part_code in recently_checked]
 
-    lines_needed = settings.STOCK_CHECK_LINES_PER_WEEK
+    lines_needed = settings.STOCK_CHECK_LINES_PER_DAY
     if len(eligible) < lines_needed:
+        last_checked = _last_checked_dates(locksmith)
+        excluded = sorted(excluded, key=lambda u: last_checked.get(u.part_code, date.min))
         eligible = eligible + excluded[: lines_needed - len(eligible)]
 
     k = min(lines_needed, len(eligible))
     return random.sample(eligible, k=k), expected
 
 
-def generate_weekly_check(locksmith: Locksmith, week_starting: date) -> WeeklyStockCheck:
+def generate_weekly_check(locksmith: Locksmith, check_date: date) -> WeeklyStockCheck:
     existing = WeeklyStockCheck.objects.filter(
-        locksmith=locksmith, week_starting=week_starting
+        locksmith=locksmith, week_starting=check_date
     ).first()
     if existing:
         return existing
@@ -104,7 +128,7 @@ def generate_weekly_check(locksmith: Locksmith, week_starting: date) -> WeeklySt
     }
 
     weekly_check = WeeklyStockCheck.objects.create(
-        locksmith=locksmith, week_starting=week_starting
+        locksmith=locksmith, week_starting=check_date
     )
     StockCheckItem.objects.bulk_create(
         StockCheckItem(

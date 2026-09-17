@@ -8,7 +8,7 @@
   <p class="sub">Every line's been counted by the locksmith — confirm to push these counts to Handl's own stock record.</p>
   {% if ready_to_confirm %}
   <table>
-    <tr><th>Locksmith</th><th>Week</th><th>Completed</th><th></th><th></th></tr>
+    <tr><th>Locksmith</th><th>Date</th><th>Completed</th><th></th><th></th></tr>
     {% for wc in ready_to_confirm %}
     <tr>
       <td>{{ wc.locksmith.name }}</td>

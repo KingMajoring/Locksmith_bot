@@ -5,10 +5,16 @@ from apps.locksmiths.models import Locksmith
 
 
 class StockCheckSchedule(models.Model):
-    """Which weekday each locksmith's weekly stock check goes out on.
+    """Whether this locksmith gets a stock check at all.
 
-    Staggered per locksmith so office admin isn't reconciling everyone's
-    returned counts on the same day.
+    Originally which weekday each locksmith's weekly check went out on,
+    staggered so office admin wasn't reconciling everyone's counts on the
+    same day — checks now go out daily to every enabled locksmith (see
+    management.commands.send_weekly_stock_checks), so there's no more
+    "same day" to stagger away from. weekday is no longer read anywhere;
+    kept on existing rows rather than a migration to drop a column purely
+    for tidiness. Still the only place a locksmith can be excluded from
+    daily checks — see LocksmithAdmin.assign_stock_check_schedule.
     """
 
     class Weekday(models.IntegerChoices):
@@ -130,8 +136,16 @@ class PartUnitConversion(models.Model):
 
 
 class WeeklyStockCheck(models.Model):
-    """One locksmith's stock check for one week: the 10 lines drawn, and
-    (eventually) reconciled against the counts they enter in the portal."""
+    """One locksmith's stock check for one day: the 20 lines drawn, and
+    (eventually) reconciled against the counts they enter in the portal.
+
+    Runs daily now, not weekly (see services.generation.generate_weekly_check
+    and management.commands.send_weekly_stock_checks) — the class name and
+    week_starting field are kept under their original names to avoid a much
+    wider rename across admin/views/templates/reporting; week_starting now
+    just holds the actual calendar day of the check, one row per locksmith
+    per day rather than per locksmith per ISO week.
+    """
 
     class Status(models.TextChoices):
         GENERATED = "generated", "Generated"

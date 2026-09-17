@@ -33,7 +33,7 @@ class GenerationTests(TestCase):
 
     def test_generates_configured_number_of_lines(self):
         weekly_check = generate_weekly_check(self.locksmith, date(2026, 9, 7))
-        self.assertEqual(weekly_check.items.count(), 10)
+        self.assertEqual(weekly_check.items.count(), 20)
 
     def test_lines_are_unique_within_a_check(self):
         weekly_check = generate_weekly_check(self.locksmith, date(2026, 9, 7))
@@ -68,6 +68,58 @@ class GenerationTests(TestCase):
         # catalogue, some overlap is unavoidable once the pool is
         # exhausted — but the two draws should still differ.
         self.assertNotEqual(week1_codes, week2_codes)
+
+    @override_settings(STOCK_CHECK_NO_REPEAT_WEEKS=52)
+    def test_full_pool_gets_covered_before_anything_repeats(self):
+        # Pool is 30 (STOCK_CHECK_POOL_SIZE) and 20 go out a day, so the
+        # pool can't sustain two full, non-overlapping daily draws — day
+        # 2 has to top up 10 lines from what day 1 already covered. The
+        # real guarantee this is testing is that every pool part gets a
+        # turn before any part is repeated a second time, which is what
+        # "don't repeat parts until all parts have been checked" means
+        # once draws regularly exceed what's still eligible.
+        day1 = generate_weekly_check(self.locksmith, date(2026, 9, 7))
+        day1_codes = set(day1.items.values_list("part_code", flat=True))
+
+        day2 = generate_weekly_check(self.locksmith, date(2026, 9, 8))
+        day2_codes = set(day2.items.values_list("part_code", flat=True))
+
+        self.assertEqual(len(day1_codes | day2_codes), 30)
+
+    @override_settings(STOCK_CHECK_LINES_PER_DAY=2, STOCK_CHECK_NO_REPEAT_WEEKS=52)
+    def test_top_up_picks_the_longest_overdue_parts_not_just_usage_rank(self):
+        # All three pool parts were checked recently (so none are
+        # "eligible" and every pick has to come from the no-repeat
+        # top-up), each on a different day — A longest ago, C most
+        # recently. Usage rank runs the other way (C highest qty_used,
+        # A lowest), so a fix that topped up in usage-rank order (the
+        # bug: see _choose_lines) would pick C and B — the two ranked
+        # highest — even though C was the one checked most recently.
+        # Picking genuinely by recency should choose A and B instead,
+        # leaving out C as the one that's least overdue for a repeat.
+        for code, days_ago in [("A", 10), ("B", 5), ("C", 1)]:
+            wc = WeeklyStockCheck.objects.create(
+                locksmith=self.locksmith, week_starting=date(2026, 9, 7) - timedelta(days=days_ago)
+            )
+            StockCheckItem.objects.create(
+                weekly_check=wc, part_code=code, part_name=code, expected_qty=5, unit_cost=1,
+            )
+
+        mock_handl = MagicMock()
+        mock_handl.get_stock_usage.return_value = [
+            StockUsage(part_code="C", part_name="C", qty_used=10),
+            StockUsage(part_code="B", part_name="B", qty_used=9),
+            StockUsage(part_code="A", part_name="A", qty_used=8),
+        ]
+        mock_handl.get_expected_stock.return_value = {
+            code: ExpectedStock(part_code=code, expected_qty=5, unit_cost=1.0) for code in "ABC"
+        }
+
+        with patch("apps.stock_accuracy.services.generation.get_handl_client", return_value=mock_handl):
+            weekly_check = generate_weekly_check(self.locksmith, date(2026, 9, 7))
+
+        codes = set(weekly_check.items.values_list("part_code", flat=True))
+        self.assertEqual(codes, {"A", "B"})
 
     def test_virtual_stock_items_are_never_selected(self):
         VirtualStockItem.objects.create(part_code="3D-TOKEN", part_name="3D job token")
