@@ -2161,6 +2161,55 @@ class JobVisitWorkflowTests(TestCase):
             response, f"{reverse('locksmith_portal:dashboard')}?date={self.today.isoformat()}"
         )
 
+    def _assert_stage_row_done(self, response, label, done):
+        content = response.content.decode()
+        idx = content.index(label)
+        row_start = content.rindex('<div class="stage-row', 0, idx)
+        row_html = content[row_start:idx]
+        if done:
+            self.assertIn("stage-done", row_html)
+        else:
+            self.assertNotIn("stage-done", row_html)
+
+    def test_overview_parts_step_not_done_with_nothing_disposed(self):
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            stage=JobVisit.Stage.ARRIVED, arrived_at=timezone.now(),
+        )
+        response = self.client.get(reverse("locksmith_portal:job_overview", args=[self.order_no]))
+        self._assert_stage_row_done(response, "Parts disposed", done=False)
+
+    def test_overview_parts_step_done_via_normal_continue_flow(self):
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            stage=JobVisit.Stage.PARTS_DONE, arrived_at=timezone.now(), parts_done_at=timezone.now(),
+        )
+        PortalDisposal.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            part_code="TK-100", part_name="Transponder key blank", quantity=1,
+        )
+        response = self.client.get(reverse("locksmith_portal:job_overview", args=[self.order_no]))
+        self._assert_stage_row_done(response, "Parts disposed", done=True)
+
+    def test_overview_parts_step_done_after_a_late_add_once_job_is_done(self):
+        # A locksmith can finish a job first (letting the client go)
+        # without ever going through parts_done — parts_done_at is only
+        # ever set by the forward "Continue" flow (job_parts_continue),
+        # never by a late add after the job's already marked done. The
+        # step still needs to show as done once a part's actually been
+        # recorded, regardless of which path got it there.
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            stage=JobVisit.Stage.DONE, arrived_at=timezone.now(), completed_at=timezone.now(),
+            outcome=JobVisit.Outcome.COMPLETED,
+        )
+        PortalDisposal.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            part_code="TK-100", part_name="Transponder key blank", quantity=1,
+        )
+        response = self.client.get(reverse("locksmith_portal:job_overview", args=[self.order_no]))
+        self._assert_stage_row_done(response, "Parts disposed", done=True)
+
     def test_overview_gain_access_shows_access_method_step_before_parts(self):
         self._set_loss_type("LOCKED IN PROPERTY")
         self._arrived_visit()

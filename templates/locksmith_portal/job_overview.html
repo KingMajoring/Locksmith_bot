@@ -71,7 +71,7 @@
   </div>
   {% endif %}
 
-  <div class="stage-row {% if visit.parts_done_at %}stage-done{% endif %}">
+  <div class="stage-row {% if visit.parts_done_at or disposal_count %}stage-done{% endif %}">
     <span class="stage-num">{% if is_gain_access %}4{% else %}3{% endif %}</span>
     <div class="stage-body">
       <strong>Parts disposed</strong> <span class="sub">(optional here — can be done before or after finishing)</span>
