@@ -2088,8 +2088,14 @@ class JobInformationTests(TestCase):
 class JobInformationViewsTests(TestCase):
     def setUp(self):
         self.locksmith = _make_locksmith()
+        # is_superuser=True, not just is_staff — margin_makes/models/years
+        # are restricted to superusers only (see _superuser_required); a
+        # real office sign-in always gets both together (see
+        # apps.accounts.adapter), so this matches genuine usage. Access
+        # control itself is covered separately in MarginAccessControlTests.
         self.user = get_user_model().objects.create_user(
-            username="office", email="admin@wgtk.co.uk", password="x", is_staff=True
+            username="office", email="admin@wgtk.co.uk", password="x",
+            is_staff=True, is_superuser=True,
         )
         self.client.force_login(self.user)
         self.handl_patch = patch(
@@ -2180,6 +2186,62 @@ class JobInformationViewsTests(TestCase):
         response = self.client.get(reverse("job_completion:timing_makes"), {"service": "Gain access"})
         self.assertContains(response, "BMW")
         self.assertNotContains(response, "Ford")
+
+
+class MarginAccessControlTests(TestCase):
+    """Margin (profit/cost) figures are restricted to superusers — see
+    views._superuser_required. A non-superuser office login (is_staff
+    only — created directly, unlike a real WGTK sign-in, which always
+    grants both together via apps.accounts.adapter) must be blocked from
+    the margin views but keep full access to everything else, including
+    the sibling Timing views."""
+
+    def setUp(self):
+        self.staff_user = get_user_model().objects.create_user(
+            username="junior", email="junior@wgtk.co.uk", password="x",
+            is_staff=True, is_superuser=False,
+        )
+        self.superuser = get_user_model().objects.create_user(
+            username="manager", email="manager@wgtk.co.uk", password="x",
+            is_staff=True, is_superuser=True,
+        )
+
+    def test_non_superuser_forbidden_from_margin_makes(self):
+        self.client.force_login(self.staff_user)
+        response = self.client.get(reverse("job_completion:margin_makes"))
+        self.assertEqual(response.status_code, 403)
+
+    def test_non_superuser_forbidden_from_margin_models(self):
+        self.client.force_login(self.staff_user)
+        response = self.client.get(reverse("job_completion:margin_models", args=["Ford"]))
+        self.assertEqual(response.status_code, 403)
+
+    def test_non_superuser_forbidden_from_margin_years(self):
+        self.client.force_login(self.staff_user)
+        response = self.client.get(
+            reverse("job_completion:margin_years", args=["Ford", "FOCUS"])
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_non_superuser_keeps_access_to_timing(self):
+        self.client.force_login(self.staff_user)
+        response = self.client.get(reverse("job_completion:timing_makes"))
+        self.assertEqual(response.status_code, 200)
+
+    def test_superuser_allowed_into_margin_makes(self):
+        self.client.force_login(self.superuser)
+        response = self.client.get(reverse("job_completion:margin_makes"))
+        self.assertEqual(response.status_code, 200)
+
+    def test_margin_nav_link_hidden_from_non_superuser(self):
+        self.client.force_login(self.staff_user)
+        response = self.client.get(reverse("job_completion:dashboard"))
+        self.assertNotContains(response, reverse("job_completion:margin_makes"))
+
+    def test_margin_nav_link_shown_to_superuser(self):
+        self.client.force_login(self.superuser)
+        response = self.client.get(reverse("job_completion:dashboard"))
+        self.assertContains(response, reverse("job_completion:margin_makes"))
 
 
 class RunScheduledJobViewTests(TestCase):

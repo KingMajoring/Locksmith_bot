@@ -1,5 +1,6 @@
 import hmac
 from datetime import date
+from functools import wraps
 from io import StringIO
 
 from django.conf import settings
@@ -40,6 +41,22 @@ from .services.trends import (
     make_model_failure_trend,
     monthly_failure_trend,
 )
+
+
+def _superuser_required(view_func):
+    """Margin (profit/cost) figures are sensitive enough that not every
+    logged-in office user should see them — restricted to superusers
+    only, unlike the rest of this app's views, which any logged-in
+    office/admin account can reach (see apps.accounts.adapter, where
+    signing in with a WGTK email grants full office access)."""
+
+    @wraps(view_func)
+    def wrapped(request, *args, **kwargs):
+        if not request.user.is_superuser:
+            return HttpResponseForbidden("You don't have permission to view this page.")
+        return view_func(request, *args, **kwargs)
+
+    return wrapped
 
 
 @login_required
@@ -361,16 +378,19 @@ def _job_info_years(request, template, make, model_family):
 
 
 @login_required
+@_superuser_required
 def margin_makes(request):
     return _job_info_makes(request, "job_completion/margin_makes.html")
 
 
 @login_required
+@_superuser_required
 def margin_models(request, make):
     return _job_info_models(request, "job_completion/margin_models.html", make)
 
 
 @login_required
+@_superuser_required
 def margin_years(request, make, model_family):
     return _job_info_years(request, "job_completion/margin_years.html", make, model_family)
 

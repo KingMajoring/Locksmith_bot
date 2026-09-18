@@ -28,8 +28,10 @@
           <a class="sub-link" href="{% url 'job_completion:failure_trend' %}">Failure Trend</a>
         </div>
         <div class="section">
-          <a class="section-title" href="{% url 'job_completion:margin_makes' %}">Job Information</a>
+          <a class="section-title" href="{% url 'job_completion:timing_makes' %}">Job Information</a>
+          {% if user.is_superuser %}
           <a class="sub-link" href="{% url 'job_completion:margin_makes' %}">Margin</a>
+          {% endif %}
           <a class="sub-link" href="{% url 'job_completion:timing_makes' %}">Timing</a>
         </div>
         <div class="section">
