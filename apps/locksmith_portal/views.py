@@ -56,6 +56,7 @@ from .models import (
     JobTimingSummary,
     JobVisit,
     JobVisitPhoto,
+    JobVisitVehicle,
     PayPeriod,
     PortalDisposal,
     PortalDisposalEdit,
@@ -459,13 +460,53 @@ def _job_visit_context(request, order_no):
     if created:
         _snapshot_vehicle_onto_visit(visit, report_id)
 
+    vehicles = _vehicles_for_visit(visit, report_id)
+    vehicle = None
+    vehicle_id = request.GET.get("vehicle", "")
+    if vehicle_id:
+        vehicle = next((v for v in vehicles if str(v.pk) == vehicle_id), None)
+
     return {
         "locksmith": locksmith,
         "report_id": report_id,
         "selected_date": selected_date,
         "dashboard_url": dashboard_url,
         "visit": visit,
+        "vehicles": vehicles,
+        "vehicle": vehicle,
     }, None
+
+
+def _vehicles_for_visit(visit, report_id):
+    """This visit's JobVisitVehicle rows, one per Handl key claim — only
+    when the claim genuinely has more than one vehicle on it; an empty
+    list for the overwhelming majority of jobs (exactly one key claim),
+    so callers can keep using the classic single-vehicle flow unchanged
+    when this is empty. Rows are created here, first time a multi-
+    vehicle job's overview loads, and get_or_create'd on every later
+    call so re-visiting doesn't duplicate them — matched on
+    key_claim_id, Handl's own stable identity for a vehicle on a claim.
+
+    Best-effort, same as every other Handl job-details lookup on this
+    page: Handl unreachable just means no vehicle picker is offered for
+    this load, not a hard failure."""
+    try:
+        claim_vehicles = get_handl_client().get_vehicles_for_report(report_id)
+    except Exception:
+        logger.exception("Failed to fetch Handl vehicles for report %s", report_id)
+        return []
+    if len(claim_vehicles) <= 1:
+        return []
+    vehicles = []
+    for cv in claim_vehicles:
+        vehicle, _created = JobVisitVehicle.objects.get_or_create(
+            visit=visit, key_claim_id=cv.key_claim_id,
+            defaults={
+                "reg": cv.reg, "make": cv.make, "model_name": cv.model, "year": cv.year, "vin": cv.vin,
+            },
+        )
+        vehicles.append(vehicle)
+    return vehicles
 
 
 def _write_handl_note(locksmith, report_id, text):
@@ -1056,12 +1097,25 @@ def job_overview(request, order_no):
     visit = ctx["visit"]
     locksmith = ctx["locksmith"]
     report_id = ctx["report_id"]
+    vehicles = ctx["vehicles"]
 
     disposal_count = (
         PortalDisposal.objects.filter(locksmith=locksmith, order_no=order_no)
         .exclude(quantity=0)
         .count()
     )
+
+    # Multi-vehicle claims only (see _vehicles_for_visit) — how many
+    # parts have been logged against each specific vehicle, so the
+    # picker can show "2 parts logged" / "Not started yet" per car
+    # instead of the single combined disposal_count above.
+    vehicle_rows = [
+        {
+            "vehicle": v,
+            "disposal_count": PortalDisposal.objects.filter(vehicle=v).exclude(quantity=0).count(),
+        }
+        for v in vehicles
+    ]
 
     # For the "Mark on route" step's navigation offer/auto-open — best
     # effort, same as every other Handl job-details lookup on this page.
@@ -1094,6 +1148,7 @@ def job_overview(request, order_no):
             "report_id": report_id,
             "visit": visit,
             "disposal_count": disposal_count,
+            "vehicle_rows": vehicle_rows,
             "selected_date": ctx["selected_date"],
             "is_today": ctx["selected_date"] == timezone.localdate(),
             "dashboard_url": ctx["dashboard_url"],
@@ -1690,8 +1745,10 @@ def job_detail(request, order_no):
     selected_date = ctx["selected_date"]
     dashboard_url = ctx["dashboard_url"]
     visit = ctx["visit"]
+    vehicle = ctx["vehicle"]
 
     overview_url = f"{reverse('locksmith_portal:job_overview', args=[order_no])}?date={selected_date.isoformat()}"
+    vehicle_qs = f"&vehicle={vehicle.pk}" if vehicle else ""
     if visit.stage not in (JobVisit.Stage.ARRIVED, JobVisit.Stage.PARTS_DONE, JobVisit.Stage.DONE):
         messages.error(request, "Mark yourself arrived (with before photos) first.")
         return redirect(overview_url)
@@ -1705,8 +1762,13 @@ def job_detail(request, order_no):
     # normal — no justification needed. Coming back a second time to
     # add more, or to fix something already logged, is the genuine
     # after-the-fact case that still needs a reason.
+    #
+    # On a multi-vehicle claim (see ctx["vehicle"]) this is scoped to
+    # just this vehicle's own previous disposals — each car's parts
+    # admin is independent, so finishing one vehicle doesn't make the
+    # first parts entry on the *other*, still-open vehicle a "late" one.
     is_late_add = visit.stage == JobVisit.Stage.DONE and PortalDisposal.objects.filter(
-        locksmith=locksmith, order_no=order_no
+        locksmith=locksmith, order_no=order_no, vehicle=vehicle
     ).exists()
 
     if visit.stage != JobVisit.Stage.DONE and not visit.access_method and _needs_access_method(report_id):
@@ -1722,10 +1784,10 @@ def job_detail(request, order_no):
     # a client-supplied part is, by definition, one they may not carry.
     all_parts = handl.list_all_parts()
     previous_disposals = PortalDisposal.objects.filter(
-        locksmith=locksmith, order_no=order_no
+        locksmith=locksmith, order_no=order_no, vehicle=vehicle
     ).order_by("-created_at")
     previous_faulty_reports = FaultyPartReport.objects.filter(
-        locksmith=locksmith, order_no=order_no
+        locksmith=locksmith, order_no=order_no, vehicle=vehicle
     ).order_by("-created_at")
 
     # Vehicle details for any part reported faulty this submission (see
@@ -1745,7 +1807,7 @@ def job_detail(request, order_no):
                 "This job is already marked done — add a short note explaining "
                 "why you're adding a part now (it's logged for office review).",
             )
-            job_url = f"{reverse('locksmith_portal:job_detail', args=[order_no])}?date={selected_date.isoformat()}"
+            job_url = f"{reverse('locksmith_portal:job_detail', args=[order_no])}?date={selected_date.isoformat()}{vehicle_qs}"
             return redirect(job_url)
 
         by_code = {line.part_code.upper(): line for line in stock_lines}
@@ -1868,6 +1930,7 @@ def job_detail(request, order_no):
                 part_code=line.part_code,
                 part_name=line.part_name,
                 quantity=qty,
+                vehicle=vehicle,
             )
             created_disposals.append(disposal)
             try:
@@ -1910,6 +1973,7 @@ def job_detail(request, order_no):
                 part_name=part_name,
                 quantity=qty,
                 client_supplied=True,
+                vehicle=vehicle,
             )
             created_disposals.append(disposal)
             # Written against the same "(V)" van id as a normal disposal
@@ -1979,6 +2043,7 @@ def job_detail(request, order_no):
                 model_name=job_details.model if job_details else "",
                 year=job_details.year if job_details else "",
                 spare_key=job_details.spare_key if job_details else None,
+                vehicle=vehicle,
             )
 
             actioned_by = locksmith.soter_user_id or settings.HANDL_PORTAL_CREATED_BY_USER_ID
@@ -2057,7 +2122,7 @@ def job_detail(request, order_no):
 
         if disposed_any:
             messages.success(request, "Parts disposed and saved.")
-        job_url = f"{reverse('locksmith_portal:job_detail', args=[order_no])}?date={selected_date.isoformat()}"
+        job_url = f"{reverse('locksmith_portal:job_detail', args=[order_no])}?date={selected_date.isoformat()}{vehicle_qs}"
         return redirect(job_url)
 
     return render(
@@ -2082,6 +2147,8 @@ def job_detail(request, order_no):
             "overview_url": overview_url,
             "is_preview": _is_preview(request),
             "is_late_add": is_late_add,
+            "vehicle": vehicle,
+            "vehicle_qs": vehicle_qs,
         },
     )
 
@@ -2110,10 +2177,18 @@ def edit_disposal(request, order_no, disposal_id):
     locksmith = ctx["locksmith"]
     report_id = ctx["report_id"]
     selected_date = ctx["selected_date"]
-    job_detail_url = f"{reverse('locksmith_portal:job_detail', args=[order_no])}?date={selected_date.isoformat()}"
 
     disposal = get_object_or_404(
         PortalDisposal, pk=disposal_id, locksmith=locksmith, order_no=order_no
+    )
+    # Carried from the disposal's own vehicle tag, not the URL's ?vehicle=
+    # param — this view is reachable without one — so returning to
+    # job_detail lands back on the same vehicle's parts screen on a
+    # multi-vehicle claim (see PortalDisposal.vehicle).
+    vehicle_qs = f"&vehicle={disposal.vehicle_id}" if disposal.vehicle_id else ""
+    job_detail_url = (
+        f"{reverse('locksmith_portal:job_detail', args=[order_no])}"
+        f"?date={selected_date.isoformat()}{vehicle_qs}"
     )
 
     handl = get_handl_client()

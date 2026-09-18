@@ -42,6 +42,14 @@ class PortalDisposal(models.Model):
     # `edits` just to check whether any exist.
     needs_review = models.BooleanField(default=False)
 
+    # Which vehicle on this job the part was used on — null for the
+    # overwhelming majority of jobs (exactly one vehicle on the Handl
+    # claim, see JobVisitVehicle), set only when the locksmith picked a
+    # specific vehicle on a multi-car stop (see views.job_detail).
+    vehicle = models.ForeignKey(
+        "JobVisitVehicle", null=True, blank=True, on_delete=models.CASCADE, related_name="disposals"
+    )
+
     class Meta:
         ordering = ["-created_at"]
 
@@ -145,6 +153,12 @@ class FaultyPartReport(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     handl_synced = models.BooleanField(default=False)
     handl_error = models.TextField(blank=True)
+
+    # Same as PortalDisposal.vehicle — which vehicle on a multi-car stop
+    # this faulty part came from, null on an ordinary one-vehicle job.
+    vehicle = models.ForeignKey(
+        "JobVisitVehicle", null=True, blank=True, on_delete=models.CASCADE, related_name="faulty_part_reports"
+    )
 
     class Meta:
         ordering = ["-created_at"]
@@ -309,6 +323,51 @@ class JobVisit(models.Model):
         return f"{self.locksmith} — {self.order_no} ({self.get_stage_display()})"
 
 
+class JobVisitVehicle(models.Model):
+    """One vehicle on a JobVisit whose Handl claim has more than one
+    (see apps.integrations.handl.HandlClient.get_vehicles_for_report) —
+    e.g. two cars, each with their own key claim, on the same stop.
+
+    Deliberately narrow: on-route/arrived and the customer sign-off stay
+    on the parent JobVisit (they're properties of the stop — one
+    arrival, one client), while everything that's actually about one
+    specific car (which parts were used on it, its own before/after
+    photos) gets tagged with this instead, via PortalDisposal.vehicle /
+    JobVisitPhoto.vehicle. A JobVisit whose claim has exactly one
+    vehicle — the overwhelming majority of jobs — never gets one of
+    these; the classic single-vehicle flow keeps working unchanged.
+
+    See views._vehicles_for_visit for how these get created (one per
+    Handl key claim, first time job_overview loads a multi-vehicle
+    job)."""
+
+    visit = models.ForeignKey(JobVisit, on_delete=models.CASCADE, related_name="vehicles")
+
+    # Policy_KeyClaims.ID — the stable identity Handl itself uses to
+    # tell this claim's vehicles apart, so re-visiting job_overview
+    # doesn't create a duplicate row for the same car.
+    key_claim_id = models.CharField(max_length=50)
+
+    reg = models.CharField(max_length=20, blank=True)
+    make = models.CharField(max_length=100, blank=True)
+    model_name = models.CharField(max_length=100, blank=True)
+    year = models.CharField(max_length=10, blank=True)
+    vin = models.CharField(max_length=50, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["visit", "key_claim_id"], name="one_vehicle_row_per_key_claim"
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.reg or self.key_claim_id} on {self.visit.order_no}"
+
+
 class JobVisitPhoto(models.Model):
     """A before/after photo uploaded against a JobVisit — stored in our
     own blob storage (see apps.integrations.photos), url points there
@@ -339,6 +398,12 @@ class JobVisitPhoto(models.Model):
     kind = models.CharField(max_length=25, choices=Kind.choices)
     url = models.CharField(max_length=1000)
     uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    # Same as PortalDisposal.vehicle — which vehicle on a multi-car stop
+    # this photo is of, null on an ordinary one-vehicle job.
+    vehicle = models.ForeignKey(
+        JobVisitVehicle, null=True, blank=True, on_delete=models.CASCADE, related_name="photos"
+    )
 
     class Meta:
         ordering = ["uploaded_at"]

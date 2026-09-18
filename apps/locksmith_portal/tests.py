@@ -8,7 +8,7 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from apps.integrations.handl import CurrentStockLine, ExpectedStock, JobDetails
+from apps.integrations.handl import ClaimVehicle, CurrentStockLine, ExpectedStock, JobDetails
 from apps.integrations.optimo import OptimoOrderSummary
 from apps.job_completion.models import CompletedJob, FailureCategory
 from apps.locksmiths.models import Locksmith
@@ -20,6 +20,7 @@ from .models import (
     JobTimingSummary,
     JobVisit,
     JobVisitPhoto,
+    JobVisitVehicle,
     PayPeriod,
     PortalDisposal,
     PortalDisposalEdit,
@@ -1178,6 +1179,144 @@ class JobDetailTests(TestCase):
         self.assertRedirects(
             response, f"{reverse('locksmith_portal:dashboard')}?date={yesterday.isoformat()}"
         )
+
+
+class MultiVehicleJobTests(TestCase):
+    """A Handl claim with more than one vehicle on it (see
+    apps.integrations.handl.HandlClient.get_vehicles_for_report) gets a
+    JobVisitVehicle row per car, and job_overview/job_detail offer a
+    per-vehicle picker instead of the classic single-vehicle flow — see
+    views._vehicles_for_visit."""
+
+    def setUp(self):
+        self.locksmith, self.user = _make_locksmith_user(soter_ids=("885",), driver_serials=("011",))
+        self.client.force_login(self.user)
+        self.today = timezone.localdate()
+        self.order_no = f"496390_{self.today.isoformat()}"
+        self.claim_vehicles = [
+            ClaimVehicle(
+                report_id="496390", key_claim_id="496390-0", make="Hyundai", model="i10",
+                year="2024", reg="VE20 VEP", vin="VIN0", spare_key=True,
+            ),
+            ClaimVehicle(
+                report_id="496390", key_claim_id="496390-1", make="Smart", model="Fortwo",
+                year="2008", reg="YH58 XAL", vin="VIN1", spare_key=False,
+            ),
+        ]
+
+    def _mock_optimo(self, mock_get_optimo):
+        mock_client = MagicMock()
+        mock_client.list_orders_for_date.return_value = [
+            OptimoOrderSummary(
+                order_no=self.order_no, driver_serial="011", distance_metres=0, travel_time_seconds=0
+            ),
+        ]
+        mock_get_optimo.return_value = mock_client
+        return mock_client
+
+    @patch("apps.locksmith_portal.views.get_handl_client")
+    @patch("apps.locksmith_portal.views.get_optimo_client")
+    def test_job_overview_shows_a_card_per_vehicle(self, mock_get_optimo, mock_get_handl):
+        self._mock_optimo(mock_get_optimo)
+        mock_handl = MagicMock()
+        mock_handl.get_job_details.return_value = {}
+        mock_handl.get_vehicles_for_report.return_value = self.claim_vehicles
+        mock_get_handl.return_value = mock_handl
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            stage=JobVisit.Stage.ARRIVED, arrived_at=timezone.now(),
+        )
+
+        url = reverse("locksmith_portal:job_overview", args=[self.order_no])
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "VE20 VEP")
+        self.assertContains(response, "YH58 XAL")
+        self.assertEqual(JobVisitVehicle.objects.count(), 2)
+
+    @patch("apps.locksmith_portal.views.get_handl_client")
+    @patch("apps.locksmith_portal.views.get_optimo_client")
+    def test_revisiting_overview_does_not_duplicate_vehicle_rows(self, mock_get_optimo, mock_get_handl):
+        self._mock_optimo(mock_get_optimo)
+        mock_handl = MagicMock()
+        mock_handl.get_job_details.return_value = {}
+        mock_handl.get_vehicles_for_report.return_value = self.claim_vehicles
+        mock_get_handl.return_value = mock_handl
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            stage=JobVisit.Stage.ARRIVED, arrived_at=timezone.now(),
+        )
+
+        url = reverse("locksmith_portal:job_overview", args=[self.order_no])
+        self.client.get(url)
+        self.client.get(url)
+
+        self.assertEqual(JobVisitVehicle.objects.count(), 2)
+
+    @patch("apps.locksmith_portal.views.get_handl_client")
+    @patch("apps.locksmith_portal.views.get_optimo_client")
+    def test_single_vehicle_job_gets_no_vehicle_cards(self, mock_get_optimo, mock_get_handl):
+        self._mock_optimo(mock_get_optimo)
+        mock_handl = MagicMock()
+        mock_handl.get_job_details.return_value = {}
+        mock_handl.get_vehicles_for_report.return_value = [self.claim_vehicles[0]]
+        mock_get_handl.return_value = mock_handl
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            stage=JobVisit.Stage.ARRIVED, arrived_at=timezone.now(),
+        )
+
+        url = reverse("locksmith_portal:job_overview", args=[self.order_no])
+        response = self.client.get(url)
+
+        self.assertNotContains(response, "vehicle-card")
+        self.assertEqual(JobVisitVehicle.objects.count(), 0)
+
+    @patch("apps.locksmith_portal.views.get_handl_client")
+    @patch("apps.locksmith_portal.views.get_optimo_client")
+    def test_parts_disposed_against_one_vehicle_dont_show_under_the_other(
+        self, mock_get_optimo, mock_get_handl
+    ):
+        self._mock_optimo(mock_get_optimo)
+        mock_handl = MagicMock()
+        mock_handl.get_job_details.return_value = {}
+        mock_handl.get_vehicles_for_report.return_value = self.claim_vehicles
+        mock_handl.list_current_stock.return_value = [
+            CurrentStockLine(part_code="TK-100", part_name="Transponder key blank", qty=4),
+        ]
+        mock_get_handl.return_value = mock_handl
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            stage=JobVisit.Stage.ARRIVED, arrived_at=timezone.now(),
+        )
+        # First load creates the two JobVisitVehicle rows (see
+        # _vehicles_for_visit) — grab their ids the same way job_overview
+        # would, via a GET.
+        self.client.get(reverse("locksmith_portal:job_overview", args=[self.order_no]))
+        vehicle_a, vehicle_b = JobVisitVehicle.objects.order_by("created_at")
+
+        dispose_url = reverse("locksmith_portal:job_detail", args=[self.order_no])
+        response = self.client.post(
+            f"{dispose_url}?vehicle={vehicle_a.pk}",
+            {"part_code": ["TK-100 — Transponder key blank"], "quantity": ["1"]},
+        )
+        self.assertRedirects(
+            response,
+            f"{dispose_url}?date={self.today.isoformat()}&vehicle={vehicle_a.pk}",
+        )
+
+        disposal = PortalDisposal.objects.get()
+        self.assertEqual(disposal.vehicle_id, vehicle_a.pk)
+
+        # Vehicle A's own parts screen shows the disposal ("1 x Transponder
+        # key blank" — the "Already recorded" list, not just the stock
+        # picker, which would show "Transponder key blank" either way)...
+        response_a = self.client.get(f"{dispose_url}?vehicle={vehicle_a.pk}")
+        self.assertContains(response_a, "1 x Transponder key blank")
+        # ...but vehicle B's doesn't, since it's a different vehicle.
+        response_b = self.client.get(f"{dispose_url}?vehicle={vehicle_b.pk}")
+        self.assertNotContains(response_b, "1 x Transponder key blank")
 
 
 class FaultyPartReportTests(TestCase):

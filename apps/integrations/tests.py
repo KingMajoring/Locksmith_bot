@@ -70,6 +70,32 @@ class MockHandlClientTests(TestCase):
         second = self.client.get_job_details(["1001"])["1001"]
         self.assertEqual(first, second)
 
+    def test_get_vehicles_for_report_is_deterministic_and_never_empty(self):
+        for report_id in [str(n) for n in range(1000, 1050)]:
+            first = self.client.get_vehicles_for_report(report_id)
+            second = self.client.get_vehicles_for_report(report_id)
+            self.assertEqual(first, second)
+            self.assertGreaterEqual(len(first), 1)
+            for vehicle in first:
+                self.assertEqual(vehicle.report_id, report_id)
+                self.assertTrue(vehicle.key_claim_id)
+                self.assertTrue(vehicle.make)
+                self.assertTrue(vehicle.reg)
+            # Distinct key_claim_id per vehicle on the same claim.
+            self.assertEqual(len({v.key_claim_id for v in first}), len(first))
+
+    def test_get_vehicles_for_report_sometimes_returns_more_than_one(self):
+        # Deterministic per report_id (~15% of ids, see
+        # HandlClient.get_vehicles_for_report) — sweep enough ids that at
+        # least one multi-vehicle claim shows up, without asserting an
+        # exact count/rate that would make this brittle against a tuning
+        # change to that fraction.
+        counts = {
+            len(self.client.get_vehicles_for_report(str(n)))
+            for n in range(1000, 1200)
+        }
+        self.assertIn(2, counts)
+
     def test_get_disposed_skus_is_deterministic_and_valid_codes(self):
         first = self.client.get_disposed_skus(["1001"])
         second = self.client.get_disposed_skus(["1001"])
@@ -483,6 +509,47 @@ class SQLHandlClientTests(TestCase):
         self.assertEqual(job.client_phone, "07700900123")
         self.assertEqual(job.broker, "Admiral")
         self.assertEqual(job.detail_of_loss, "Lost the only key on a dog walk.")
+
+    def test_get_vehicles_for_report_returns_every_key_claim_row(self):
+        """Regression test: get_job_details deliberately ranks
+        Policy_KeyClaims down to one row per ReportID — this is the one
+        place that must NOT do that, so a claim with two cars on it
+        surfaces both (see HandlClient.get_vehicles_for_report)."""
+        rows = [
+            {
+                "ID": 9001, "Make": "Hyundai", "Model": "i10", "yearOfManufacture": 2024,
+                "VehicleReg": "VE20 VEP", "VehicleVIN": "VIN0", "SpareKey": True,
+            },
+            {
+                "ID": 9002, "Make": "Smart", "Model": "Fortwo", "yearOfManufacture": 2008,
+                "VehicleReg": "YH58 XAL", "VehicleVIN": "VIN1", "SpareKey": False,
+            },
+        ]
+        fake_conn = _fake_connection(rows)
+        client = SQLHandlClient()
+        with patch.object(client, "_connection", return_value=fake_conn):
+            vehicles = client.get_vehicles_for_report("0498476")
+
+        cursor = fake_conn.cursor.return_value
+        query, params = cursor.execute.call_args[0]
+        self.assertIn("Policy_KeyClaims", query)
+        self.assertNotIn("ROW_NUMBER", query)
+        self.assertEqual(params["report_id"], "0498476")
+
+        self.assertEqual(len(vehicles), 2)
+        self.assertEqual(vehicles[0].key_claim_id, "9001")
+        self.assertEqual(vehicles[0].reg, "VE20 VEP")
+        self.assertIs(vehicles[0].spare_key, True)
+        self.assertEqual(vehicles[1].key_claim_id, "9002")
+        self.assertEqual(vehicles[1].reg, "YH58 XAL")
+        self.assertIs(vehicles[1].spare_key, False)
+        self.assertTrue(all(v.report_id == "0498476" for v in vehicles))
+
+    def test_get_vehicles_for_report_no_key_claims_returns_empty_list(self):
+        client = SQLHandlClient()
+        with patch.object(client, "_connection", return_value=_fake_connection([])):
+            vehicles = client.get_vehicles_for_report("0498476")
+        self.assertEqual(vehicles, [])
 
     def test_get_job_details_null_detail_of_loss_maps_to_empty_string(self):
         rows = [

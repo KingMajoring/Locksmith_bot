@@ -607,6 +607,27 @@ dialog#detail-of-loss-dialog p {
 .on-route-nav-buttons { display: flex; gap: 0.5rem; }
 .on-route-nav-buttons .btn-secondary { padding: 0.5rem 0.9rem; font-size: 0.85rem; }
 
+.stage-row.stage-multi-vehicle { border-bottom: none; padding-bottom: 0.3rem; }
+.vehicle-list { display: flex; flex-direction: column; gap: 0.7rem; margin: 0 0 0.9rem; }
+.vehicle-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.75rem 0.9rem;
+}
+.vehicle-card-head { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+.vehicle-card-head .plate {
+  background: #ffd200;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  border-radius: 4px;
+  padding: 0.15rem 0.5rem;
+  font-weight: 700;
+  font-size: 0.85rem;
+  letter-spacing: 0.03em;
+  color: #17241a;
+}
+.vehicle-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; margin-top: 0.55rem; }
+.vehicle-card-foot .btn-secondary { width: auto; padding: 0.45rem 0.8rem; font-size: 0.85rem; }
+
 form input[type=file] { display: block; width: 100%; margin-bottom: 0.5rem; }
 textarea { width: 100%; padding: 0.6rem 0.7rem; font-size: 1rem; font-family: var(--font); border: 1px solid var(--border); border-radius: var(--radius-sm); resize: vertical; }
 

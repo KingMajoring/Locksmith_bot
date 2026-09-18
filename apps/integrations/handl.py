@@ -106,6 +106,28 @@ class JobDetails:
 
 
 @dataclass(frozen=True)
+class ClaimVehicle:
+    """One vehicle (Policy_KeyClaims row) on a Handl claim — unlike
+    JobDetails, which collapses a multi-vehicle claim down to just its
+    first key claim for the common single-vehicle case, this is one row
+    per vehicle, keyed by its own key_claim_id, for the rarer claim that
+    actually has more than one car on site. See
+    HandlClient.get_vehicles_for_report and
+    apps.locksmith_portal.models.JobVisitVehicle."""
+
+    report_id: str
+    key_claim_id: str
+    make: str
+    model: str
+    year: str
+    reg: str
+    vin: str
+    # Policy_KeyClaims.SpareKey for this specific vehicle — same meaning
+    # as JobDetails.spare_key, just not collapsed to one per claim.
+    spare_key: bool | None = None
+
+
+@dataclass(frozen=True)
 class FutureLocksmithAttendance:
     """A locksmith already down to attend an open claim on a future date
     — one row per open claim, its Selected=1 Policy_LocksmithDetails row
@@ -168,6 +190,17 @@ class HandlClient(ABC):
         for the given Handl ReportID values, keyed by report_id — for
         Area 2 (Job Completion), which resolves an Optimo orderNo of the
         form "<ReportID>_<date>" back to Handl for these details."""
+
+    @abstractmethod
+    def get_vehicles_for_report(self, report_id: str) -> list[ClaimVehicle]:
+        """Every vehicle (Policy_KeyClaims row) on this Handl claim, in
+        key-claim order — unlike get_job_details, which always collapses
+        a multi-vehicle claim down to just its first key claim (the
+        common case), this returns all of them so the locksmith portal
+        can offer a vehicle picker on the rarer claim with more than one
+        car on site (see apps.locksmith_portal.views._vehicles_for_visit
+        and models.JobVisitVehicle). Empty list if the claim has no key
+        claim rows at all."""
 
     @abstractmethod
     def get_future_locksmith_attendances(self) -> list[FutureLocksmithAttendance]:
@@ -518,6 +551,36 @@ class MockHandlClient(HandlClient):
             sample = rng.sample(self._CATALOGUE, k=min(len(self._CATALOGUE), count))
             result[report_id] = [code for code, _name in sample]
         return result
+
+    def get_vehicles_for_report(self, report_id: str) -> list[ClaimVehicle]:
+        # Deterministic per report_id, same as every other mock lookup —
+        # most jobs get exactly one vehicle (the common case); a fixed
+        # ~15% get two, so the multi-vehicle picker has something real
+        # to exercise locally without every job becoming one.
+        pick_rng = random.Random(int(hashlib.sha256(f"vehicle-count:{report_id}".encode()).hexdigest(), 16) % (2**32))
+        count = 2 if pick_rng.random() < 0.15 else 1
+        vehicles = []
+        for i in range(count):
+            rng = random.Random(
+                int(hashlib.sha256(f"vehicle:{report_id}:{i}".encode()).hexdigest(), 16) % (2**32)
+            )
+            vehicles.append(
+                ClaimVehicle(
+                    report_id=report_id,
+                    key_claim_id=f"{report_id}-{i}",
+                    make=rng.choice(self._MAKES),
+                    model=rng.choice(self._MODELS),
+                    year=str(rng.randint(2008, 2025)),
+                    reg=(
+                        f"{rng.choice(self._REG_LETTERS)}{rng.choice(self._REG_LETTERS)}"
+                        f"{rng.randint(10, 69):02d} "
+                        f"{rng.choice(self._REG_LETTERS)}{rng.choice(self._REG_LETTERS)}{rng.choice(self._REG_LETTERS)}"
+                    ),
+                    vin=f"MOCK{rng.randint(10**12, 10**13 - 1)}",
+                    spare_key=rng.choice([True, False]),
+                )
+            )
+        return vehicles
 
     _FUTURE_ATTENDANCE_POSTCODES = ["IP1 2AB", "NR14 8PL", "CO1 1AA", "CB1 2AB", "PE1 3AA"]
 
@@ -1177,6 +1240,36 @@ class SQLHandlClient(HandlClient):
                 detail_of_loss=row["DetailOfLoss"] or "",
             )
         return result
+
+    def get_vehicles_for_report(self, report_id: str) -> list[ClaimVehicle]:
+        # Deliberately NOT ranked down to one row the way get_job_details'
+        # VehicleRanked CTE is — this is the one place that needs every
+        # Policy_KeyClaims row for a claim, to offer the locksmith portal's
+        # vehicle picker when there's more than one.
+        query = """
+            SELECT pkc.ID, pkc.Make, pkc.Model, pkc.yearOfManufacture,
+                   pkc.VehicleReg, pkc.VehicleVIN, pkc.SpareKey
+            FROM Policy_KeyClaims pkc
+            WHERE pkc.ReportID = %(report_id)s
+            ORDER BY pkc.ID
+        """
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, {"report_id": report_id})
+            rows = cursor.fetchall()
+        return [
+            ClaimVehicle(
+                report_id=report_id,
+                key_claim_id=str(row["ID"]),
+                make=row["Make"] or "",
+                model=row["Model"] or "",
+                year=str(row["yearOfManufacture"] or ""),
+                reg=row["VehicleReg"] or "",
+                vin=row["VehicleVIN"] or "",
+                spare_key=bool(row["SpareKey"]) if row["SpareKey"] is not None else None,
+            )
+            for row in rows
+        ]
 
     def get_future_locksmith_attendances(self) -> list[FutureLocksmithAttendance]:
         # Mirrors a live Excel report the business already runs by hand:
