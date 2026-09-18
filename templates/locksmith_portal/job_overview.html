@@ -58,7 +58,7 @@
     {% endif %}
   </div>
 
-  {% if is_gain_access %}
+  {% if is_gain_access and not vehicle_rows %}
   <div class="stage-row {% if visit.access_method %}stage-done{% endif %}">
     <span class="stage-num">3</span>
     <div class="stage-body">
@@ -73,10 +73,10 @@
 
   {% if vehicle_rows %}
   <div class="stage-row stage-multi-vehicle">
-    <span class="stage-num">{% if is_gain_access %}4{% else %}3{% endif %}</span>
+    <span class="stage-num">3</span>
     <div class="stage-body">
-      <strong>Parts disposed</strong> <span class="sub">(optional here — can be done before or after finishing)</span>
-      <span class="sub">This claim has {{ vehicle_rows|length }} vehicles — parts are logged per vehicle.</span>
+      <strong>This claim has {{ vehicle_rows|length }} vehicles</strong>
+      <span class="sub">Before photos, access method, parts and outcome are logged per vehicle. Everyone signs off together, once every vehicle is done.</span>
     </div>
   </div>
   <div class="vehicle-list">
@@ -86,16 +86,49 @@
         <span class="plate">{{ row.vehicle.reg|default:"Vehicle" }}</span>
         <span class="sub">{{ row.vehicle.make }} {{ row.vehicle.model_name }}{% if row.vehicle.year %}, {{ row.vehicle.year }}{% endif %}</span>
       </div>
-      <div class="vehicle-card-foot">
-        <span class="sub">{% if row.disposal_count %}{{ row.disposal_count }} part{{ row.disposal_count|pluralize }} logged{% else %}No parts logged yet{% endif %}</span>
-        {% if visit.stage == "arrived" or visit.stage == "parts_done" or visit.stage == "done" %}
-          {% if not is_gain_access or visit.access_method %}
-          <a class="btn-secondary" href="{% url 'locksmith_portal:job_detail' order_no=order_no %}?date={{ selected_date|date:'Y-m-d' }}&vehicle={{ row.vehicle.pk }}">{% if row.disposal_count %}Edit parts{% else %}Dispose parts{% endif %}</a>
+
+      {% if not row.before_done %}
+        <div class="vehicle-card-foot">
+          <span class="sub">Not started</span>
+          {% if visit.arrived_at %}
+          <a class="btn-secondary" href="{% url 'locksmith_portal:vehicle_before_photos' order_no=order_no %}?date={{ selected_date|date:'Y-m-d' }}&vehicle={{ row.vehicle.pk }}">Before photos</a>
           {% endif %}
-        {% endif %}
-      </div>
+        </div>
+      {% elif row.needs_access_method and not row.vehicle.access_method %}
+        <div class="vehicle-card-foot">
+          <span class="sub">Before photos done</span>
+          <a class="btn-secondary" href="{% url 'locksmith_portal:vehicle_access_method' order_no=order_no %}?date={{ selected_date|date:'Y-m-d' }}&vehicle={{ row.vehicle.pk }}">Record access method</a>
+        </div>
+      {% else %}
+        <div class="vehicle-card-foot">
+          <span class="sub">{% if row.disposal_count %}{{ row.disposal_count }} part{{ row.disposal_count|pluralize }} logged{% else %}No parts logged yet{% endif %}</span>
+          <a class="btn-secondary" href="{% url 'locksmith_portal:job_detail' order_no=order_no %}?date={{ selected_date|date:'Y-m-d' }}&vehicle={{ row.vehicle.pk }}">{% if row.disposal_count %}Edit parts{% else %}Dispose parts{% endif %}</a>
+        </div>
+        <div class="vehicle-card-foot">
+          {% if row.vehicle.stage == "done" %}
+            <span class="sub vehicle-outcome-{{ row.vehicle.outcome }}">{{ row.vehicle.get_outcome_display }}{% if row.vehicle.signed_off_at %} — signed off{% endif %}</span>
+            <a class="btn-secondary" href="{% url 'locksmith_portal:vehicle_complete' order_no=order_no %}?date={{ selected_date|date:'Y-m-d' }}&vehicle={{ row.vehicle.pk }}">View</a>
+          {% else %}
+            <span class="sub">Not finished</span>
+            <a class="btn" href="{% url 'locksmith_portal:vehicle_complete' order_no=order_no %}?date={{ selected_date|date:'Y-m-d' }}&vehicle={{ row.vehicle.pk }}">Finish vehicle</a>
+          {% endif %}
+        </div>
+      {% endif %}
     </div>
     {% endfor %}
+  </div>
+
+  <div class="stage-row {% if not any_vehicle_pending_signoff %}stage-done{% endif %}">
+    <span class="stage-num">4</span>
+    <div class="stage-body">
+      <strong>Sign off</strong>
+      <span class="sub">
+        {% if not any_vehicle_pending_signoff %}Signed off{% elif all_vehicles_done %}Every vehicle is finished — ready to sign off.{% else %}Finish every vehicle first.{% endif %}
+      </span>
+    </div>
+    {% if all_vehicles_done and any_vehicle_pending_signoff %}
+    <a class="btn" href="{% url 'locksmith_portal:job_signoff' order_no=order_no %}?date={{ selected_date|date:'Y-m-d' }}">Sign off</a>
+    {% endif %}
   </div>
   {% else %}
   <div class="stage-row {% if visit.parts_done_at or disposal_count %}stage-done{% endif %}">
@@ -114,6 +147,7 @@
   </div>
   {% endif %}
 
+  {% if not vehicle_rows %}
   <div class="stage-row {% if visit.completed_at %}stage-done{% endif %}">
     <span class="stage-num">{% if is_gain_access %}5{% else %}4{% endif %}</span>
     <div class="stage-body">
@@ -126,6 +160,7 @@
       {% endif %}
     {% endif %}
   </div>
+  {% endif %}
 </div>
 
 {% if visit.stage == "not_started" or visit.stage == "on_route" %}

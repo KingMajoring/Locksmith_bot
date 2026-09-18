@@ -187,6 +187,16 @@ def _needs_access_method(report_id):
     return display_loss_type(details.loss_type) == "Gain access" or details.spare_key is False
 
 
+def _vehicle_needs_access_method(loss_label, vehicle):
+    """Same test as _needs_access_method, but for one vehicle on a
+    multi-vehicle stop: loss_label is shared claim-wide (see
+    _loss_label_for), but spare_key is this vehicle's own
+    JobVisitVehicle.spare_key (snapshotted per key claim at creation —
+    see _vehicles_for_visit) rather than a fresh Handl lookup, since a
+    claim's vehicles can genuinely differ on it."""
+    return loss_label == "Gain access" or vehicle.spare_key is False
+
+
 def _arrival_photo_slots(loss_label):
     """(kind, required) pairs for the arrival step's photo prompts. A
     service not specifically modelled here just gets one generic
@@ -503,6 +513,7 @@ def _vehicles_for_visit(visit, report_id):
             visit=visit, key_claim_id=cv.key_claim_id,
             defaults={
                 "reg": cv.reg, "make": cv.make, "model_name": cv.model, "year": cv.year, "vin": cv.vin,
+                "spare_key": cv.spare_key,
             },
         )
         vehicles.append(vehicle)
@@ -643,7 +654,7 @@ def _photo_links_html(label, urls):
     )
 
 
-def _upload_one_visit_photo(visit, kind, f):
+def _upload_one_visit_photo(visit, kind, f, vehicle=None):
     """Validates and uploads a single photo file, called from
     job_photo_upload_one as each photo is taken/picked — see that
     view's docstring for why uploads happen one at a time, immediately,
@@ -652,7 +663,10 @@ def _upload_one_visit_photo(visit, kind, f):
     is rejected (not an image, too large); the per-slot
     MAX_PHOTOS_PER_KIND cap is the caller's job to check first, since
     that's about how many are already saved, not about this one
-    file."""
+    file.
+
+    vehicle tags the photo to one car on a multi-vehicle stop (see
+    JobVisitPhoto.vehicle) — None on an ordinary single-vehicle job."""
     if not (f.content_type or "").startswith("image/"):
         return None, f"'{f.name}' isn't an image."
     if f.size > MAX_PHOTO_BYTES:
@@ -661,17 +675,21 @@ def _upload_one_visit_photo(visit, kind, f):
         report_id=visit.report_id, stage=kind, filename=f.name,
         content=f.read(), content_type=f.content_type,
     )
-    JobVisitPhoto.objects.create(visit=visit, kind=kind, url=url)
+    JobVisitPhoto.objects.create(visit=visit, kind=kind, url=url, vehicle=vehicle)
     return url, None
 
 
-def _visit_photo_urls(visit, kind):
+def _visit_photo_urls(visit, kind, vehicle=None):
     """Already-uploaded photo URLs for one slot, oldest first — used
     both to build the Handl note at final submit (see job_arrived/
     job_access_method/job_complete) and to pre-fill a slot's thumbnails
     on a page reload (see the photo_slots context each of those builds
-    for its template)."""
-    return list(visit.photos.filter(kind=kind).order_by("uploaded_at").values_list("url", flat=True))
+    for its template). vehicle scopes this to one car's own photos on a
+    multi-vehicle stop — None (the default) matches the ordinary
+    single-vehicle case, where every photo has vehicle=None too."""
+    return list(
+        visit.photos.filter(kind=kind, vehicle=vehicle).order_by("uploaded_at").values_list("url", flat=True)
+    )
 
 
 @login_required
@@ -704,14 +722,21 @@ def job_photo_upload_one(request, order_no, kind):
     if visit is None:
         return JsonResponse({"error": "Start this job before adding photos."}, status=404)
 
-    if visit.photos.filter(kind=kind).count() >= MAX_PHOTOS_PER_KIND:
+    vehicle = None
+    vehicle_id = request.GET.get("vehicle", "")
+    if vehicle_id:
+        vehicle = visit.vehicles.filter(pk=vehicle_id).first()
+        if vehicle is None:
+            return JsonResponse({"error": "Unknown vehicle."}, status=404)
+
+    if visit.photos.filter(kind=kind, vehicle=vehicle).count() >= MAX_PHOTOS_PER_KIND:
         return JsonResponse({"error": f"Only {MAX_PHOTOS_PER_KIND} photos allowed here."}, status=400)
 
     f = request.FILES.get("photo")
     if f is None:
         return JsonResponse({"error": "No photo received."}, status=400)
 
-    url, error = _upload_one_visit_photo(visit, kind, f)
+    url, error = _upload_one_visit_photo(visit, kind, f, vehicle=vehicle)
     if error:
         return JsonResponse({"error": error}, status=400)
     return JsonResponse({"url": url})
@@ -1105,17 +1130,23 @@ def job_overview(request, order_no):
         .count()
     )
 
-    # Multi-vehicle claims only (see _vehicles_for_visit) — how many
-    # parts have been logged against each specific vehicle, so the
-    # picker can show "2 parts logged" / "Not started yet" per car
-    # instead of the single combined disposal_count above.
+    # Multi-vehicle claims only (see _vehicles_for_visit) — each
+    # vehicle's own mini-stepper status (before photos -> access method,
+    # if needed -> parts -> complete), so the picker can show exactly
+    # where each car stands and the right next action, instead of the
+    # single combined stepper below.
+    loss_label = _loss_label_for(report_id) if vehicles else ""
     vehicle_rows = [
         {
             "vehicle": v,
             "disposal_count": PortalDisposal.objects.filter(vehicle=v).exclude(quantity=0).count(),
+            "needs_access_method": _vehicle_needs_access_method(loss_label, v),
+            "before_done": v.stage != JobVisitVehicle.Stage.NOT_STARTED,
         }
         for v in vehicles
     ]
+    all_vehicles_done = bool(vehicles) and all(v.stage == JobVisitVehicle.Stage.DONE for v in vehicles)
+    any_vehicle_pending_signoff = any(v.signed_off_at is None for v in vehicles)
 
     # For the "Mark on route" step's navigation offer/auto-open — best
     # effort, same as every other Handl job-details lookup on this page.
@@ -1149,6 +1180,8 @@ def job_overview(request, order_no):
             "visit": visit,
             "disposal_count": disposal_count,
             "vehicle_rows": vehicle_rows,
+            "all_vehicles_done": all_vehicles_done,
+            "any_vehicle_pending_signoff": any_vehicle_pending_signoff,
             "selected_date": ctx["selected_date"],
             "is_today": ctx["selected_date"] == timezone.localdate(),
             "dashboard_url": ctx["dashboard_url"],
@@ -1311,7 +1344,11 @@ def job_arrived(request, order_no):
         messages.error(request, "Mark yourself on route first.")
         return redirect(overview_url)
 
-    slot_prompts = _arrival_photo_slots(_loss_label_for(report_id))
+    # On a multi-vehicle stop (see ctx["vehicles"]), "before" photos are
+    # each car's own thing, not the site's — captured per vehicle via
+    # vehicle_before_photos instead, so this shared step has nothing to
+    # require here.
+    slot_prompts = [] if ctx["vehicles"] else _arrival_photo_slots(_loss_label_for(report_id))
 
     if request.method == "POST":
         errors = []
@@ -1364,6 +1401,86 @@ def job_arrived(request, order_no):
             "heading": "Arrived — before photos",
             "instructions": "Take a photo of the vehicle/site before you start work.",
             "action_url": f"{reverse('locksmith_portal:job_arrived', args=[order_no])}?date={selected_date.isoformat()}",
+            "dashboard_url": ctx["dashboard_url"],
+            "back_url": overview_url,
+            "photo_slots": photo_slots,
+            "is_preview": _is_preview(request),
+        },
+    )
+
+
+@login_required
+def vehicle_before_photos(request, order_no):
+    """Per-vehicle equivalent of job_arrived's before photos, for a
+    multi-vehicle stop (see ctx["vehicle"]) — arrival itself (stage,
+    geolocation) stays shared on JobVisit; this is just this one car's
+    own before photos, reachable once the locksmith has arrived at the
+    stop."""
+    ctx, early = _job_visit_context(request, order_no)
+    if ctx is None:
+        return early
+    locksmith, report_id, visit, vehicle = ctx["locksmith"], ctx["report_id"], ctx["visit"], ctx["vehicle"]
+    selected_date = ctx["selected_date"]
+    overview_url = f"{reverse('locksmith_portal:job_overview', args=[order_no])}?date={selected_date.isoformat()}"
+
+    if vehicle is None:
+        messages.error(request, "Choose a vehicle first.")
+        return redirect(overview_url)
+    if visit.stage in (JobVisit.Stage.NOT_STARTED, JobVisit.Stage.ON_ROUTE):
+        messages.error(request, "Mark yourself arrived first.")
+        return redirect(overview_url)
+
+    slot_prompts = _arrival_photo_slots(_loss_label_for(report_id))
+    action_url = (
+        f"{reverse('locksmith_portal:vehicle_before_photos', args=[order_no])}"
+        f"?date={selected_date.isoformat()}&vehicle={vehicle.pk}"
+    )
+
+    if request.method == "POST":
+        errors = []
+        for kind, required in slot_prompts:
+            if required and not visit.photos.filter(kind=kind, vehicle=vehicle).exists():
+                errors.append(f"Add at least one photo: {JobVisitPhoto.Kind(kind).label}.")
+
+        if errors:
+            for error in errors:
+                messages.error(request, error)
+        else:
+            note_parts = [
+                f"'{locksmith.van_soter_display_name}' — before photos for "
+                f"{escape(vehicle.reg) or 'a vehicle'} on this claim:"
+            ]
+            for kind, required in slot_prompts:
+                urls = _visit_photo_urls(visit, kind, vehicle=vehicle)
+                if urls:
+                    kind_label = JobVisitPhoto.Kind(kind).label
+                    note_parts.append(f"{kind_label}: {_photo_links_html(kind_label, urls)}")
+
+            vehicle.stage = JobVisitVehicle.Stage.BEFORE_DONE
+            vehicle.before_done_at = timezone.now()
+            vehicle.save(update_fields=["stage", "before_done_at"])
+            _write_handl_note(locksmith, report_id, " ".join(note_parts))
+            messages.success(request, "Before photos saved.")
+            return redirect(f"{overview_url}")
+
+    photo_slots = [
+        {
+            "kind": kind, "label": JobVisitPhoto.Kind(kind).label, "required": required,
+            "existing_urls": _visit_photo_urls(visit, kind, vehicle=vehicle),
+        }
+        for kind, required in slot_prompts
+    ]
+
+    return render(
+        request,
+        "locksmith_portal/job_photo_upload.html",
+        {
+            "order_no": order_no,
+            "report_id": report_id,
+            "vehicle": vehicle,
+            "heading": f"{vehicle.reg or 'Vehicle'} — before photos",
+            "instructions": "Take a photo of this vehicle before you start work on it.",
+            "action_url": action_url,
             "dashboard_url": ctx["dashboard_url"],
             "back_url": overview_url,
             "photo_slots": photo_slots,
@@ -1483,6 +1600,130 @@ def job_access_method(request, order_no):
             "is_preview": _is_preview(request),
             "disclaimer_text": DISCLAIMER_TEXT,
             "door_frame_photo_urls": _visit_photo_urls(visit, JobVisitPhoto.Kind.DOOR_FRAME),
+        },
+    )
+
+
+@login_required
+def vehicle_access_method(request, order_no):
+    """Per-vehicle equivalent of job_access_method, for a multi-vehicle
+    stop — see _vehicle_needs_access_method for why this can differ per
+    car even on the same claim (a claim-wide "Gain access" service, or
+    this specific vehicle's own SpareKey=False)."""
+    ctx, early = _job_visit_context(request, order_no)
+    if ctx is None:
+        return early
+    locksmith, report_id, visit, vehicle = ctx["locksmith"], ctx["report_id"], ctx["visit"], ctx["vehicle"]
+    selected_date = ctx["selected_date"]
+    overview_url = f"{reverse('locksmith_portal:job_overview', args=[order_no])}?date={selected_date.isoformat()}"
+
+    if vehicle is None:
+        messages.error(request, "Choose a vehicle first.")
+        return redirect(overview_url)
+    if vehicle.stage == JobVisitVehicle.Stage.NOT_STARTED:
+        messages.error(request, "Add this vehicle's before photos first.")
+        return redirect(overview_url)
+
+    if not _vehicle_needs_access_method(_loss_label_for(report_id), vehicle):
+        return redirect(overview_url)
+
+    action_url = (
+        f"{reverse('locksmith_portal:vehicle_access_method', args=[order_no])}"
+        f"?date={selected_date.isoformat()}&vehicle={vehicle.pk}"
+    )
+
+    if request.method == "POST":
+        access_method = request.POST.get("access_method", "")
+        pick_used = request.POST.get("pick_used", "").strip()
+        signature_data_url = request.POST.get("disclaimer_signature", "").strip()
+
+        errors = []
+        if access_method not in (
+            JobVisit.AccessMethod.PICKED, JobVisit.AccessMethod.AIRBAG,
+            JobVisit.AccessMethod.KEY_CODE, JobVisit.AccessMethod.DEALER_KEY,
+            JobVisit.AccessMethod.ALREADY_OPEN,
+        ):
+            errors.append("Choose how you gained access.")
+        elif access_method == JobVisit.AccessMethod.PICKED and not pick_used:
+            errors.append("Enter what pick was used.")
+        elif access_method == JobVisit.AccessMethod.AIRBAG and not signature_data_url:
+            errors.append("The customer needs to sign the disclaimer before continuing.")
+
+        slot_pairs = _access_method_photo_slots(access_method)
+        for kind, required in slot_pairs:
+            if required and not visit.photos.filter(kind=kind, vehicle=vehicle).exists():
+                errors.append(f"Add at least one photo: {JobVisitPhoto.Kind(kind).label}.")
+
+        if errors:
+            for error in errors:
+                messages.error(request, error)
+        else:
+            vehicle_label = vehicle.reg or "this vehicle"
+            note_parts = []
+            if access_method == JobVisit.AccessMethod.PICKED:
+                note_parts.append(
+                    f"'{locksmith.van_soter_display_name}' gained access to {escape(vehicle_label)} "
+                    f"by picking (pick used: {escape(pick_used)})."
+                )
+            elif access_method == JobVisit.AccessMethod.KEY_CODE:
+                note_parts.append(
+                    f"'{locksmith.van_soter_display_name}' gained access to {escape(vehicle_label)} "
+                    "using a supplied key code."
+                )
+            elif access_method == JobVisit.AccessMethod.DEALER_KEY:
+                note_parts.append(
+                    f"'{locksmith.van_soter_display_name}' gained access to {escape(vehicle_label)} "
+                    "using a dealer-supplied, already-cut key."
+                )
+            elif access_method == JobVisit.AccessMethod.ALREADY_OPEN:
+                note_parts.append(
+                    f"'{locksmith.van_soter_display_name}': no entry needed for {escape(vehicle_label)} "
+                    "— it was already open and the customer had a working key."
+                )
+            else:
+                content_type, signature_bytes = _decode_data_url(signature_data_url)
+                signature_url = get_photo_storage().upload(
+                    report_id=report_id, stage="disclaimer", filename="signature.png",
+                    content=signature_bytes, content_type=content_type,
+                )
+                JobVisitPhoto.objects.create(
+                    visit=visit, kind=JobVisitPhoto.Kind.DISCLAIMER_SIGNATURE, url=signature_url, vehicle=vehicle,
+                )
+                vehicle.disclaimer_signed_at = timezone.now()
+                note_parts.append(
+                    f"'{locksmith.van_soter_display_name}' is attempting access to {escape(vehicle_label)} "
+                    "via airbag — customer signed the damage disclaimer: "
+                    f"{_photo_links_html(JobVisitPhoto.Kind.DISCLAIMER_SIGNATURE.label, [signature_url])}"
+                )
+
+            for kind, required in slot_pairs:
+                urls = _visit_photo_urls(visit, kind, vehicle=vehicle)
+                if urls:
+                    kind_label = JobVisitPhoto.Kind(kind).label
+                    note_parts.append(f"{kind_label}: {_photo_links_html(kind_label, urls)}")
+
+            vehicle.access_method = access_method
+            vehicle.pick_used = pick_used if access_method == JobVisit.AccessMethod.PICKED else ""
+            vehicle.save(update_fields=["access_method", "pick_used", "disclaimer_signed_at"])
+
+            _write_handl_note(locksmith, report_id, " ".join(note_parts))
+
+            messages.success(request, "Access method recorded.")
+            return redirect(overview_url)
+
+    return render(
+        request,
+        "locksmith_portal/job_access_method.html",
+        {
+            "order_no": order_no,
+            "report_id": report_id,
+            "vehicle": vehicle,
+            "action_url": action_url,
+            "dashboard_url": ctx["dashboard_url"],
+            "back_url": overview_url,
+            "is_preview": _is_preview(request),
+            "disclaimer_text": DISCLAIMER_TEXT,
+            "door_frame_photo_urls": _visit_photo_urls(visit, JobVisitPhoto.Kind.DOOR_FRAME, vehicle=vehicle),
         },
     )
 
@@ -1731,6 +1972,294 @@ def job_complete(request, order_no):
             "photo_slots": photo_slots,
             "failure_categories": failure_categories,
             "faulty_part_skus": faulty_part_skus,
+        },
+    )
+
+
+@login_required
+def vehicle_complete(request, order_no):
+    """Per-vehicle equivalent of job_complete's outcome/failure/after-
+    photos/notes, for a multi-vehicle stop — deliberately excludes the
+    customer signature and further-work/"customer not present" bits
+    job_complete has: those stay a single shared step across every
+    vehicle on the stop (see job_signoff), since one customer signs
+    once for the whole visit, not once per car. Each vehicle gets its
+    own outcome (see JobVisitVehicle.outcome) — one can complete while
+    another fails."""
+    ctx, early = _job_visit_context(request, order_no)
+    if ctx is None:
+        return early
+    locksmith, report_id, visit, vehicle = ctx["locksmith"], ctx["report_id"], ctx["visit"], ctx["vehicle"]
+    selected_date = ctx["selected_date"]
+    overview_url = f"{reverse('locksmith_portal:job_overview', args=[order_no])}?date={selected_date.isoformat()}"
+
+    if vehicle is None:
+        messages.error(request, "Choose a vehicle first.")
+        return redirect(overview_url)
+    if vehicle.stage == JobVisitVehicle.Stage.DONE:
+        messages.info(request, "This vehicle is already marked done.")
+        return redirect(overview_url)
+    if vehicle.stage == JobVisitVehicle.Stage.NOT_STARTED:
+        messages.error(request, "Add this vehicle's before photos first.")
+        return redirect(overview_url)
+    loss_label = _loss_label_for(report_id)
+    if not vehicle.access_method and _vehicle_needs_access_method(loss_label, vehicle):
+        messages.error(request, "Record how you gained access to this vehicle first.")
+        return redirect(
+            f"{reverse('locksmith_portal:vehicle_access_method', args=[order_no])}"
+            f"?date={selected_date.isoformat()}&vehicle={vehicle.pk}"
+        )
+
+    faulty_part_skus = ", ".join(dict.fromkeys(
+        FaultyPartReport.objects.filter(locksmith=locksmith, order_no=order_no, vehicle=vehicle)
+        .order_by("created_at").values_list("part_code", flat=True)
+    ))
+
+    action_url = (
+        f"{reverse('locksmith_portal:vehicle_complete', args=[order_no])}"
+        f"?date={selected_date.isoformat()}&vehicle={vehicle.pk}"
+    )
+
+    if request.method == "POST":
+        notes_text = request.POST.get("notes", "").strip()
+        outcome = request.POST.get("outcome")
+        failure_sku_needed = request.POST.get("failure_sku_needed", "").strip()
+        failure_reattend_action = request.POST.get("failure_reattend_action", "")
+        failure_category_id = request.POST.get("failure_category", "")
+        failure_category = (
+            _selectable_failure_categories().filter(pk=failure_category_id).first()
+            if failure_category_id else None
+        )
+
+        errors = []
+        if outcome not in (JobVisit.Outcome.COMPLETED, JobVisit.Outcome.FAILED):
+            errors.append("Choose Completed or Failed.")
+
+        if outcome == JobVisit.Outcome.FAILED:
+            if failure_category is None:
+                errors.append("Choose a reason for the failure.")
+            else:
+                if failure_category.name in _FAILURE_CATEGORIES_NEEDING_SKU and not failure_sku_needed:
+                    errors.append("Enter the SKU / part needed.")
+                if (
+                    failure_category.name in _FAILURE_CATEGORIES_NEEDING_REATTEND
+                    and failure_reattend_action not in JobVisit.ReattendAction.values
+                ):
+                    errors.append("Choose a reattend option.")
+
+        slot_pairs = _after_photo_slots(loss_label)
+        if outcome == JobVisit.Outcome.COMPLETED:
+            for kind, required in slot_pairs:
+                if required and not visit.photos.filter(kind=kind, vehicle=vehicle).exists():
+                    errors.append(f"Add at least one photo: {JobVisitPhoto.Kind(kind).label}.")
+
+        if errors:
+            for error in errors:
+                messages.error(request, error)
+        else:
+            vehicle_label = vehicle.reg or "this vehicle"
+            note_parts = [
+                f"'{locksmith.van_soter_display_name}' marked {escape(vehicle_label)} as "
+                f"{JobVisit.Outcome(outcome).label}."
+            ]
+
+            for kind, required in slot_pairs:
+                urls = _visit_photo_urls(visit, kind, vehicle=vehicle)
+                if urls:
+                    kind_label = JobVisitPhoto.Kind(kind).label
+                    note_parts.append(f"{kind_label}: {_photo_links_html(kind_label, urls)}")
+
+            failure_diary_text = ""
+            if failure_category is not None:
+                detail = ""
+                plain_detail = ""
+                if failure_category.name in _FAILURE_CATEGORIES_NEEDING_SKU:
+                    detail = f" (SKU / part needed: {escape(failure_sku_needed)})"
+                    plain_detail = f" (SKU / part needed: {failure_sku_needed})"
+                elif failure_category.name in _FAILURE_CATEGORIES_NEEDING_REATTEND:
+                    detail = f" ({JobVisit.ReattendAction(failure_reattend_action).label})"
+                    plain_detail = detail
+                note_parts.append(f"Failure reason: {escape(failure_category.name)}{detail}.")
+                failure_diary_text = f"Failure reason ({vehicle_label}): {failure_category.name}{plain_detail}."
+
+            if notes_text:
+                note_parts.append(f"Notes: {escape(notes_text)}")
+
+            vehicle.notes = notes_text
+            vehicle.outcome = outcome
+            vehicle.failure_category = failure_category if outcome == JobVisit.Outcome.FAILED else None
+            vehicle.failure_sku_needed = (
+                failure_sku_needed
+                if failure_category and failure_category.name in _FAILURE_CATEGORIES_NEEDING_SKU else ""
+            )
+            vehicle.failure_reattend_action = (
+                failure_reattend_action
+                if failure_category and failure_category.name in _FAILURE_CATEGORIES_NEEDING_REATTEND else ""
+            )
+            vehicle.stage = JobVisitVehicle.Stage.DONE
+            vehicle.completed_at = timezone.now()
+            vehicle.save(update_fields=[
+                "notes", "outcome", "failure_category", "failure_sku_needed",
+                "failure_reattend_action", "stage", "completed_at",
+            ])
+
+            _write_handl_note(locksmith, report_id, " ".join(note_parts))
+            _write_handl_diary(
+                locksmith, report_id,
+                f"Inv and close ({vehicle_label})" if outcome == JobVisit.Outcome.COMPLETED else failure_diary_text,
+            )
+
+            messages.success(request, "Vehicle marked complete — sign off once every vehicle is done.")
+            return redirect(overview_url)
+
+    photo_slots = [
+        {
+            "kind": kind, "label": JobVisitPhoto.Kind(kind).label, "required": required,
+            "existing_urls": _visit_photo_urls(visit, kind, vehicle=vehicle),
+        }
+        for kind, required in _after_photo_slots(loss_label)
+    ]
+    failure_categories = [
+        {
+            "id": category.pk,
+            "name": category.name,
+            "needs_sku": category.name in _FAILURE_CATEGORIES_NEEDING_SKU,
+            "needs_reattend": category.name in _FAILURE_CATEGORIES_NEEDING_REATTEND,
+        }
+        for category in _selectable_failure_categories()
+    ]
+
+    return render(
+        request,
+        "locksmith_portal/job_complete.html",
+        {
+            "order_no": order_no,
+            "report_id": report_id,
+            "vehicle": vehicle,
+            "action_url": action_url,
+            "dashboard_url": ctx["dashboard_url"],
+            "back_url": overview_url,
+            "is_preview": _is_preview(request),
+            "loss_label": loss_label,
+            "photo_slots": photo_slots,
+            "failure_categories": failure_categories,
+            "faulty_part_skus": faulty_part_skus,
+            "hide_signature": True,
+        },
+    )
+
+
+@login_required
+def job_signoff(request, order_no):
+    """Shared customer sign-off for a multi-vehicle stop — one signature
+    step, reachable once every vehicle has its own outcome (see
+    vehicle_complete), where the customer ticks which vehicle(s) it
+    covers (one, several, or all — see MultiVehicleJobTests and the
+    "they can tick what vehicle it applies to" decision). Can be used
+    more than once if the customer signs for some vehicles now and the
+    rest later; the whole JobVisit only flips to DONE once every
+    vehicle has been signed off (or excused via "customer not
+    present")."""
+    ctx, early = _job_visit_context(request, order_no)
+    if ctx is None:
+        return early
+    locksmith, report_id, visit, vehicles = ctx["locksmith"], ctx["report_id"], ctx["visit"], ctx["vehicles"]
+    selected_date = ctx["selected_date"]
+    overview_url = f"{reverse('locksmith_portal:job_overview', args=[order_no])}?date={selected_date.isoformat()}"
+
+    if not vehicles:
+        return redirect(overview_url)
+    if visit.stage == JobVisit.Stage.DONE:
+        messages.info(request, "This job is already marked done.")
+        return redirect(overview_url)
+    if any(v.stage != JobVisitVehicle.Stage.DONE for v in vehicles):
+        messages.error(request, "Finish every vehicle before signing off.")
+        return redirect(overview_url)
+
+    pending_vehicles = [v for v in vehicles if v.signed_off_at is None]
+    action_url = f"{reverse('locksmith_portal:job_signoff', args=[order_no])}?date={selected_date.isoformat()}"
+
+    if request.method == "POST":
+        selected_ids = set(request.POST.getlist("vehicle_ids"))
+        selected = [v for v in pending_vehicles if str(v.pk) in selected_ids]
+        customer_not_present = request.POST.get("customer_not_present") == "1"
+        customer_not_present_reason = request.POST.get("customer_not_present_reason", "").strip()
+        signature_data_url = request.POST.get("completion_signature", "").strip()
+
+        errors = []
+        if not selected:
+            errors.append("Choose at least one vehicle this sign-off covers.")
+        if customer_not_present:
+            if not customer_not_present_reason:
+                errors.append("Say why the customer isn't signing.")
+        elif not signature_data_url:
+            errors.append("The customer needs to sign to confirm they're happy.")
+
+        if errors:
+            for error in errors:
+                messages.error(request, error)
+        else:
+            regs = ", ".join(v.reg or v.key_claim_id for v in selected)
+            now = timezone.now()
+            if customer_not_present:
+                for v in selected:
+                    v.signed_off_at = now
+                    v.customer_not_present_reason = customer_not_present_reason
+                    v.save(update_fields=["signed_off_at", "customer_not_present_reason"])
+                note = f"Customer not present to sign for {escape(regs)}: {escape(customer_not_present_reason)}"
+            else:
+                content_type, signature_bytes = _decode_data_url(signature_data_url)
+                signature_url = get_photo_storage().upload(
+                    report_id=report_id, stage="completion", filename="signature.png",
+                    content=signature_bytes, content_type=content_type,
+                )
+                photo = JobVisitPhoto.objects.create(
+                    visit=visit, kind=JobVisitPhoto.Kind.COMPLETION_SIGNATURE, url=signature_url,
+                )
+                photo.signed_for_vehicles.set(selected)
+                for v in selected:
+                    v.signed_off_at = now
+                    v.save(update_fields=["signed_off_at"])
+                note = (
+                    f"Customer signed to confirm they're happy with {escape(regs)}: "
+                    f"{_photo_links_html(JobVisitPhoto.Kind.COMPLETION_SIGNATURE.label, [signature_url])}"
+                )
+            _write_handl_note(locksmith, report_id, f"'{locksmith.van_soter_display_name}' — {note}")
+
+            if not visit.vehicles.filter(signed_off_at__isnull=True).exists():
+                overall_outcome = (
+                    JobVisit.Outcome.FAILED
+                    if visit.vehicles.filter(outcome=JobVisit.Outcome.FAILED).exists()
+                    else JobVisit.Outcome.COMPLETED
+                )
+                visit.outcome = overall_outcome
+                visit.completion_signed_at = now
+                visit.stage = JobVisit.Stage.DONE
+                visit.completed_at = now
+                visit.save(update_fields=["outcome", "completion_signed_at", "stage", "completed_at"])
+                _record_job_timing(locksmith, report_id, order_no, visit)
+                if selected_date == timezone.localdate():
+                    _update_optimo_status(
+                        order_no,
+                        "success" if overall_outcome == JobVisit.Outcome.COMPLETED else "failed",
+                        start_time=visit.arrived_at, end_time=visit.completed_at,
+                    )
+                messages.success(request, "Job signed off and marked complete.")
+            else:
+                messages.success(request, "Sign-off saved — more vehicles still need signing off.")
+            return redirect(overview_url)
+
+    return render(
+        request,
+        "locksmith_portal/job_signoff.html",
+        {
+            "order_no": order_no,
+            "report_id": report_id,
+            "action_url": action_url,
+            "dashboard_url": ctx["dashboard_url"],
+            "back_url": overview_url,
+            "is_preview": _is_preview(request),
+            "pending_vehicles": pending_vehicles,
         },
     )
 

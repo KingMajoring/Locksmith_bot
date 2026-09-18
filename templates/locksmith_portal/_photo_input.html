@@ -28,7 +28,7 @@ Chrome).
   <button type="button" class="btn-secondary photo-source-btn" data-target="photo-{{ kind }}">🖼️ Gallery</button>
 </div>
 <input type="file" id="photo-{{ kind }}" accept="image/*" multiple class="photo-file-input" tabindex="-1" aria-hidden="true"
-       data-upload-url="{% url 'locksmith_portal:job_photo_upload_one' order_no=order_no kind=kind %}"
+       data-upload-url="{% url 'locksmith_portal:job_photo_upload_one' order_no=order_no kind=kind %}{% if vehicle %}?vehicle={{ vehicle.pk }}{% endif %}"
        {% if required %}data-required="1"{% endif %} data-label="{{ label }}">
 <div class="photo-thumbs" data-thumbs-for="photo-{{ kind }}">
   {% for url in existing_urls %}

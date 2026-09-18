@@ -353,6 +353,57 @@ class JobVisitVehicle(models.Model):
     model_name = models.CharField(max_length=100, blank=True)
     year = models.CharField(max_length=10, blank=True)
     vin = models.CharField(max_length=50, blank=True)
+    # Snapshotted from ClaimVehicle.spare_key at creation time (see
+    # views._vehicles_for_visit) — this vehicle's own access-method
+    # requirement can differ from another vehicle on the same claim
+    # (see views._vehicle_needs_access_method), unlike loss_label,
+    # which is shared claim-wide.
+    spare_key = models.BooleanField(null=True, blank=True)
+
+    # Mirrors the equivalent JobVisit fields — everything about THIS
+    # car's own progress through the stop, once on-route/arrived (which
+    # stay shared on JobVisit) are done. See views.vehicle_before_photos/
+    # vehicle_access_method/vehicle_complete.
+    class Stage(models.TextChoices):
+        NOT_STARTED = "not_started", "Not started"
+        BEFORE_DONE = "before_done", "Before photos done"
+        PARTS_DONE = "parts_done", "Parts disposed"
+        DONE = "done", "Done"
+
+    stage = models.CharField(max_length=20, choices=Stage.choices, default=Stage.NOT_STARTED)
+    before_done_at = models.DateTimeField(null=True, blank=True)
+    parts_done_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    # Gain access (this vehicle only — see views._vehicle_needs_access_method):
+    # how the locksmith got in, same choices/meaning as JobVisit.access_method.
+    access_method = models.CharField(max_length=20, choices=JobVisit.AccessMethod.choices, blank=True)
+    pick_used = models.CharField(max_length=200, blank=True)
+    disclaimer_signed_at = models.DateTimeField(null=True, blank=True)
+
+    # This vehicle's own outcome — see MultiVehicleJobTests and the
+    # "each car gets its own outcome" decision: one vehicle on a stop
+    # can complete while another fails, independently.
+    outcome = models.CharField(max_length=20, choices=JobVisit.Outcome.choices, blank=True)
+    failure_category = models.ForeignKey(
+        "job_completion.FailureCategory", null=True, blank=True,
+        on_delete=models.SET_NULL, related_name="+",
+    )
+    failure_sku_needed = models.CharField(max_length=200, blank=True)
+    failure_reattend_action = models.CharField(max_length=20, choices=JobVisit.ReattendAction.choices, blank=True)
+
+    further_work_required = models.BooleanField(default=False)
+    further_work_details = models.CharField(max_length=500, blank=True)
+
+    notes = models.TextField(blank=True)
+
+    # Set once this vehicle's own sign-off obligation is satisfied — via
+    # a real customer signature covering it (JobVisitPhoto.
+    # signed_for_vehicles) or a "customer not present" note, either way
+    # captured on the shared job_signoff step. Every vehicle needs this
+    # before the whole JobVisit can flip to DONE — see job_signoff.
+    signed_off_at = models.DateTimeField(null=True, blank=True)
+    customer_not_present_reason = models.CharField(max_length=200, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -400,9 +451,22 @@ class JobVisitPhoto(models.Model):
     uploaded_at = models.DateTimeField(auto_now_add=True)
 
     # Same as PortalDisposal.vehicle — which vehicle on a multi-car stop
-    # this photo is of, null on an ordinary one-vehicle job.
+    # this photo is of, null on an ordinary one-vehicle job. Used for
+    # every kind except the two signature kinds below, which use
+    # signed_for_vehicles instead (a single signature can cover more
+    # than one car, which a single FK can't represent).
     vehicle = models.ForeignKey(
         JobVisitVehicle, null=True, blank=True, on_delete=models.CASCADE, related_name="photos"
+    )
+
+    # COMPLETION_SIGNATURE (and, in principle, DISCLAIMER_SIGNATURE) on a
+    # multi-vehicle stop: which vehicle(s) this one signature covers —
+    # the customer ticks a subset (one, several, or all) rather than
+    # signing once per car, see views.job_signoff. Empty on an ordinary
+    # single-vehicle job, where the signature always covers the whole
+    # (only) vehicle implicitly.
+    signed_for_vehicles = models.ManyToManyField(
+        JobVisitVehicle, blank=True, related_name="covering_signatures"
     )
 
     class Meta:

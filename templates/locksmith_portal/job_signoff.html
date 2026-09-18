@@ -1,0 +1,172 @@
+{% extends "locksmith_portal/base.html" %}
+{% block title %}Job {{ report_id }} — WGTK Locksmith Portal{% endblock %}
+{% block content %}
+<a class="back-link" href="{{ back_url }}">&larr; Back</a>
+<h1>Sign off</h1>
+<p>Tick which vehicle(s) this sign-off covers — one signature can cover one car or several.</p>
+
+<form method="post" action="{{ action_url }}" class="card" id="signoff-form">
+  {% csrf_token %}
+
+  <div class="field-group">
+    <label>Vehicles covered by this sign-off</label>
+    <div class="vehicle-checkbox-list">
+      {% for vehicle in pending_vehicles %}
+      <label class="vehicle-checkbox-row">
+        <input type="checkbox" name="vehicle_ids" value="{{ vehicle.pk }}" checked>
+        <span class="plate">{{ vehicle.reg|default:"Vehicle" }}</span>
+        <span class="sub">{{ vehicle.make }} {{ vehicle.model_name }} — {{ vehicle.get_outcome_display }}</span>
+      </label>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="field-group">
+    <label>
+      <input type="checkbox" id="customer_not_present" name="customer_not_present" value="1">
+      Customer not present to sign
+    </label>
+  </div>
+
+  <div class="field-group signature-branch">
+    <label>Customer signature</label>
+    <div class="signature-preview" id="completion-signature-preview">Not signed yet</div>
+    <p><button type="button" class="btn" id="open-completion-signature">Tap to sign</button></p>
+    <input type="hidden" name="completion_signature" id="completion_signature">
+  </div>
+
+  <div class="signature-modal" id="completion-signature-modal" hidden>
+    <div class="signature-modal-header">
+      <span>Customer signature</span>
+      <button type="button" class="signature-modal-close" id="close-completion-signature" aria-label="Close">&times;</button>
+    </div>
+    <canvas id="completion-signature-pad" class="signature-pad-fullscreen"></canvas>
+    <div class="signature-modal-actions">
+      <button type="button" class="btn-secondary" id="clear-completion-signature">Clear</button>
+      <button type="button" class="btn" id="done-completion-signature">Done</button>
+    </div>
+  </div>
+
+  <div class="field-group not-present-branch" hidden>
+    <label for="customer_not_present_reason">Why isn't the customer signing?</label>
+    <input type="text" id="customer_not_present_reason" name="customer_not_present_reason" placeholder="e.g. had to leave, left key under mat…">
+  </div>
+
+  <p style="margin-top:1rem;"><button class="btn" type="submit">Confirm sign-off</button></p>
+</form>
+
+<script>
+  (function () {
+    function showBranch(el, show) { el.hidden = !show; }
+
+    var notPresentInput = document.getElementById('customer_not_present');
+    var reasonInput = document.getElementById('customer_not_present_reason');
+
+    function updatePresenceBranches() {
+      var notPresent = notPresentInput.checked;
+      document.querySelectorAll('.signature-branch').forEach(function (branch) {
+        showBranch(branch, !notPresent);
+      });
+      document.querySelectorAll('.not-present-branch').forEach(function (branch) {
+        showBranch(branch, notPresent);
+      });
+      reasonInput.required = notPresent;
+    }
+    notPresentInput.addEventListener('change', updatePresenceBranches);
+  })();
+
+  (function () {
+    // Same signature-pad implementation as job_complete.html.
+    var canvas = document.getElementById('completion-signature-pad');
+    var modal = document.getElementById('completion-signature-modal');
+    var preview = document.getElementById('completion-signature-preview');
+    var hiddenInput = document.getElementById('completion_signature');
+    if (!canvas || !modal || !preview || !hiddenInput) return;
+
+    var ctx = canvas.getContext('2d');
+    var drawing = false;
+    var hasSignature = false;
+
+    function applyPenStyle() {
+      ctx.lineWidth = 3;
+      ctx.lineCap = 'round';
+      ctx.strokeStyle = '#16241d';
+    }
+
+    function point(e) {
+      var rect = canvas.getBoundingClientRect();
+      return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    }
+
+    function start(e) {
+      e.preventDefault();
+      drawing = true;
+      hasSignature = true;
+      var p = point(e);
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y);
+      try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
+    }
+
+    function move(e) {
+      if (!drawing) return;
+      e.preventDefault();
+      var p = point(e);
+      ctx.lineTo(p.x, p.y);
+      ctx.stroke();
+    }
+
+    function end() { drawing = false; }
+
+    canvas.addEventListener('pointerdown', start);
+    canvas.addEventListener('pointermove', move);
+    canvas.addEventListener('pointerup', end);
+    canvas.addEventListener('pointercancel', end);
+
+    function openModal() {
+      modal.hidden = false;
+      document.body.style.overflow = 'hidden';
+      requestAnimationFrame(function () {
+        var rect = canvas.getBoundingClientRect();
+        canvas.width = rect.width;
+        canvas.height = rect.height;
+        applyPenStyle();
+      });
+    }
+
+    function closeModal() {
+      modal.hidden = true;
+      document.body.style.overflow = '';
+    }
+
+    document.getElementById('open-completion-signature').addEventListener('click', openModal);
+    document.getElementById('close-completion-signature').addEventListener('click', closeModal);
+    document.getElementById('clear-completion-signature').addEventListener('click', function () {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      hasSignature = false;
+    });
+    document.getElementById('done-completion-signature').addEventListener('click', function () {
+      if (!hasSignature) {
+        alert('Please sign before tapping Done.');
+        return;
+      }
+      hiddenInput.value = canvas.toDataURL('image/png');
+      preview.textContent = '✓ Signed';
+      preview.classList.add('signature-preview-done');
+      closeModal();
+    });
+
+    document.getElementById('signoff-form').addEventListener('submit', function (e) {
+      var notPresent = document.getElementById('customer_not_present').checked;
+      if (!notPresent) {
+        if (!hasSignature) {
+          e.preventDefault();
+          alert('The customer needs to sign to confirm they\'re happy.');
+          return;
+        }
+        hiddenInput.value = canvas.toDataURL('image/png');
+      }
+    });
+  })();
+</script>
+{% endblock %}

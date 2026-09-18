@@ -2,7 +2,10 @@
 {% block title %}Job {{ report_id }} — WGTK Locksmith Portal{% endblock %}
 {% block content %}
 <a class="back-link" href="{{ back_url }}">&larr; Back</a>
-<h1>Finish job</h1>
+<h1>{% if vehicle %}Finish {{ vehicle.reg|default:"vehicle" }}{% else %}Finish job{% endif %}</h1>
+{% if hide_signature %}
+<p class="sub">The customer's sign-off happens once for the whole stop, after every vehicle is done — see "Sign off" on the job overview.</p>
+{% endif %}
 
 <form method="post" action="{{ action_url }}" enctype="multipart/form-data" class="card" id="complete-form">
   {% csrf_token %}
@@ -24,6 +27,7 @@
     {% endfor %}
   </div>
 
+  {% if not hide_signature %}
   <div class="field-group completed-branch" hidden>
     <label>
       <input type="checkbox" id="customer_not_present" name="customer_not_present" value="1">
@@ -66,6 +70,7 @@
     <label for="further_work_details">What work?</label>
     <input type="text" id="further_work_details" name="further_work_details" placeholder="e.g. needs a new ignition barrel ordering">
   </div>
+  {% endif %}
 
   <div class="field-group failure-branch" hidden>
     <label>Reason for failure</label>
@@ -119,8 +124,15 @@
     // just silently blocks submission instead (confirmed live: a console
     // error — "not focusable" — with no visible feedback at all). Keep
     // `required` in sync with visibility so this can't happen.
+    // Both undefined on a vehicle_complete page (see hide_signature) —
+    // that step's own shared sign-off (job_signoff) has no equivalent
+    // fields to sync, so every function/listener below is a no-op there.
+    var notPresentInput = document.getElementById('customer_not_present');
+    var furtherWorkInput = document.getElementById('further_work_required');
+
     function updateCustomerPresenceBranches() {
-      var notPresent = document.getElementById('customer_not_present').checked;
+      if (!notPresentInput) return;
+      var notPresent = notPresentInput.checked;
       document.querySelectorAll('.signature-branch').forEach(function (branch) {
         showBranch(branch, !notPresent);
       });
@@ -132,7 +144,8 @@
 
     // Same required-field-on-a-hidden-branch trap as above applies here.
     function updateFurtherWorkBranch() {
-      var required = document.getElementById('further_work_required').checked;
+      if (!furtherWorkInput) return;
+      var required = furtherWorkInput.checked;
       document.querySelectorAll('.further-work-branch').forEach(function (branch) {
         showBranch(branch, required);
       });
@@ -153,8 +166,8 @@
           updateCustomerPresenceBranches();
           updateFurtherWorkBranch();
         } else {
-          document.getElementById('customer_not_present_reason').required = false;
-          document.getElementById('further_work_details').required = false;
+          if (notPresentInput) document.getElementById('customer_not_present_reason').required = false;
+          if (furtherWorkInput) document.getElementById('further_work_details').required = false;
         }
         if (!failed) {
           document.querySelectorAll('.failure-category-branch').forEach(function (branch) {
@@ -164,8 +177,8 @@
       });
     });
 
-    document.getElementById('customer_not_present').addEventListener('change', updateCustomerPresenceBranches);
-    document.getElementById('further_work_required').addEventListener('change', updateFurtherWorkBranch);
+    if (notPresentInput) notPresentInput.addEventListener('change', updateCustomerPresenceBranches);
+    if (furtherWorkInput) furtherWorkInput.addEventListener('change', updateFurtherWorkBranch);
 
     document.querySelectorAll('.failure-category-input').forEach(function (radio) {
       radio.addEventListener('change', function () {

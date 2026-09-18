@@ -1318,6 +1318,173 @@ class MultiVehicleJobTests(TestCase):
         response_b = self.client.get(f"{dispose_url}?vehicle={vehicle_b.pk}")
         self.assertNotContains(response_b, "1 x Transponder key blank")
 
+    @patch("apps.locksmith_portal.views.get_handl_client")
+    @patch("apps.locksmith_portal.views.get_optimo_client")
+    @patch("apps.locksmith_portal.views.get_photo_storage")
+    def test_full_multi_vehicle_flow_with_mixed_outcome_and_partial_signoff(
+        self, mock_get_storage, mock_get_optimo, mock_get_handl
+    ):
+        """End-to-end: before photos -> access method (vehicle B only,
+        SpareKey=False) -> finish each vehicle with a different outcome
+        -> sign off in two steps (one vehicle at a time) -> the whole
+        stop only flips to DONE once both are covered, with the overall
+        outcome coming out FAILED because one vehicle failed."""
+        self._mock_optimo(mock_get_optimo)
+        mock_handl = MagicMock()
+        mock_handl.get_job_details.return_value = {}
+        mock_handl.get_vehicles_for_report.return_value = self.claim_vehicles
+        mock_get_handl.return_value = mock_handl
+        mock_storage = MagicMock()
+        mock_storage.upload.side_effect = (
+            lambda **kwargs: f"https://example.blob.core.windows.net/job-photos/{kwargs['report_id']}/{kwargs['stage']}/{kwargs['filename']}"
+        )
+        mock_get_storage.return_value = mock_storage
+        category = FailureCategory.objects.create(
+            name="Vehicle Issues", master_reason=FailureCategory.MasterReason.NONE,
+        )
+
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            stage=JobVisit.Stage.ARRIVED, arrived_at=timezone.now(),
+        )
+        self.client.get(reverse("locksmith_portal:job_overview", args=[self.order_no]))
+        vehicle_a, vehicle_b = JobVisitVehicle.objects.order_by("created_at")
+        self.assertTrue(vehicle_a.spare_key)
+        self.assertFalse(vehicle_b.spare_key)
+
+        date_qs = f"date={self.today.isoformat()}"
+
+        # -- before photos, both vehicles --
+        for vehicle in (vehicle_a, vehicle_b):
+            url = f"{reverse('locksmith_portal:vehicle_before_photos', args=[self.order_no])}?{date_qs}&vehicle={vehicle.pk}"
+            response = self.client.post(url)
+            self.assertContains(response, "Add at least one photo", status_code=200)
+            JobVisitPhoto.objects.create(
+                visit=JobVisit.objects.get(order_no=self.order_no), kind=JobVisitPhoto.Kind.BEFORE,
+                url="https://example/before.jpg", vehicle=vehicle,
+            )
+            response = self.client.post(url)
+            self.assertRedirects(
+                response,
+                f"{reverse('locksmith_portal:job_overview', args=[self.order_no])}?{date_qs}",
+            )
+        vehicle_a.refresh_from_db()
+        vehicle_b.refresh_from_db()
+        self.assertEqual(vehicle_a.stage, JobVisitVehicle.Stage.BEFORE_DONE)
+        self.assertEqual(vehicle_b.stage, JobVisitVehicle.Stage.BEFORE_DONE)
+
+        # -- access method: only vehicle B needs it (SpareKey=False) --
+        access_url_a = f"{reverse('locksmith_portal:vehicle_access_method', args=[self.order_no])}?{date_qs}&vehicle={vehicle_a.pk}"
+        self.assertRedirects(
+            self.client.get(access_url_a),
+            f"{reverse('locksmith_portal:job_overview', args=[self.order_no])}?{date_qs}",
+        )
+        access_url_b = f"{reverse('locksmith_portal:vehicle_access_method', args=[self.order_no])}?{date_qs}&vehicle={vehicle_b.pk}"
+        response = self.client.post(access_url_b, {"access_method": "picked", "pick_used": "HU101"})
+        self.assertRedirects(
+            response,
+            f"{reverse('locksmith_portal:job_overview', args=[self.order_no])}?{date_qs}",
+        )
+        vehicle_b.refresh_from_db()
+        self.assertEqual(vehicle_b.access_method, JobVisit.AccessMethod.PICKED)
+
+        # -- finish each vehicle with its own outcome --
+        visit = JobVisit.objects.get(order_no=self.order_no)
+        JobVisitPhoto.objects.create(
+            visit=visit, kind=JobVisitPhoto.Kind.AFTER, url="https://example/after-a.jpg", vehicle=vehicle_a,
+        )
+        JobVisitPhoto.objects.create(
+            visit=visit, kind=JobVisitPhoto.Kind.MILEAGE, url="https://example/mileage-a.jpg", vehicle=vehicle_a,
+        )
+        complete_url_a = f"{reverse('locksmith_portal:vehicle_complete', args=[self.order_no])}?{date_qs}&vehicle={vehicle_a.pk}"
+        response = self.client.post(complete_url_a, {"outcome": "completed", "notes": "All good."})
+        self.assertRedirects(
+            response,
+            f"{reverse('locksmith_portal:job_overview', args=[self.order_no])}?{date_qs}",
+        )
+
+        complete_url_b = f"{reverse('locksmith_portal:vehicle_complete', args=[self.order_no])}?{date_qs}&vehicle={vehicle_b.pk}"
+        response = self.client.post(complete_url_b, {"outcome": "failed", "failure_category": category.pk})
+        self.assertRedirects(
+            response,
+            f"{reverse('locksmith_portal:job_overview', args=[self.order_no])}?{date_qs}",
+        )
+
+        vehicle_a.refresh_from_db()
+        vehicle_b.refresh_from_db()
+        self.assertEqual(vehicle_a.stage, JobVisitVehicle.Stage.DONE)
+        self.assertEqual(vehicle_a.outcome, JobVisit.Outcome.COMPLETED)
+        self.assertEqual(vehicle_b.stage, JobVisitVehicle.Stage.DONE)
+        self.assertEqual(vehicle_b.outcome, JobVisit.Outcome.FAILED)
+        self.assertEqual(vehicle_b.failure_category, category)
+
+        # -- sign off: not reachable while any vehicle is unfinished is
+        # already implied above; now both are done, sign off vehicle A
+        # first, on its own — the stop must NOT be done yet. --
+        signoff_url = f"{reverse('locksmith_portal:job_signoff', args=[self.order_no])}?{date_qs}"
+        response = self.client.get(signoff_url)
+        self.assertContains(response, "VE20 VEP")
+        self.assertContains(response, "YH58 XAL")
+
+        response = self.client.post(signoff_url, {
+            "vehicle_ids": [str(vehicle_a.pk)],
+            "completion_signature": "data:image/png;base64,aGVsbG8=",
+        })
+        self.assertRedirects(
+            response,
+            f"{reverse('locksmith_portal:job_overview', args=[self.order_no])}?{date_qs}",
+        )
+        visit.refresh_from_db()
+        vehicle_a.refresh_from_db()
+        vehicle_b.refresh_from_db()
+        self.assertIsNotNone(vehicle_a.signed_off_at)
+        self.assertIsNone(vehicle_b.signed_off_at)
+        self.assertNotEqual(visit.stage, JobVisit.Stage.DONE)
+
+        # -- sign off vehicle B via "customer not present" — now the
+        # whole stop is done, and the overall outcome is FAILED because
+        # vehicle B failed (see job_signoff's aggregation rule). --
+        response = self.client.post(signoff_url, {
+            "vehicle_ids": [str(vehicle_b.pk)],
+            "customer_not_present": "1",
+            "customer_not_present_reason": "Had to leave for work.",
+        })
+        self.assertRedirects(
+            response,
+            f"{reverse('locksmith_portal:job_overview', args=[self.order_no])}?{date_qs}",
+        )
+        visit.refresh_from_db()
+        vehicle_b.refresh_from_db()
+        self.assertIsNotNone(vehicle_b.signed_off_at)
+        self.assertEqual(vehicle_b.customer_not_present_reason, "Had to leave for work.")
+        self.assertEqual(visit.stage, JobVisit.Stage.DONE)
+        self.assertEqual(visit.outcome, JobVisit.Outcome.FAILED)
+        self.assertIsNotNone(visit.completed_at)
+        self.assertTrue(JobTimingSummary.objects.filter(visit=visit).exists())
+
+    @patch("apps.locksmith_portal.views.get_handl_client")
+    @patch("apps.locksmith_portal.views.get_optimo_client")
+    def test_signoff_blocked_while_a_vehicle_is_unfinished(self, mock_get_optimo, mock_get_handl):
+        self._mock_optimo(mock_get_optimo)
+        mock_handl = MagicMock()
+        mock_handl.get_job_details.return_value = {}
+        mock_handl.get_vehicles_for_report.return_value = self.claim_vehicles
+        mock_get_handl.return_value = mock_handl
+        JobVisit.objects.create(
+            locksmith=self.locksmith, order_no=self.order_no, report_id="496390",
+            stage=JobVisit.Stage.ARRIVED, arrived_at=timezone.now(),
+        )
+        self.client.get(reverse("locksmith_portal:job_overview", args=[self.order_no]))
+
+        url = f"{reverse('locksmith_portal:job_signoff', args=[self.order_no])}?date={self.today.isoformat()}"
+        response = self.client.get(url)
+
+        self.assertRedirects(
+            response,
+            f"{reverse('locksmith_portal:job_overview', args=[self.order_no])}?date={self.today.isoformat()}",
+        )
+        self.assertEqual(JobVisit.objects.get(order_no=self.order_no).stage, JobVisit.Stage.ARRIVED)
+
 
 class FaultyPartReportTests(TestCase):
     """Reporting a part as faulty/didn't work is deliberately a separate
