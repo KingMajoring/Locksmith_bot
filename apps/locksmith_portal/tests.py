@@ -671,13 +671,13 @@ class DashboardTests(TestCase):
         # for the day's job list.
         mock_get_optimo.return_value = MagicMock(list_orders_for_date=MagicMock(return_value=[]))
         today = timezone.localdate()
-        period_start = _pay_period_start(today)
-        before_period = period_start - timedelta(days=1)
+        month_start = today.replace(day=1)
+        before_month = month_start - timedelta(days=1)
         yesterday = today - timedelta(days=1)
         other_locksmith, _ = _make_locksmith_user(email="other@wgtk.co.uk", soter_ids=("999",))
 
         # Already synced by last night's pull_completed_jobs run — counts
-        # towards this pay period via CompletedJob.
+        # towards this calendar month via CompletedJob.
         CompletedJob.objects.create(
             order_no="1_a", report_id="1", job_date=yesterday, locksmith=self.locksmith,
             status=CompletedJob.Status.SUCCESS, net_cost=100.0,
@@ -688,9 +688,9 @@ class DashboardTests(TestCase):
             status=CompletedJob.Status.FAILED, net_cost=75.0,
         )  # a failed job's net_cost shouldn't count towards van earnings
         CompletedJob.objects.create(
-            order_no="3_a", report_id="3", job_date=before_period, locksmith=self.locksmith,
+            order_no="3_a", report_id="3", job_date=before_month, locksmith=self.locksmith,
             status=CompletedJob.Status.SUCCESS, net_cost=200.0,
-        )  # outside this pay period — shouldn't count
+        )  # outside this calendar month — shouldn't count
         CompletedJob.objects.create(
             order_no="4_a", report_id="4", job_date=yesterday, locksmith=other_locksmith,
             status=CompletedJob.Status.SUCCESS,
@@ -736,6 +736,47 @@ class DashboardTests(TestCase):
         self.assertContains(response, "Your stats")
         self.assertContains(response, "£50.00")
         self.assertContains(response, "£150.00")
+
+    @patch("apps.locksmith_portal.views.get_handl_client")
+    @patch("apps.locksmith_portal.views.get_optimo_client")
+    def test_dashboard_mtd_uses_calendar_month_not_admin_pay_period(self, mock_get_optimo, mock_get_handl):
+        """Regression test: van earnings/job counts on the dashboard's
+        "mtd" panel must follow the real calendar month, even when an
+        admin-configured PayPeriod (see models.py) covers a completely
+        different span — the whole reason this changed away from
+        PayPeriod is that "16 Dec-19 Jan" reads as arbitrary/confusing
+        dates on this panel, not real month-to-date."""
+        mock_get_optimo.return_value = MagicMock(list_orders_for_date=MagicMock(return_value=[]))
+        mock_get_handl.return_value = MagicMock(get_job_details=MagicMock(return_value={}))
+        today = timezone.localdate()
+        month_start = today.replace(day=1)
+
+        # A PayPeriod deliberately NOT aligned to the calendar month —
+        # same shape as the real "16 Dec-19 Jan" case — spanning from
+        # before this month into it, so a naive pay-period query would
+        # both wrongly include the pre-month job and (if the period
+        # ended before today) wrongly exclude an in-month one.
+        PayPeriod.objects.all().delete()
+        PayPeriod.objects.create(
+            start_date=month_start - timedelta(days=10), end_date=month_start + timedelta(days=3),
+        )
+
+        before_month = month_start - timedelta(days=1)
+        CompletedJob.objects.create(
+            order_no="pp_1", report_id="pp1", job_date=before_month, locksmith=self.locksmith,
+            status=CompletedJob.Status.SUCCESS, net_cost=999.0,
+        )  # within the PayPeriod but before the calendar month — must NOT count
+        CompletedJob.objects.create(
+            order_no="pp_2", report_id="pp2", job_date=month_start, locksmith=self.locksmith,
+            status=CompletedJob.Status.SUCCESS, net_cost=123.0,
+        )  # in the calendar month — must count regardless of the PayPeriod
+
+        response = self.client.get(reverse("locksmith_portal:dashboard"))
+        stats = response.context["stats"]
+        self.assertEqual(stats["period_start"], month_start)
+        self.assertEqual(stats["period_end"], today)
+        self.assertEqual(stats["van_earnings_mtd"], 123.0)
+        self.assertEqual(stats["jobs_mtd"], 1)
 
     @patch("apps.locksmith_portal.views.get_optimo_client")
     def test_dashboard_shows_zero_van_earnings_with_no_completed_jobs(self, mock_get_optimo):
