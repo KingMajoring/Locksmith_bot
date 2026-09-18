@@ -471,6 +471,7 @@ class SQLHandlClientTests(TestCase):
                 "VehicleAddress4": "Lanarkshire",
                 "VehicleAddressLatitude": 55.7536673,
                 "VehicleAddressLongitude": -4.062251,
+                "Postcode": "ML3 6QP",
             }
         ]
         fake_conn = _fake_connection(rows)
@@ -490,6 +491,7 @@ class SQLHandlClientTests(TestCase):
         self.assertIn("Policy_BrokersDetails", query)
         self.assertIn("SubBrokers", query)
         self.assertIn("Policy_ClaimDetails_Key", query)
+        self.assertIn("LocksmithPostCode", query)
 
         job = details["496390"]
         self.assertEqual(job.make, "NISSAN")
@@ -509,6 +511,7 @@ class SQLHandlClientTests(TestCase):
         self.assertEqual(job.client_phone, "07700900123")
         self.assertEqual(job.broker, "Admiral")
         self.assertEqual(job.detail_of_loss, "Lost the only key on a dog walk.")
+        self.assertEqual(job.postcode, "ML3 6QP")
 
     def test_get_vehicles_for_report_returns_every_key_claim_row(self):
         """Regression test: get_job_details deliberately ranks
@@ -577,6 +580,7 @@ class SQLHandlClientTests(TestCase):
                 "VehicleAddress4": "Lanarkshire",
                 "VehicleAddressLatitude": 55.7536673,
                 "VehicleAddressLongitude": -4.062251,
+                "Postcode": "ML3 6QP",
             }
         ]
         fake_conn = _fake_connection(rows)
@@ -611,6 +615,7 @@ class SQLHandlClientTests(TestCase):
                 "VehicleAddress4": "Lanarkshire",
                 "VehicleAddressLatitude": 55.7536673,
                 "VehicleAddressLongitude": -4.062251,
+                "Postcode": "ML3 6QP",
             }
         ]
         fake_conn = _fake_connection(rows)
@@ -649,6 +654,7 @@ class SQLHandlClientTests(TestCase):
                 "VehicleAddress4": None,
                 "VehicleAddressLatitude": None,
                 "VehicleAddressLongitude": None,
+                "Postcode": "ML3 6QP",
             }
         ]
         fake_conn = _fake_connection(rows)
@@ -692,6 +698,7 @@ class SQLHandlClientTests(TestCase):
                 "VehicleAddress4": "",
                 "VehicleAddressLatitude": "",
                 "VehicleAddressLongitude": "",
+                "Postcode": "ML3 6QP",
             }
         ]
         fake_conn = _fake_connection(rows)
@@ -740,6 +747,7 @@ class SQLHandlClientTests(TestCase):
                 "VehicleAddress4": "Lanarkshire",
                 "VehicleAddressLatitude": 55.7536673,
                 "VehicleAddressLongitude": -4.062251,
+                "Postcode": "ML3 6QP",
             }
         ]
         fake_conn = _fake_connection(rows)
@@ -779,6 +787,7 @@ class SQLHandlClientTests(TestCase):
                 "VehicleAddress4": "Lanarkshire",
                 "VehicleAddressLatitude": 55.7536673,
                 "VehicleAddressLongitude": -4.062251,
+                "Postcode": "ML3 6QP",
             }
         ]
         fake_conn = _fake_connection(rows)
@@ -815,6 +824,7 @@ class SQLHandlClientTests(TestCase):
                 "VehicleAddress4": "Lanarkshire",
                 "VehicleAddressLatitude": 55.7536673,
                 "VehicleAddressLongitude": -4.062251,
+                "Postcode": "ML3 6QP",
             }
         ]
         fake_conn = _fake_connection(rows)

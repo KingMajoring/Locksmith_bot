@@ -238,6 +238,40 @@ class DashboardTests(TestCase):
 
     @patch("apps.locksmith_portal.views.get_handl_client")
     @patch("apps.locksmith_portal.views.get_optimo_client")
+    def test_dashboard_shows_postcode_on_the_job_card(self, mock_get_optimo, mock_get_handl):
+        """The postcode (Policy_ClaimDetails_Key.LocksmithPostCode — see
+        JobDetails.postcode) shows on the dashboard card itself, before
+        a locksmith opens the job — that's the whole point, since it's
+        what actually finds the job's location, not the free-text
+        address alone."""
+        today = timezone.localdate()
+        order_no = f"1001_{today.isoformat()}"
+        mock_optimo = MagicMock()
+        mock_optimo.list_orders_for_date.return_value = [
+            OptimoOrderSummary(
+                order_no=order_no, driver_serial="011", distance_metres=0, travel_time_seconds=0
+            ),
+        ]
+        mock_get_optimo.return_value = mock_optimo
+        mock_handl = MagicMock()
+        mock_handl.get_job_details.return_value = {
+            "1001": JobDetails(
+                report_id="1001", make="Ford", model="Focus", year="2020", reg="AB20 CDE", vin="VIN1",
+                service_type="Car", loss_type="LOST", supplied_service="", net_cost=100.0,
+                vehicle_address="42 Corsehill Crescent, Hamilton, Lanarkshire",
+                vehicle_latitude=55.7536673, vehicle_longitude=-4.062251,
+                postcode="ML3 6QP",
+            )
+        }
+        mock_get_handl.return_value = mock_handl
+
+        response = self.client.get(reverse("locksmith_portal:dashboard"))
+        job = response.context["jobs"][0]
+        self.assertEqual(job["postcode"], "ML3 6QP")
+        self.assertContains(response, "ML3 6QP")
+
+    @patch("apps.locksmith_portal.views.get_handl_client")
+    @patch("apps.locksmith_portal.views.get_optimo_client")
     def test_dashboard_shows_supplied_service(self, mock_get_optimo, mock_get_handl):
         today = timezone.localdate()
         order_no = f"1001_{today.isoformat()}"

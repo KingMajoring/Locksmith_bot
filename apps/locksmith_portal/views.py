@@ -1026,6 +1026,7 @@ def dashboard(request):
         job["service"] = display_loss_type(details.loss_type, spare_key=details.spare_key) if details else ""
         job["supplied_service"] = details.supplied_service if details else ""
         job["vehicle_address"] = details.vehicle_address if details else ""
+        job["postcode"] = details.postcode if details else ""
         job["maps_url"], job["waze_url"] = _navigation_urls(
             details.vehicle_address if details else "",
             details.vehicle_latitude if details else None,
