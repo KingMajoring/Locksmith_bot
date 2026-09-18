@@ -10,11 +10,13 @@ from django.test import TestCase
 from django.urls import reverse
 
 from apps.integrations.optimo import OptimoDriverInfo
+from apps.job_completion.models import CompletedJob
 
 from .management.commands.import_soter_locksmiths import parse_rows
 from .models import Locksmith, OptimoDriverId, SoterLocksmithId
 from .services import (
     apply_soter_user_ids,
+    backfill_completed_job_locksmiths,
     commit_employee_location_matches,
     commit_optimo_driver_matches,
     group_locksmiths,
@@ -419,6 +421,74 @@ class CommitOptimoDriverMatchesTests(TestCase):
         created_again = commit_optimo_driver_matches(match)
         self.assertEqual(created_again, 0)
         self.assertEqual(OptimoDriverId.objects.count(), 1)
+
+    def test_backfills_already_pulled_completed_jobs_for_this_driver(self):
+        """Regression test: a job pulled before this driver's mapping
+        existed stores driver_serial but locksmith=None forever
+        otherwise — jobs_by_day would show it as "Unmatched" even after
+        the driver is matched here, since CompletedJob.locksmith is
+        only ever resolved at pull time (see pulling.py)."""
+        locksmith = Locksmith.objects.create(name="WGTK - Zak Mathurin")
+        stuck_job = CompletedJob.objects.create(
+            order_no="502091_2026-09-17", report_id="502091", job_date="2026-09-17",
+            driver_serial="ZakMathurin", locksmith=None, status=CompletedJob.Status.SUCCESS,
+        )
+        # A job for a different driver, still unmatched, must be left alone.
+        other_job = CompletedJob.objects.create(
+            order_no="502222_2026-09-17", report_id="502222", job_date="2026-09-17",
+            driver_serial="SomeoneElse", locksmith=None, status=CompletedJob.Status.SUCCESS,
+        )
+
+        driver = OptimoDriverInfo(
+            driver_serial="ZakMathurin", driver_name="Zak Mathurin", driver_external_id="",
+        )
+        commit_optimo_driver_matches([{"driver": driver, "locksmith": locksmith, "reason": "name"}])
+
+        stuck_job.refresh_from_db()
+        other_job.refresh_from_db()
+        self.assertEqual(stuck_job.locksmith, locksmith)
+        self.assertIsNone(other_job.locksmith)
+
+
+class BackfillCompletedJobLocksmithsTests(TestCase):
+    """The standalone one-off fix (see the matching management command)
+    for whatever's stuck from before commit_optimo_driver_matches
+    started backfilling this itself."""
+
+    def test_fixes_rows_whose_mapping_already_existed(self):
+        locksmith = Locksmith.objects.create(name="WGTK - Zak Mathurin")
+        OptimoDriverId.objects.create(locksmith=locksmith, optimo_driver_serial="ZakMathurin")
+        stuck_job = CompletedJob.objects.create(
+            order_no="502091_2026-09-17", report_id="502091", job_date="2026-09-17",
+            driver_serial="ZakMathurin", locksmith=None, status=CompletedJob.Status.SUCCESS,
+        )
+
+        updated = backfill_completed_job_locksmiths()
+
+        self.assertEqual(updated, 1)
+        stuck_job.refresh_from_db()
+        self.assertEqual(stuck_job.locksmith, locksmith)
+
+    def test_never_touches_an_already_matched_job(self):
+        locksmith = Locksmith.objects.create(name="WGTK - Zak Mathurin")
+        other_locksmith = Locksmith.objects.create(name="WGTK - Someone Else")
+        OptimoDriverId.objects.create(locksmith=locksmith, optimo_driver_serial="ZakMathurin")
+        already_matched = CompletedJob.objects.create(
+            order_no="502091_2026-09-17", report_id="502091", job_date="2026-09-17",
+            driver_serial="ZakMathurin", locksmith=other_locksmith, status=CompletedJob.Status.SUCCESS,
+        )
+
+        backfill_completed_job_locksmiths()
+
+        already_matched.refresh_from_db()
+        self.assertEqual(already_matched.locksmith, other_locksmith)
+
+    def test_no_mappings_at_all_updates_nothing(self):
+        CompletedJob.objects.create(
+            order_no="502091_2026-09-17", report_id="502091", job_date="2026-09-17",
+            driver_serial="ZakMathurin", locksmith=None, status=CompletedJob.Status.SUCCESS,
+        )
+        self.assertEqual(backfill_completed_job_locksmiths(), 0)
 
 
 class SyncFromOptimoViewTests(TestCase):

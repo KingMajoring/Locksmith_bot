@@ -212,15 +212,53 @@ def match_optimo_drivers(driver_infos: list) -> tuple[list[dict], list[dict]]:
 
 def commit_optimo_driver_matches(matches: list[dict]) -> int:
     """Creates OptimoDriverId rows from match_optimo_drivers()'s output.
-    Returns the number created."""
+    Returns the number created.
+
+    Also backfills any CompletedJob already pulled for this driver
+    before the mapping existed — apps.job_completion.services.pulling
+    resolves and stores CompletedJob.locksmith at pull time from
+    whatever OptimoDriverId mappings exist that night, so a job pulled
+    before this driver was ever matched stays "Unmatched" in every
+    report forever otherwise, even once the mapping exists (confirmed
+    live: jobs_by_day still showed a driver as Unmatched with this
+    exact sync page reporting nothing left to match, because their
+    mapping had already been created after those jobs were pulled).
+    Cheap DB-only fix here rather than waiting on/forcing a re-pull,
+    which would mean a live Optimo/Handl round trip just to fix an FK.
+    """
+    from apps.job_completion.models import CompletedJob
+
     created = 0
     for match in matches:
-        _, was_created = OptimoDriverId.objects.get_or_create(
+        driver_id, was_created = OptimoDriverId.objects.get_or_create(
             locksmith=match["locksmith"],
             optimo_driver_serial=match["driver"].driver_serial,
         )
         created += int(was_created)
+        CompletedJob.objects.filter(
+            driver_serial=driver_id.optimo_driver_serial, locksmith__isnull=True,
+        ).update(locksmith=driver_id.locksmith)
     return created
+
+
+def backfill_completed_job_locksmiths() -> int:
+    """One-off/occasional fix for whatever's already stuck showing
+    "Unmatched" from before its OptimoDriverId mapping existed (see
+    commit_optimo_driver_matches, which now backfills this
+    automatically for every newly-created mapping going forward — this
+    covers the backlog from before that existed, or a driver mapped
+    directly in admin rather than through the sync page). Safe to run
+    anytime: only ever touches a CompletedJob row that's still
+    genuinely fixable right now (driver_serial matches a real mapping,
+    locksmith is still null). Returns the number of rows updated."""
+    from apps.job_completion.models import CompletedJob
+
+    updated = 0
+    for driver_id in OptimoDriverId.objects.select_related("locksmith"):
+        updated += CompletedJob.objects.filter(
+            driver_serial=driver_id.optimo_driver_serial, locksmith__isnull=True,
+        ).update(locksmith=driver_id.locksmith)
+    return updated
 
 
 def _parse_optional_coordinate(value) -> float | None:
