@@ -2748,6 +2748,23 @@ class JobVisitWorkflowTests(TestCase):
         response = self.client.get(url)
         self.assertContains(response, "Client cancelled")
         self.assertContains(response, "Office pulled the job")
+        self.assertContains(response, "Client not answering")
+
+    def test_cancel_client_not_answering_marks_cancelled_without_arriving(self):
+        """The scenario that prompted this reason: the client doesn't
+        answer to confirm access, so the locksmith never drives out at
+        all — cancellable straight from not_started, same as any other
+        never-attended reason (see job_cancel's own stage gate)."""
+        url = reverse("locksmith_portal:job_cancel", args=[self.order_no])
+        response = self.client.post(url, {"cancel_reason": "client_not_answering"})
+        self.assertRedirects(
+            response,
+            f"{reverse('locksmith_portal:job_overview', args=[self.order_no])}?date={self.today.isoformat()}",
+        )
+        visit = self._visit()
+        self.assertEqual(visit.stage, JobVisit.Stage.DONE)
+        self.assertEqual(visit.outcome, JobVisit.Outcome.CANCELLED)
+        self.assertEqual(visit.cancel_reason, JobVisit.CancelReason.CLIENT_NOT_ANSWERING)
 
     def test_cancel_requires_a_reason(self):
         url = reverse("locksmith_portal:job_cancel", args=[self.order_no])

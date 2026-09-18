@@ -200,6 +200,7 @@ class JobVisit(models.Model):
         """Never attended jobs only (see job_cancel) — distinct from a
         FailureCategory, which is for a job the locksmith did attend."""
         CLIENT_CANCELLED = "client_cancelled", "Client cancelled"
+        CLIENT_NOT_ANSWERING = "client_not_answering", "Client not answering — didn't attend"
         OFFICE_PULLED = "office_pulled", "Office pulled the job"
         COULDNT_ATTEND = "couldnt_attend", "Couldn't attend — traffic/weather"
         WRONG_ADDRESS = "wrong_address", "Wrong address/details"
