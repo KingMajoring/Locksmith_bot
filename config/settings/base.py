@@ -231,7 +231,14 @@ MS_GRAPH_MAIL_FROM = env("MS_GRAPH_MAIL_FROM", default="")
 # was overridden in a deployment's own env config, that override needs
 # copying across to the new name — the old name is no longer read at all.
 STOCK_CHECK_LINES_PER_DAY = env.int("STOCK_CHECK_LINES_PER_DAY", default=20)
-STOCK_CHECK_POOL_SIZE = env.int("STOCK_CHECK_POOL_SIZE", default=30)
+# Was 30 — barely bigger than a day's 20-line draw, so the 4-week
+# no-repeat exclusion (STOCK_CHECK_NO_REPEAT_WEEKS) almost never had
+# room to bite and the top-up path in _choose_lines ran most days,
+# meaning fast-moving parts cycled back within a couple of days
+# regardless of "no repeat for 4 weeks" (reported live: locksmiths
+# seeing a lot of repeats on the count). 150 gives that window real
+# headroom to work.
+STOCK_CHECK_POOL_SIZE = env.int("STOCK_CHECK_POOL_SIZE", default=150)
 STOCK_CHECK_USAGE_WINDOW_DAYS = env.int("STOCK_CHECK_USAGE_WINDOW_DAYS", default=90)
 STOCK_CHECK_NO_REPEAT_WEEKS = env.int("STOCK_CHECK_NO_REPEAT_WEEKS", default=4)
 

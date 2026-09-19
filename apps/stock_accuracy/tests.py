@@ -69,15 +69,18 @@ class GenerationTests(TestCase):
         # exhausted — but the two draws should still differ.
         self.assertNotEqual(week1_codes, week2_codes)
 
-    @override_settings(STOCK_CHECK_NO_REPEAT_WEEKS=52)
+    @override_settings(STOCK_CHECK_NO_REPEAT_WEEKS=52, STOCK_CHECK_POOL_SIZE=30)
     def test_full_pool_gets_covered_before_anything_repeats(self):
-        # Pool is 30 (STOCK_CHECK_POOL_SIZE) and 20 go out a day, so the
-        # pool can't sustain two full, non-overlapping daily draws — day
-        # 2 has to top up 10 lines from what day 1 already covered. The
-        # real guarantee this is testing is that every pool part gets a
-        # turn before any part is repeated a second time, which is what
-        # "don't repeat parts until all parts have been checked" means
-        # once draws regularly exceed what's still eligible.
+        # Pool pinned to 30 here (deliberately smaller than the real
+        # default — see MockHandlClient.get_stock_usage's own 30-line
+        # cap, which this needs to stay under) and 20 go out a day, so
+        # the pool can't sustain two full, non-overlapping daily draws —
+        # day 2 has to top up 10 lines from what day 1 already covered.
+        # The real guarantee this is testing is that every pool part
+        # gets a turn before any part is repeated a second time, which
+        # is what "don't repeat parts until all parts have been
+        # checked" means once draws regularly exceed what's still
+        # eligible.
         day1 = generate_weekly_check(self.locksmith, date(2026, 9, 7))
         day1_codes = set(day1.items.values_list("part_code", flat=True))
 
@@ -85,6 +88,34 @@ class GenerationTests(TestCase):
         day2_codes = set(day2.items.values_list("part_code", flat=True))
 
         self.assertEqual(len(day1_codes | day2_codes), 30)
+
+    @override_settings(STOCK_CHECK_NO_REPEAT_WEEKS=4)
+    def test_larger_pool_gives_the_no_repeat_window_real_headroom(self):
+        """Regression test for the actual complaint: with the old 30
+        pool size barely bigger than a day's 20-line draw, the 4-week
+        no-repeat exclusion almost never had room to work and most days
+        fell straight into the top-up path, repeating fast movers every
+        couple of days. With a pool of 60 (comfortably more than
+        2x lines/day) and the real STOCK_CHECK_POOL_SIZE default (150),
+        consecutive days shouldn't need to repeat anything at all."""
+        codes = [f"TK-{i}" for i in range(60)]
+        mock_handl = MagicMock()
+        mock_handl.get_stock_usage.return_value = [
+            StockUsage(part_code=code, part_name=code, qty_used=60 - i)
+            for i, code in enumerate(codes)
+        ]
+        mock_handl.get_expected_stock.return_value = {
+            code: ExpectedStock(part_code=code, expected_qty=5, unit_cost=1.0) for code in codes
+        }
+
+        with patch("apps.stock_accuracy.services.generation.get_handl_client", return_value=mock_handl):
+            day1 = generate_weekly_check(self.locksmith, date(2026, 9, 7))
+            day1_codes = set(day1.items.values_list("part_code", flat=True))
+
+            day2 = generate_weekly_check(self.locksmith, date(2026, 9, 8))
+            day2_codes = set(day2.items.values_list("part_code", flat=True))
+
+        self.assertEqual(day1_codes & day2_codes, set())
 
     @override_settings(STOCK_CHECK_LINES_PER_DAY=2, STOCK_CHECK_NO_REPEAT_WEEKS=52)
     def test_top_up_picks_the_longest_overdue_parts_not_just_usage_rank(self):
